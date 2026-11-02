@@ -1,6 +1,7 @@
 //! RedForge: a map editor for RedM.
 
 mod app;
+mod blender;
 mod browser;
 mod game;
 mod hierarchy;

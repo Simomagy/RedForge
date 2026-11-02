@@ -8,6 +8,7 @@ use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
 use rf_editor::Editor;
 use rf_render::{GpuContext, Renderer, TexturePreview};
 
+use crate::blender::BlenderLink;
 use crate::browser::{Browser, BrowserAction};
 use crate::game::{Game, LoadMessage, is_game_folder, start_loading};
 use crate::hierarchy::Hierarchy;
@@ -100,6 +101,8 @@ pub struct RedForgeApp {
     properties: Properties,
     project_pane: ProjectPane,
     hierarchy: Hierarchy,
+    /// The Blender add-on's link, from when the game is loaded.
+    blender: Option<BlenderLink>,
 }
 
 impl RedForgeApp {
@@ -143,6 +146,7 @@ impl RedForgeApp {
             properties: Properties::default(),
             project_pane: ProjectPane::default(),
             hierarchy: Hierarchy::default(),
+            blender: None,
         };
         if let Some(f) = folder {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
@@ -509,6 +513,7 @@ impl eframe::App for RedForgeApp {
                         Ok(g) => {
                             let g = Arc::new(g);
                             self.editor = Some(Editor::new(g.fs.clone(), g.hashes.clone(), g.data.clone()));
+                            self.blender.get_or_insert_with(|| BlenderLink::start(ctx, &self.settings));
                             self.game = GameState::Ready(g);
                             break;
                         }
@@ -596,6 +601,17 @@ impl eframe::App for RedForgeApp {
                             if ui.add_enabled(any, egui::Button::new("Delete").shortcut_text("Del")).clicked() {
                                 result = ed.delete_selected();
                             }
+                            ui.separator();
+                            if ui.add_enabled(any, egui::Button::new("Edit in Blender")).clicked() {
+                                result = match self.blender.as_ref().map(BlenderLink::edit_selection) {
+                                    Some(Ok(msg)) => {
+                                        self.tools.say(msg);
+                                        Ok(())
+                                    }
+                                    Some(Err(e)) => Err(e),
+                                    None => Ok(()),
+                                };
+                            }
                             if let Err(e) = result {
                                 self.tools.say(e);
                             }
@@ -641,9 +657,18 @@ impl eframe::App for RedForgeApp {
                     ui.label(format!("{} files in {} archives", g.fs.file_count(), g.fs.archives.len()));
                     ui.separator();
                     ui.label(egui::RichText::new(g.folder.display().to_string()).weak());
+                    if self.blender.as_ref().is_some_and(BlenderLink::connected) {
+                        ui.separator();
+                        ui.label("● Blender").on_hover_text("The Blender add-on is connected");
+                    }
                 });
             }
         });
+
+        // Blender's requests, answered between frames.
+        if let (Some(b), Some(ed), Some(g)) = (&mut self.blender, &mut self.editor, &game) {
+            b.poll(ed, g);
+        }
 
         // Ctrl+S saves the project's files, wherever the focus is.
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))

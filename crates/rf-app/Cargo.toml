@@ -23,6 +23,7 @@ rf-formats.workspace = true
 rf-render = { path = "../rf-render" }
 rfd = "0.17"
 rf-game = { path = "../rf-game" }
+rf-bridge = { path = "../rf-bridge" }
 rf-editor = { path = "../rf-editor" }
 rf-world = { path = "../rf-world" }
 transform-gizmo-egui = "0.11"
