@@ -15,6 +15,7 @@ mod camera;
 mod context;
 pub mod mesh;
 pub mod model;
+mod post;
 pub mod preview;
 mod renderer;
 pub mod texture;
@@ -25,6 +26,7 @@ pub use context::{GpuContext, wanted_features};
 pub use model::{
     AlphaMode, DecalMode, GpuModel, MaterialDesc, ModelOptions, NoTextures, Slot, TerrainDesc, TextureSource,
 };
+pub use post::{Post, PostSettings, PostTargets, Tonemap};
 pub use preview::{PreviewMode, PreviewTarget, TexturePreview};
 pub use renderer::{
     DebugView, DrawBatch, GpuMaterial, Instance, MaterialKind, OUTPUT_FORMAT, Pick, PickRequest, PosedModel,
