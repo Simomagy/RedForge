@@ -82,7 +82,7 @@ fn fs_light(f: LightOut) -> @location(0) vec4<f32> {
     let albedo = textureLoad(g_albedo, px, 0);
     let params = textureLoad(g_params, px, 0);
     let n = normalize(textureLoad(g_normal, px, 0).xyz);
-    let s = Surface(albedo.rgb, n, params.r, params.g, 1.0, 0.0, params.b);
+    let s = Surface(albedo.rgb, n, params.r, params.g, 1.0, params.a, params.b);
     let v = normalize(frame.camera_pos.xyz - world);
     return vec4<f32>(direct_light(s, v, ldir, l.colour.rgb * amount), 0.0);
 }

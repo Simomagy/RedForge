@@ -109,6 +109,14 @@ pub struct MaterialDesc<'a> {
     /// How much the surface glows with its own colour (0-1): the shader's
     /// "intensity" or "emissivemultiplier" / 40, as the C#'s `EmissiveMult`.
     pub emissive: f32,
+    /// The hours its glow shows (on, off), from "onofftimes", or the night's
+    /// for the "emissivenight" shaders and "nightonly"; `None` for always.
+    /// Blended glows (window lights) don't show at all outside them.
+    pub emissive_hours: Option<[f32; 2]>,
+    /// Added to what's behind it instead of covering it (fire).
+    pub additive: bool,
+    /// How much light shines through it from behind (leaves, grass).
+    pub translucency: f32,
 }
 
 /// What a normal map holds.
@@ -236,10 +244,63 @@ impl<'a> TerrainDesc<'a> {
     }
 }
 
+/// When the night-only glows are on (the hours RDR2's window lights use).
+const NIGHT_HOURS: [f32; 2] = [21.0, 7.0];
+/// How much light leaves and grass let through from behind.
+const FOLIAGE_TRANSLUCENCY: f32 = 0.5;
+
 mod names {
     pub const BUMPINESS: u32 = 0xf6712b81;
     pub const INTENSITY: u32 = 0xefcd993d;
     pub const EMISSIVE_MULTIPLIER: u32 = 0x5eebed48;
+    pub const ON_OFF_TIMES: u32 = 0x26fba7b2;
+    pub const NIGHT_ONLY: u32 = 0xc0b0dda1;
+
+    pub const FOLIAGE: &[u32] = &[
+        0x10d73576, // grass_batch
+        0xf30936d2, // grass_batch_filler
+        0x4fc70b35, // grass_batch_floating_veg
+        0x6a4f2291, // grass_batch_floating_veg_no_bump
+        0x453b500c, // grass_batch_floating_veg_tess
+        0xc2f094ed, // grass_batch_nobump
+        0x3627511f, // grass_fur
+        0xdaa2be7f, // grass_fur_mask
+        0x04b7b06d, // grass_fur_tnt
+        0x6e5234a1, // grass_imposter_slod
+        0xf8005cb7, // grass_long
+        0x4790f50d, // grass_short
+        0x5791780f, // trees
+        0xa157712e, // trees_lod
+        0x6fc19de0, // trees_lod2
+        0xa1cf7b67, // trees_lod2d
+        0x16afb48f, // trees_lod_fix
+        0x736f6aa9, // trees_lod_normal
+        0x646a7334, // trees_lod_tnt
+        0xe31afeb8, // trees_normal
+        0x0aa15ef3, // trees_normal_diffspec
+        0xcf4aa694, // trees_normal_fix
+        0x970ad6ac, // trees_normal_spec
+        0x56c4a064, // trees_normal_spec_camera_aligned_tnt
+        0x60d2dbfb, // trees_normal_spec_camera_facing_tnt
+        0x2e42b9e2, // trees_normal_spec_tnt
+        0xd556176d, // trees_normal_spec_wind
+        0x3b403319, // trees_standard
+        0x7896d1ea, // trees_standard_cloth
+        0xeaa102e6, // trees_standard_frag
+        0xf691a45f, // trees_standard_frag_movable
+        0x78b69914, // trees_tnt
+    ];
+    pub const ADDITIVE: &[u32] = &[
+        0xb89309a6, // emissive_additive_alpha_flipbook
+        0xa8bbad03, // emissive_additive_alpha_flipbook_fp
+        0xdd48c5a6, // emissivenight_additive_alpha_flipbook
+        0x759b1d3b, // emissivenight_additive_alpha_flipbook_fp
+    ];
+    pub const NIGHT_EMISSIVE: &[u32] = &[
+        0xb08c6435, // emissivenight
+        0xdd48c5a6, // emissivenight_additive_alpha_flipbook
+        0x759b1d3b, // emissivenight_additive_alpha_flipbook_fp
+    ];
     pub const DECAL_OPACITY: [u32; 4] = [0x0bc0cd58, 0x9db47191, 0x2be58df5, 0x39172858]; // decalblendopacitygbuffer0..3
     pub const DIRT_DECAL_MASK: u32 = 0x3e95fa90;
 
@@ -476,6 +537,12 @@ impl<'a> MaterialDesc<'a> {
                 ShaderParamType::CBuffer => match p.info.name {
                     names::BUMPINESS => d.bumpiness = p.vector[0],
                     names::INTENSITY | names::EMISSIVE_MULTIPLIER => d.emissive = (p.vector[0] * 0.025).clamp(0.0, 1.0),
+                    names::ON_OFF_TIMES if p.vector[0] != p.vector[1] => {
+                        d.emissive_hours = Some([p.vector[0], p.vector[1]])
+                    }
+                    names::NIGHT_ONLY if p.vector[0] != 0.0 && d.emissive_hours.is_none() => {
+                        d.emissive_hours = Some(NIGHT_HOURS)
+                    }
                     names::DIRT_DECAL_MASK => d.decal_masks = p.vector,
                     h => {
                         if let Some(i) = names::DECAL_OPACITY.iter().position(|&o| o == h) {
@@ -494,6 +561,13 @@ impl<'a> MaterialDesc<'a> {
             d.decal_masks = [0.0, 1.0, 0.0, 0.0];
         } else if name == names::DECAL_DIRT {
             d.decal = DecalMode::Dirt;
+        }
+        if names::NIGHT_EMISSIVE.contains(&name) && d.emissive_hours.is_none() {
+            d.emissive_hours = Some(NIGHT_HOURS);
+        }
+        d.additive = names::ADDITIVE.contains(&name);
+        if names::FOLIAGE.contains(&name) {
+            d.translucency = FOLIAGE_TRANSLUCENCY;
         }
         if names::TERRAIN_LOD.contains(&name) {
             (d.normal_map, d.material_map) = (NormalMap::Direct, MaterialMap::Smoothness);

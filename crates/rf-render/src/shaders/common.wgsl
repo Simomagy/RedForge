@@ -23,11 +23,8 @@ struct Frame {
     // xyz: towards the sun (or the moon).
     sun_dir: vec4<f32>,
     sun_colour: vec4<f32>,
-    // The ambient light's fill (the C#'s Colour1), and its second channel's
-    // colours facing down and up (Colour3, Colour4).
+    // The ambient light's fill (the C#'s Colour1).
     fill: vec4<f32>,
-    ambient2_down: vec4<f32>,
-    ambient2_up: vec4<f32>,
     // Where nothing is drawn, without a sky.
     background: vec4<f32>,
     // x: debug view (0 lit, 1 albedo, 2 normals, 3 material, 4 vertex colour,
@@ -35,7 +32,8 @@ struct Frame {
     options: vec4<u32>,
     // xy: the view's size in pixels, zw: one over it.
     viewport: vec4<f32>,
-    // x: seconds, for what moves (water).
+    // x: seconds, for what moves (water); y: the time of day (0-24, or -1
+    // for every glow on).
     time: vec4<f32>,
     shadows: Shadows,
 };
@@ -52,13 +50,14 @@ struct Surface {
     smoothness: f32,
     metal: f32,
     ao: f32,
-    // How much of the ambient light's second channel it gets.
-    ambient2: f32,
+    // How much light shines through from behind (leaves).
+    translucency: f32,
     emissive: f32,
 };
 
 // The G-buffer, and for picking the drawn instance's id (0 for nothing) with
-// the depth's bits. Each target's alpha is how much of it a decal covers. The
+// the depth's bits. Each target's alpha is how much of it a decal covers,
+// except the params': there it's the translucency (decals leave it alone). The
 // C#'s params and irradiance targets are one here: smoothness, metalness and
 // emission (RDR2's materials have no occlusion and no second ambient channel).
 struct GBufferOut {

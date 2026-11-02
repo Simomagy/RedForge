@@ -282,6 +282,7 @@ impl MapView {
     /// moon's at night, each times the timecycle's light colour; its fill
     /// light, exposure and night vision. Without a timecycle, a day's sky.
     fn light(&mut self, eye: Vec3) {
+        self.view.hour = Some(self.hour);
         let Some(tc) = &self.timecycle else {
             let sky = SkyLights::default_day();
             self.view.sky = Some(sky);

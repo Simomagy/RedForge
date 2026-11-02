@@ -19,9 +19,10 @@ struct Material {
     // z: two layers, w: the channel of colour1 that blends them
     modes: vec4<u32>,
     // x: normal map (0 tangent-space XY, 1 the normal in RGB),
-    // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R)
+    // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R),
+    // z: flags (1 glows only at some hours, 2 additive)
     config: vec4<u32>,
-    // x: emission (0-1)
+    // x: emission (0-1), y: translucency, z, w: the hours the glow is on and off
     extra: vec4<f32>,
     // A ped part's palette: the columns (0-255) the diffuse's red, green and
     // blue pick, and the row (0-1) in w.
@@ -181,7 +182,7 @@ fn fragment(i: VertexOut, front: bool) -> Fragment {
         albedo_s = vec4<f32>(mix(albedo_s.rgb, diffuse2.rgb, layer), 1.0);
     }
     albedo_s *= material.tint;
-    var alphas = vec4<f32>(1.0);
+    var alphas = vec4<f32>(1.0, 1.0, material.extra.y, 1.0);
     switch decal_mode {
         case 1u: {
             albedo_s.a = diffuse.a * i.colour0.a;
@@ -230,8 +231,31 @@ fn fragment(i: VertexOut, front: bool) -> Fragment {
         albedo_s = vec4<f32>(i.colour0.rgb, albedo_s.a);
     }
 
-    let s = Surface(albedo_s.rgb, n, saturate(smoothness), metal, 1.0, 0.0, material.extra.x);
+    // A glow that's off at this hour: no glow, and a blended one (a window's
+    // light) not there at all.
+    var emissive = material.extra.x;
+    if (material.config.z & 1u) != 0u && !glows_now() {
+        if decal_mode == 0u && material.params.y > 0.0 && material.params.y < 0.5 {
+            discard;
+        }
+        emissive = 0.0;
+    }
+    let s = Surface(albedo_s.rgb, n, saturate(smoothness), metal, 1.0, material.extra.y, emissive);
     return Fragment(s, alphas, albedo_s.a);
+}
+
+// Whether the hour is in the material's on and off hours (wrapping at midnight).
+fn glows_now() -> bool {
+    let h = frame.time.y;
+    if h < 0.0 {
+        return true;
+    }
+    let on = material.extra.z;
+    let off = material.extra.w;
+    if on < off {
+        return h >= on && h < off;
+    }
+    return h >= on || h < off;
 }
 
 @fragment
@@ -246,17 +270,30 @@ struct ForwardOut {
     @location(1) pick: vec2<u32>,
 };
 
+// How bright fire is (an additive glow of emission 1).
+const FIRE: f32 = 1.0;
+
 @fragment
 fn fs_forward(i: VertexOut, @builtin(front_facing) front: bool) -> ForwardOut {
     let f = fragment(i, front);
-    var c = light_surface(f.surface, i.world, 1.0);
+    let pick = vec2<u32>(i.id, bitcast<u32>(i.clip.z));
+    let a = saturate(f.alpha);
+    if (material.config.z & 2u) != 0u {
+        // Fire: added, as bright as its emission says.
+        let glow = f.surface.albedo * a * max(f.surface.emissive * 40.0, 1.0) * FIRE;
+        return ForwardOut(vec4<f32>(glow * f32(f.surface.emissive > 0.0 || (material.config.z & 1u) == 0u), 0.0), pick);
+    }
+    let lit = light_parts(f.surface, i.world, 1.0);
+    // Premultiplied: the reflections stay where the surface is see-through
+    // (glass), though not where it isn't there at all.
+    var c = lit.diffuse * a + lit.specular * saturate(a * 10.0);
     switch frame.options.x {
-        case 1u, 4u: { c = f.surface.albedo; }
-        case 2u: { c = f.surface.normal * 0.5 + 0.5; }
-        case 3u: { c = vec3<f32>(f.surface.metal, 1.0 - f.surface.smoothness, 0.0); }
+        case 1u, 4u: { c = f.surface.albedo * a; }
+        case 2u: { c = (f.surface.normal * 0.5 + 0.5) * a; }
+        case 3u: { c = vec3<f32>(f.surface.metal, 1.0 - f.surface.smoothness, 0.0) * a; }
         default: {}
     }
-    return ForwardOut(vec4<f32>(c, f.alpha), vec2<u32>(i.id, bitcast<u32>(i.clip.z)));
+    return ForwardOut(vec4<f32>(c, a), pick);
 }
 
 // Shadow maps of cut-out and blended draws: only what's solid enough.

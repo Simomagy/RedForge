@@ -48,7 +48,7 @@ fn geometry_smith(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, roughness: f32) -> f
 // Light of colour `c` arriving from `l` (towards the light), Cook-Torrance as
 // the C#'s `DirectionalLight`.
 fn direct_light(s: Surface, v: vec3<f32>, l: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
-    let roughness = 1.0 - s.smoothness;
+    let roughness = max(1.0 - s.smoothness, 0.02);
     let n = s.normal;
     let f0 = mix(vec3<f32>(0.04), s.albedo, s.metal);
     let h = normalize(v + l);
@@ -58,7 +58,33 @@ fn direct_light(s: Surface, v: vec3<f32>, l: vec3<f32>, c: vec3<f32>) -> vec3<f3
     let kd = (1.0 - f) * (1.0 - s.metal);
     let nl = max(dot(n, l), 0.0);
     let specular = min(ndf * g * f / (4.0 * max(dot(n, v), 0.0) * nl + 0.0001), vec3<f32>(10.0));
-    return (kd * s.albedo / PI + specular) * c * nl;
+    return (kd * s.albedo / PI + specular) * c * nl + translucent_light(s, l, c);
+}
+
+// Light from behind coming through (leaves, grass).
+fn translucent_light(s: Surface, l: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
+    return s.albedo / PI * s.translucency * max(dot(-s.normal, l), 0.0) * c;
+}
+
+// Light on a surface as its diffuse and specular parts, for blended draws
+// (whose reflections shouldn't fade with their opacity).
+struct LightParts {
+    diffuse: vec3<f32>,
+    specular: vec3<f32>,
+};
+
+fn direct_parts(s: Surface, v: vec3<f32>, l: vec3<f32>, c: vec3<f32>) -> LightParts {
+    let roughness = max(1.0 - s.smoothness, 0.02);
+    let n = s.normal;
+    let f0 = mix(vec3<f32>(0.04), s.albedo, s.metal);
+    let h = normalize(v + l);
+    let f = fresnel_schlick(max(dot(h, v), 0.0), f0);
+    let kd = (1.0 - f) * (1.0 - s.metal);
+    let nl = max(dot(n, l), 0.0);
+    let ndf = distribution_ggx(n, h, roughness);
+    let g = geometry_smith(n, v, l, roughness);
+    let specular = min(ndf * g * f / (4.0 * max(dot(n, v), 0.0) * nl + 0.0001), vec3<f32>(10.0));
+    return LightParts(kd * s.albedo / PI * c * nl + translucent_light(s, l, c), specular * c * nl);
 }
 
 // How much of a cascade's map at `uvz` sees the light: 3x3 samples.
@@ -105,23 +131,37 @@ fn sun_shadow(world: vec3<f32>, n: vec3<f32>) -> f32 {
 }
 
 // The ambient light, as the C#'s environment-mapped `AmbientLight` with the
-// fill light the ambient pass adds, and emission.
-fn ambient_light(s: Surface, v: vec3<f32>, ao: f32) -> vec3<f32> {
+// fill light the ambient pass adds, and emission. (RDR2's materials have no
+// second ambient channel, so that's left out.)
+fn ambient_parts(s: Surface, v: vec3<f32>, ao: f32) -> LightParts {
     let n = s.normal;
     let roughness = 1.0 - s.smoothness;
     let f0 = mix(vec3<f32>(0.04), s.albedo, s.metal);
     let nv = max(dot(n, v), 0.0);
     let f = fresnel_schlick_roughness(nv, f0, roughness);
     let kd = (1.0 - f) * (1.0 - s.metal);
-    var irradiance = textureSampleLevel(t_env_irradiance, s_env, env_dir(n), 0.0).rgb;
-    let up = saturate(n.z * 0.5 + 0.5);
-    irradiance += mix(frame.ambient2_down.rgb, frame.ambient2_up.rgb, up) * s.ambient2;
+    let irradiance = textureSampleLevel(t_env_irradiance, s_env, env_dir(n), 0.0).rgb;
     let r = reflect(-v, n);
     let prefiltered = textureSampleLevel(t_env_prefiltered, s_env, env_dir(r), roughness * ENV_MIPS).rgb;
     let brdf = textureSampleLevel(t_env_brdf, s_env, vec2<f32>(nv, roughness), 0.0).rg;
     let specular = prefiltered * (f * brdf.x + brdf.y);
     let a = saturate(ao);
-    return (kd * irradiance * s.albedo + specular) * a + s.albedo * s.emissive + s.albedo * frame.fill.rgb * a;
+    let diffuse = kd * irradiance * s.albedo * a + s.albedo * s.emissive + s.albedo * frame.fill.rgb * a;
+    return LightParts(diffuse, specular * a);
+}
+
+fn ambient_light(s: Surface, v: vec3<f32>, ao: f32) -> vec3<f32> {
+    let p = ambient_parts(s, v, ao);
+    return p.diffuse + p.specular;
+}
+
+// All the frame's light on a surface at a point, as its two parts.
+fn light_parts(s: Surface, world: vec3<f32>, ao: f32) -> LightParts {
+    let v = normalize(frame.camera_pos.xyz - world);
+    let sun = frame.sun_colour.rgb * sun_shadow(world, s.normal);
+    let a = ambient_parts(s, v, ao);
+    let d = direct_parts(s, v, normalize(frame.sun_dir.xyz), sun);
+    return LightParts(a.diffuse + d.diffuse, a.specular + d.specular);
 }
 
 // All the frame's light on a surface at a point.

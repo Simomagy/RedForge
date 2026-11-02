@@ -25,9 +25,6 @@ use crate::texture::GpuTexture;
 
 pub use crate::targets::RenderTargets;
 
-/// The ambient light's second channel, facing down and up (the C#'s
-/// `CreateEarthScene` ambient light's Colour3 and Colour4).
-const AMBIENT2: [[f32; 4]; 2] = [[0.002, 0.002, 0.001, 0.0], [0.008, 0.008, 0.004, 0.0]];
 /// How much of the next cascade shows near a cascade's edge, in UV (the C#'s
 /// `Render.CSM.BlurBetweenCascades`).
 const CASCADE_BLEND: f32 = 0.05;
@@ -58,8 +55,6 @@ struct FrameUniform {
     sun_dir: [f32; 4],
     sun_colour: [f32; 4],
     fill: [f32; 4],
-    ambient2_down: [f32; 4],
-    ambient2_up: [f32; 4],
     background: [f32; 4],
     options: [u32; 4],
     viewport: [f32; 4],
@@ -186,6 +181,9 @@ pub struct ViewSettings {
     pub sun_colour: Vec3,
     /// The ambient light's fill colour, added to the sky's.
     pub fill: Vec3,
+    /// The time of day (0-24), for the glows that only show at some hours;
+    /// `None` shows them all (the viewers).
+    pub hour: Option<f32>,
     /// The sky's lights: the atmosphere drawn where nothing is and over
     /// everything far, and lighting the scene. Without, the background colour
     /// shows and a day's sky lights it (the viewers).
@@ -210,6 +208,7 @@ impl Default for ViewSettings {
             sun_dir: Vec3::new(0.4, -0.6, 0.7).normalize(),
             sun_colour: Vec3::new(3.2, 3.0, 2.7),
             fill: Vec3::ZERO,
+            hour: None,
             sky: None,
             background: [0.18, 0.2, 0.24],
             exposure_ev: 0.0,
@@ -237,6 +236,8 @@ pub enum MaterialKind {
 pub struct GpuMaterial {
     pub name: String,
     pub kind: MaterialKind,
+    /// Added over what's behind (fire), not blended.
+    pub additive: bool,
     pub bind_group: wgpu::BindGroup,
     /// For showing what a material uses: each texture with its use.
     pub textures: Vec<(&'static str, Arc<GpuTexture>)>,
@@ -405,6 +406,8 @@ struct Pipelines {
     decal: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     blend: wgpu::RenderPipeline,
+    /// Fire: added over the image.
+    additive: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
     /// Shadows of cut-out and blended draws, which test their alpha.
     shadow_alpha: wgpu::RenderPipeline,
@@ -745,12 +748,29 @@ impl Renderer {
             Some(wgpu::ColorTargetState { format: ID_FORMAT, blend: None, write_mask })
         };
         let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
+        // Decals leave the params' alpha alone: it's the surface's translucency.
         let gbuffer = |blend: Option<wgpu::BlendState>| {
             let mut t: Vec<_> = GBUFFER_FORMATS.iter().map(|f| target(*f, blend)).collect();
+            if blend.is_some() {
+                t[2].as_mut().unwrap().write_mask = wgpu::ColorWrites::COLOR;
+            }
             t.push(ids(blend.is_none()));
             t
         };
-        let forward = [target(HDR_FORMAT, alpha), ids(false)];
+        // Blended draws are premultiplied: their reflections don't fade with
+        // their opacity.
+        let forward = [target(HDR_FORMAT, Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING)), ids(false)];
+        let add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let keep = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let additive = [target(HDR_FORMAT, Some(wgpu::BlendState { color: add, alpha: keep })), ids(false)];
 
         struct Desc<'a> {
             label: &'a str,
@@ -826,11 +846,6 @@ impl Renderer {
             "water",
             &[Some(&frame_layout), Some(&water_layout), Some(&water_view_layout), Some(env_layout)],
         );
-        let add = wgpu::BlendComponent {
-            src_factor: wgpu::BlendFactor::One,
-            dst_factor: wgpu::BlendFactor::One,
-            operation: wgpu::BlendOperation::Add,
-        };
         // The inside of each light's box: it covers the light's pixels with the
         // eye in it too.
         let lights = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -886,6 +901,7 @@ impl Renderer {
                 topology: wgpu::PrimitiveTopology::LineList,
             }),
             blend: model("blend", &forward_pl, false, Some("fs_forward"), &forward, depth(false, 0)),
+            additive: model("additive", &forward_pl, false, Some("fs_forward"), &additive, depth(false, 0)),
             shadow: model("shadow", &shadow_pl, false, None, &[], shadow_depth.clone()),
             shadow_alpha: model("shadow alpha", &shadow_alpha_pl, false, Some("fs_shadow"), &[], shadow_depth.clone()),
             skinned_opaque: model(
@@ -1026,10 +1042,13 @@ impl Renderer {
                     MaterialMap::Smoothness => 1,
                     MaterialMap::Roughness => 2,
                 },
-                0,
+                desc.emissive_hours.is_some() as u32 | (desc.additive as u32) << 1,
                 0,
             ],
-            extra: [desc.emissive, 0.0, 0.0, 0.0],
+            extra: {
+                let [on, off] = desc.emissive_hours.unwrap_or_default();
+                [desc.emissive, desc.translucency, on, off]
+            },
             palette: desc.palette.unwrap_or_default(),
         };
         let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1066,7 +1085,13 @@ impl Renderer {
             ],
         });
         let textures = Slot::ALL.iter().zip(textures).filter_map(|(s, t)| Some((s.label(), t?))).collect();
-        GpuMaterial { name: desc.shader_name.clone(), kind: MaterialKind::Standard, bind_group, textures }
+        GpuMaterial {
+            name: desc.shader_name.clone(),
+            kind: MaterialKind::Standard,
+            additive: desc.additive,
+            bind_group,
+            textures,
+        }
     }
 
     /// A material for the terrain shader; `textures` by [`terrain_slot`].
@@ -1127,7 +1152,13 @@ impl Renderer {
             "Tint normal",
         ];
         let textures = LABELS.iter().zip(textures).filter_map(|(l, t)| Some((*l, t?))).collect();
-        GpuMaterial { name: desc.shader_name.clone(), kind: MaterialKind::Terrain, bind_group, textures }
+        GpuMaterial {
+            name: desc.shader_name.clone(),
+            kind: MaterialKind::Terrain,
+            additive: false,
+            bind_group,
+            textures,
+        }
     }
 
     /// A material for the water shaders; `textures` by [`water_slot`].
@@ -1168,7 +1199,7 @@ impl Renderer {
         });
         const LABELS: [&str; water_slot::COUNT] = ["Flow", "Fog", "Foam", "Pollen", "Pollen placement"];
         let textures = LABELS.iter().zip(textures).filter_map(|(l, t)| Some((*l, t?))).collect();
-        GpuMaterial { name: desc.shader_name.clone(), kind: MaterialKind::Water, bind_group, textures }
+        GpuMaterial { name: desc.shader_name.clone(), kind: MaterialKind::Water, additive: false, bind_group, textures }
     }
 
     /// The ripples' normal maps the water shaders use (the game's
@@ -1386,6 +1417,7 @@ impl Renderer {
                 &p.terrain
             }
             (_, _, true) => &p.lines,
+            (Pass::Blend, ..) if draw.material.additive => &p.additive,
             (Pass::Blend, ..) => &p.blend,
             (Pass::Decal, ..) => &p.decal,
             _ => &p.opaque,
@@ -1478,12 +1510,10 @@ impl Renderer {
             sun_dir: settings.sun_dir.normalize_or(Vec3::Z).extend(0.0).to_array(),
             sun_colour: settings.sun_colour.extend(0.0).to_array(),
             fill: settings.fill.extend(0.0).to_array(),
-            ambient2_down: AMBIENT2[0],
-            ambient2_up: AMBIENT2[1],
             background: [r, g, b, 1.0],
             options: [settings.debug as u32, settings.ssao as u32, 0, 0],
             viewport: [w, h, 1.0 / w, 1.0 / h],
-            time: [self.start.elapsed().as_secs_f32() % 4096.0, 0.0, 0.0, 0.0],
+            time: [self.start.elapsed().as_secs_f32() % 4096.0, settings.hour.unwrap_or(-1.0), 0.0, 0.0],
             shadows,
         }
     }
@@ -1815,5 +1845,5 @@ fn placeholder_material(ctx: &GpuContext) -> GpuMaterial {
     let layout = ctx.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
     let bind_group =
         ctx.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[] });
-    GpuMaterial { name: String::new(), kind: MaterialKind::Standard, bind_group, textures: Vec::new() }
+    GpuMaterial { name: String::new(), kind: MaterialKind::Standard, additive: false, bind_group, textures: Vec::new() }
 }
