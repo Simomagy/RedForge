@@ -7,6 +7,7 @@
 //! - `from_xml(xml, cx)`: XML back to a loose file.
 
 pub mod dat;
+pub mod dds;
 pub mod fxdb;
 pub mod meta;
 pub mod pso;
