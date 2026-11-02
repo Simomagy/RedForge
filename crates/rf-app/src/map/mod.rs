@@ -37,6 +37,10 @@ pub struct MapView {
     camera: FlyCamera,
     view: ViewSettings,
     hour: f32,
+    /// The weather's lighting through the day (the world map only).
+    timecycle: Option<rf_game::timecycle::TimeCycle>,
+    /// The user's exposure, before the time of day's.
+    exposure: f32,
     /// Whether scripted ymaps (lockdowns, gang camps...) show, as in the C#.
     scripted: bool,
     /// Metres per second.
@@ -142,7 +146,10 @@ impl MapView {
             models: ModelCache::new(game.clone()),
             camera: FlyCamera::default(),
             view: ViewSettings::default(),
-            hour: 12.0,
+            // REDFORGE_HOUR sets the starting hour (for testing).
+            hour: std::env::var("REDFORGE_HOUR").ok().and_then(|h| h.parse().ok()).unwrap_or(12.0),
+            timecycle: None,
+            exposure: ViewSettings::default().exposure,
             scripted: true,
             speed: 30.0,
             targets: None,
@@ -215,6 +222,31 @@ impl MapView {
         let c = &mut self.camera;
         let mv = c.forward() * fwd + c.right() * side + Vec3::Z * up;
         c.position += mv * self.speed * factor * dt;
+    }
+
+    /// The view's lighting at the hour, from the weather's timecycle: the sun
+    /// by day, a dim bluish moon on the other side at night. (A stand-in
+    /// until the renderer has the C#'s atmosphere and exposure.)
+    fn light(&mut self) {
+        let base = ViewSettings::default();
+        let Some(tc) = &self.timecycle else {
+            self.view.exposure = self.exposure;
+            return;
+        };
+        let s = tc.state(self.hour);
+        let to_sun = Vec3::from(rf_game::timecycle::TimeCycle::sun_direction(s.sun_angle));
+        let night = s.night;
+        let sun = Vec3::from(s.light_colour) * 1.1;
+        let moon = Vec3::new(0.35, 0.45, 0.7) * 0.25;
+        self.view.sun_dir = if to_sun.z >= 0.0 { to_sun } else { -to_sun };
+        self.view.sun_colour = if to_sun.z >= 0.0 { sun.lerp(moon, night) } else { moon };
+        let ambient = 1.0 - night * 0.92;
+        let fill = Vec3::from(s.fill_ambient) * 0.5;
+        self.view.sky_colour = base.sky_colour * ambient + fill;
+        self.view.ground_colour = base.ground_colour * ambient + fill * 0.5;
+        self.view.background =
+            [0.18 * ambient as f64, 0.2 * ambient as f64, 0.24 * ambient as f64 + 0.02 * night as f64];
+        self.view.exposure = self.exposure * 2f32.powf(s.exposure_ev);
     }
 
     /// Selects what's drawn in the middle of the view (for testing).
@@ -311,6 +343,16 @@ impl MapView {
                         }
                     });
                     ui.add(egui::Slider::new(&mut self.hour, 0.0..=24.0).text("Hour"));
+                    let weather = self.timecycle.as_ref().map_or("sunny", |t| t.weather.as_str()).to_owned();
+                    let mut chosen = weather.clone();
+                    egui::ComboBox::from_id_salt(("weather", &self.path)).selected_text(&weather).show_ui(ui, |ui| {
+                        for w in rf_game::timecycle::WEATHERS {
+                            ui.selectable_value(&mut chosen, w.to_owned(), w);
+                        }
+                    });
+                    if chosen != weather || self.timecycle.is_none() {
+                        self.timecycle = Some(rf_game::timecycle::TimeCycle::load(&self.game.fs, &chosen));
+                    }
                     if ui
                         .checkbox(&mut self.scripted, "Scripted maps")
                         .on_hover_text("Ymaps the game's scripts switch on and off: lockdowns, camps, mission states")
@@ -320,7 +362,7 @@ impl MapView {
                     }
                 }
                 ui.add(egui::Slider::new(&mut self.speed, 1.0..=5000.0).logarithmic(true).text("Speed m/s"));
-                ui.add(egui::Slider::new(&mut self.view.exposure, 0.2..=6.0).text("Exposure"));
+                ui.add(egui::Slider::new(&mut self.exposure, 0.2..=6.0).text("Exposure"));
             });
         });
     }
@@ -386,6 +428,7 @@ impl MapView {
             (Source::Ymap(e), _) => e.clone(),
             _ => Vec::new(),
         };
+        self.light();
         let targets = self.targets.as_ref().unwrap();
         let frustum = camera.frustum();
         self.last_view = Some((camera, rect));
