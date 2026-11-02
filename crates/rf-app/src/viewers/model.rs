@@ -45,8 +45,20 @@ impl ModelViewer {
         let job = Job::spawn(ctx, move || {
             let data = g.fs.extract_loose(file)?;
             let file = read_model(&p, &data, &g.hashes)?;
+            // The dictionaries the game would use for each drawable's archetype,
+            // then the ones named like the file.
+            let file_name = p.rsplit('/').next().unwrap_or(&p);
+            let file_hash = rf_game::file_hash(file_name);
+            let mut refs: Vec<FileRef> = Vec::new();
+            for (name, _) in &file.drawables {
+                let piece = rf_formats::hash::joaat(&name.to_lowercase());
+                refs.extend(g.data.txds_for_piece(piece, file_hash));
+            }
+            refs.extend(related_dictionaries(&g.fs, &g.index, &p));
+            let mut seen = std::collections::HashSet::new();
+            refs.retain(|f| seen.insert(*f));
             let mut dictionaries = Vec::new();
-            for f in related_dictionaries(&g.fs, &g.index, &p) {
+            for f in refs {
                 let loaded =
                     g.fs.extract_loose(f)
                         .map_err(anyhow::Error::from)

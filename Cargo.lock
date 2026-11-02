@@ -3611,6 +3611,7 @@ dependencies = [
  "image",
  "log",
  "rf-formats",
+ "rf-game",
  "rf-render",
  "rfd",
 ]

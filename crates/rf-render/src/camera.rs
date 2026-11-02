@@ -25,7 +25,7 @@ impl OrbitCamera {
     pub fn frame(&mut self, min: Vec3, max: Vec3) {
         self.target = (min + max) * 0.5;
         let radius = ((max - min).length() * 0.5).max(0.1);
-        self.distance = radius / (self.fov_y * 0.5).sin() * 1.1;
+        self.distance = radius / (self.fov_y * 0.5).sin() * 0.9;
     }
 
     pub fn eye(&self) -> Vec3 {

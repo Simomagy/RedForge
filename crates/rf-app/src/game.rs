@@ -9,6 +9,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use rf_formats::hash::HashIndex;
 use rf_formats::rpf8::{FileRef, Rpf8FileSystem, Rpf8Keys};
+use rf_game::GameData;
 use rf_render::assets::AssetIndex;
 
 /// A folder of the archives' file tree (archives count as folders).
@@ -37,6 +38,8 @@ pub struct Game {
     pub fs: Rpf8FileSystem,
     pub hashes: Arc<HashIndex>,
     pub index: AssetIndex,
+    /// Archetypes, texture dictionary relationships and the like.
+    pub data: GameData,
     pub tree: Folder,
     /// Every path, lowercase, for searching.
     pub paths: Vec<(String, FileRef)>,
@@ -74,6 +77,8 @@ fn load(folder: PathBuf, progress: impl Fn(&str)) -> Result<Game> {
     let keys = Rpf8Keys::from_game_folder(&folder)?;
     progress("Reading the archives…");
     let fs = Rpf8FileSystem::open(&folder, keys, &hashes)?;
+    progress("Reading the game's data files…");
+    let data = GameData::load(&fs, &hashes);
     progress("Indexing the files…");
     let index = AssetIndex::new(&fs);
     let mut tree = Folder::default();
@@ -87,7 +92,7 @@ fn load(folder: PathBuf, progress: impl Fn(&str)) -> Result<Game> {
     }
     tree.sort();
     log::info!("{} files in {} archives, ready in {:.2?}", fs.file_count(), fs.archives.len(), t.elapsed());
-    Ok(Game { folder, fs, hashes: Arc::new(hashes), index, tree, paths })
+    Ok(Game { folder, fs, hashes: Arc::new(hashes), index, data, tree, paths })
 }
 
 pub enum LoadMessage {

@@ -4,15 +4,31 @@ A map editor for **RedM** (Red Dead Redemption 2), by Prysma Studio. This is the
 Rust rewrite of the C#/WinUI RedForge, which grew out of CodeX. It runs on Linux
 and Windows.
 
-It is early work. Today the game's archives can be read, and every file format
-RedForge handles can be read, written and converted to and from XML, matching
-the C# RedForge. The editor itself comes in later milestones.
+It is early work. Today:
+
+- every file format RedForge handles can be read, written and converted to and
+  from XML, matching the C# RedForge;
+- the app opens the game, browses its files and shows models, textures and XML.
+
+The map and the editor come in later milestones.
+
+## Running it
+
+```sh
+cargo run --release -p rf-app
+```
+
+It asks for the game folder the first time (or takes `REDFORGE_GAME_DIR`), and
+keeps it in `RedForge.Settings.ini` in the user's config folder.
 
 ## Crates
 
 | Crate | What it is |
 |---|---|
 | `rf-formats` | The game's file formats as plain data: RPF8 archives; RSC8 resources (ydr, ydd, yft, ytd, ybn, ycd, yad, yld, yed, ynv, yfd, ypmd, yldb, yvr, ywr); metadata (ymap, ytyp, ymt, PSO, RBF); fxdb; DDS. No rendering, no UI. |
+| `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes, texture dictionary relationships (GTXD, HD bindings). |
+| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials. |
+| `rf-app` | The `redforge` app: egui, with Game Files, model, texture and XML viewers. |
 | `rf-cli` | The `rf` command: list, extract and check game files. |
 
 ## The `rf` command
