@@ -2,3 +2,4 @@
 *.swp
 /tools/oracle/bin
 /tools/oracle/obj
+/.claude
