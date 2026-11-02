@@ -75,7 +75,11 @@ enum Command {
         verbose: bool,
     },
     /// Print the joaat hash of each string.
-    Hash { strings: Vec<String> },
+    Hash {
+        /// (Not `strings`: that's the global option's name, and clap mixes them up.)
+        #[arg(value_name = "STRING")]
+        names: Vec<String>,
+    },
     /// Convert loose game files to XML (textures go to a folder next to the XML).
     Xml {
         files: Vec<PathBuf>,
@@ -120,8 +124,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Command::Hash { strings } => {
-            for s in strings {
+        Command::Hash { names } => {
+            for s in names {
                 let h = joaat(&s.to_lowercase());
                 println!("0x{h:08X}  {h:>10}  {s}");
             }

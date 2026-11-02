@@ -3,7 +3,6 @@
 
 mod globals;
 pub mod models;
-mod sky;
 pub mod tools;
 
 use std::collections::HashMap;
@@ -95,8 +94,6 @@ pub struct MapView {
     /// Metres per second.
     speed: f32,
     targets: Option<RenderTargets>,
-    /// Whether the renderer has the game's global textures yet.
-    globals: bool,
     texture_id: Option<egui::TextureId>,
     last_frame: Instant,
     frame_ms: f32,
@@ -189,7 +186,7 @@ impl MapView {
     }
 
     fn new(game: &Arc<Game>, gpu: &Gpu, source: Source, title: String, path: String) -> Self {
-        sky::load_textures(game, gpu);
+        globals::load(game, gpu);
         Self {
             title,
             path,
@@ -206,7 +203,6 @@ impl MapView {
             scripted: true,
             speed: 30.0,
             targets: None,
-            globals: false,
             texture_id: None,
             last_frame: Instant::now(),
             frame_ms: 0.0,
@@ -451,9 +447,6 @@ impl MapView {
         }
         ui.ctx().request_repaint();
 
-        if !std::mem::replace(&mut self.globals, true) {
-            globals::load(&self.game, gpu);
-        }
         let ppp = ui.ctx().pixels_per_point();
         let (w, h) = ((rect.width() * ppp) as u32, (rect.height() * ppp) as u32);
         if self.targets.as_ref().is_none_or(|t| t.width != w || t.height != h) {

@@ -76,7 +76,9 @@ pub struct NightSettings {
     pub exposure: f32,
     /// Multiplies how much colours fade to blue grey in the dark.
     pub vision: f32,
-    /// The moon's brightness before the timecycle's (0.1 is about a full moon).
+    /// The moon's brightness before the timecycle's: the game's 1 (its
+    /// `visualsettings.dat`). The C#'s default is 0.1, about a real full moon,
+    /// which leaves RDR2's nights to the blue fill light.
     pub moon: f32,
     /// Multiplies the night sky's own glow.
     pub sky_glow: f32,
@@ -84,7 +86,7 @@ pub struct NightSettings {
 
 impl Default for NightSettings {
     fn default() -> Self {
-        Self { exposure: -3.0, vision: 1.0, moon: 0.1, sky_glow: 1.0 }
+        Self { exposure: -3.0, vision: 1.0, moon: 1.0, sky_glow: 1.0 }
     }
 }
 

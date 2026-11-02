@@ -26,7 +26,18 @@ It is early work. Today:
   timecycle for the hour and weather;
 - clip dictionaries play on peds and animals; any file shows as hex.
 
-RDR2-faithful shaders come in the next milestone.
+Beyond the C#, the shaders follow RDR2's own where the C# folded them into its
+default one:
+
+- rivers, lakes and waterfalls: ripples carried along each region's flow map,
+  the riverbed bent by them and fading into the water's colour with depth,
+  reflections, the rapids' foam and the swamps' pollen;
+- the sky's sun, moon and stars (from `skydome.ytd`), turning with the hour;
+- window lights and other glows only in their hours (`onofftimes`), fire
+  added over the image, glass that keeps its reflections, leaves and grass lit
+  through from behind, and peds' skin read as skin rather than metal;
+- the moon as bright as the game has it (`visualsettings.dat`'s 1; the C#'s
+  default is a real moon's tenth of that).
 
 ## Running it
 
@@ -129,7 +140,7 @@ the map's hour.
 | `rf-world` | The world: map nodes, ymaps and their entities, the LOD tree, interiors, cull boxes and map states, streamed around a camera. |
 | `rf-editor` | The editor: projects, the ymaps and ytyps being edited, the selection, undo and redo, LOD-safe deletes, saving, the RedM export. No UI. |
 | `rf-bridge` | The Blender add-on's link: its protocol (the C#'s) over TCP, the models to and from Sollumz XML. |
-| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain, emission); skinned models posed by clips; deferred lighting with cascaded shadows, SSAO, point/spot/capsule lights, the sky's atmosphere and environment maps, and the HDR post-processing. |
+| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain, water, emission by the hour, fire, glass, foliage, skin); skinned models posed by clips; deferred lighting with cascaded shadows, SSAO, point/spot/capsule lights, the sky's atmosphere and environment maps, and the HDR post-processing. |
 | `rf-app` | The `redforge` app: egui, with Game Files, the model, animation, texture, XML and hex viewers, the map, Project, Hierarchy, Properties and Objects. |
 | `rf-cli` | The `rf` command: list, extract and check game files. |
 
