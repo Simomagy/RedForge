@@ -261,15 +261,17 @@ impl eframe::App for RedForgeApp {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
                     LoadMessage::Progress(s) => *status = s,
-                    LoadMessage::Done(Ok(g)) => {
-                        self.game = GameState::Ready(Arc::new(g));
-                        break;
-                    }
-                    LoadMessage::Done(Err(e)) => {
-                        let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
-                        self.game = GameState::NoFolder { input, error: Some(format!("{e:#}")) };
-                        break;
-                    }
+                    LoadMessage::Done(result) => match *result {
+                        Ok(g) => {
+                            self.game = GameState::Ready(Arc::new(g));
+                            break;
+                        }
+                        Err(e) => {
+                            let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
+                            self.game = GameState::NoFolder { input, error: Some(format!("{e:#}")) };
+                            break;
+                        }
+                    },
                 }
             }
         }

@@ -92,7 +92,7 @@ fn load(folder: PathBuf, progress: impl Fn(&str)) -> Result<Game> {
 
 pub enum LoadMessage {
     Progress(String),
-    Done(Result<Game>),
+    Done(Box<Result<Game>>),
 }
 
 /// Opens the game on a thread; poll the receiver every frame.
@@ -104,7 +104,7 @@ pub fn start_loading(folder: PathBuf, repaint: impl Fn() + Send + 'static) -> Re
             let _ = progress_tx.send(LoadMessage::Progress(s.to_owned()));
             repaint();
         });
-        let _ = tx.send(LoadMessage::Done(result));
+        let _ = tx.send(LoadMessage::Done(Box::new(result)));
         repaint();
     });
     rx
