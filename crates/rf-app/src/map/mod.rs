@@ -53,11 +53,14 @@ fn entity_transform(position: [f32; 3], rotation: [f32; 4], scale_xy: f32, scale
 }
 
 /// Every entity of a ymap (no LODs, no streaming): for looking at one file.
-fn ymap_entities(game: &Game, file: FileRef) -> anyhow::Result<(Vec<VisibleEntity>, Option<(Vec3, Vec3)>)> {
+/// A box around some points: (min, max).
+type Bounds = Option<(Vec3, Vec3)>;
+
+fn ymap_entities(game: &Game, file: FileRef) -> anyhow::Result<(Vec<VisibleEntity>, Bounds)> {
     let meta = Meta::read(&game.fs.extract_loose(file)?)?;
     let root = meta.root.as_ref().ok_or_else(|| anyhow::anyhow!("empty map data"))?;
     let mut out = Vec::new();
-    let mut bounds: Option<(Vec3, Vec3)> = None;
+    let mut bounds: Bounds = None;
     for (i, e) in root.bags("entities").unwrap_or(&[]).iter().enumerate() {
         let Some(e) = e else { continue };
         let p = e.vec3("position");
