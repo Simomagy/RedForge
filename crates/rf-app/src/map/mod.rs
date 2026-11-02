@@ -13,8 +13,10 @@ use glam::{Mat4, Quat, Vec3};
 use rf_editor::Editor;
 use rf_formats::formats::meta::Meta;
 use rf_formats::rpf8::FileRef;
+use rf_render::sky::STAR_COLOUR;
 use rf_render::{
-    CASCADES, Cascades, DrawBatch, FlyCamera, GpuModel, Instance, RenderStats, RenderTargets, Scene, ViewSettings,
+    CASCADES, Cascades, DrawBatch, FlyCamera, GpuModel, Instance, RenderStats, RenderTargets, Scene, Sky, SkyLights,
+    ViewSettings,
 };
 use rf_world::{EntityId, VisibleEntity};
 
@@ -29,10 +31,6 @@ enum Source {
     /// One ymap's entities, all of them.
     Ymap(Vec<VisibleEntity>),
 }
-
-/// The sun's light before the atmosphere and the timecycle (the C#'s star
-/// colour in `CreateEarthScene`).
-const SUN_COLOUR: [f32; 3] = [10.0, 10.0, 12.1];
 
 pub struct MapView {
     pub title: String,
@@ -231,19 +229,31 @@ impl MapView {
     }
 
     /// The view's lighting at the hour, from the weather's timecycle, as the
-    /// C#'s `Player` sets it: the sun by day, the moon on the other side at
-    /// night, each times the timecycle's light colour; its fill light.
-    fn light(&mut self) {
+    /// C#'s `Player` sets it: the sky lit by the sun, the moon opposite and
+    /// the night's glow; the sun's light through the atmosphere by day, the
+    /// moon's at night, each times the timecycle's light colour; its fill
+    /// light, exposure and night vision. Without a timecycle, a day's sky.
+    fn light(&mut self, eye: Vec3) {
         let Some(tc) = &self.timecycle else {
+            let sky = SkyLights::default_day();
+            self.view.sky = Some(sky);
+            self.view.sun_dir = sky.sun_dir;
+            self.view.sun_colour = Sky::attenuated_light(eye, STAR_COLOUR, sky.sun_dir);
             self.view.exposure_ev = self.exposure;
             return;
         };
         let s = tc.state(self.hour);
         let to_sun = Vec3::from(rf_game::timecycle::TimeCycle::sun_direction(s.sun_angle));
+        self.view.sky = Some(SkyLights {
+            sun_dir: to_sun,
+            sun_colour: STAR_COLOUR * s.sky_sun_intensity,
+            moon_colour: Vec3::splat(s.moon_intensity * s.sky_moon_intensity),
+            glow_colour: Vec3::from(s.sky_glow),
+        });
         let (dir, colour) =
-            if to_sun.z >= 0.0 { (to_sun, Vec3::from(SUN_COLOUR)) } else { (-to_sun, Vec3::splat(s.moon_intensity)) };
+            if to_sun.z >= 0.0 { (to_sun, STAR_COLOUR) } else { (-to_sun, Vec3::splat(s.moon_intensity)) };
         self.view.sun_dir = dir;
-        self.view.sun_colour = colour * Vec3::from(s.light_colour);
+        self.view.sun_colour = Sky::attenuated_light(eye, colour, dir) * Vec3::from(s.light_colour);
         self.view.fill = Vec3::from(s.fill_ambient);
         self.view.exposure_ev = self.exposure + s.exposure_ev;
         self.view.scotopic = s.scotopic;
@@ -428,7 +438,7 @@ impl MapView {
             (Source::Ymap(e), _) => e.clone(),
             _ => Vec::new(),
         };
-        self.light();
+        self.light(camera.eye);
         let targets = self.targets.as_ref().unwrap();
         let frustum = camera.frustum();
         self.last_view = Some((camera, rect));

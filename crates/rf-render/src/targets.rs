@@ -7,6 +7,7 @@ use std::time::Instant;
 
 use crate::GpuContext;
 use crate::post::{Post, PostTargets};
+use crate::sky::{Sky, SkyTargets};
 
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -106,6 +107,8 @@ pub struct RenderTargets {
     pub(crate) blur_group: wgpu::BindGroup,
     /// The exposure's adaptation and bloom.
     pub(crate) post: PostTargets,
+    /// The atmosphere's pass over the lit image.
+    pub(crate) sky: SkyTargets,
     /// When this view was last drawn, for the adaptation.
     pub(crate) last_frame: Mutex<Option<Instant>>,
 }
@@ -116,6 +119,7 @@ impl RenderTargets {
         layouts: &ViewLayouts,
         ssao_constants: &wgpu::Buffer,
         post: &Post,
+        sky: &Sky,
         width: u32,
         height: u32,
     ) -> Self {
@@ -177,6 +181,7 @@ impl RenderTargets {
         );
         let blur_group = group("ssao blur", &layouts.blur, &[(3, tv(&ssao_raw))]);
         let post = post.targets(ctx, &hdr, width, height);
+        let sky = sky.view_targets(ctx, &lit, &depth_view);
         Self {
             width,
             height,
@@ -196,6 +201,7 @@ impl RenderTargets {
             ssao_group,
             blur_group,
             post,
+            sky,
             last_frame: Mutex::new(None),
         }
     }

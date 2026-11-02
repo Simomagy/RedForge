@@ -13,12 +13,13 @@ use crate::GpuContext;
 use crate::anim::Pose;
 use crate::camera::{CameraView, OrbitCamera};
 use crate::mesh::{Vertex, VertexExtra, VertexSkin};
-use crate::post::{Post, PostSettings, Tonemap};
 use crate::model::{
     AlphaMode, DecalMode, GpuDraw, GpuModel, MaterialDesc, MaterialMap, NormalMap, Slot, TerrainDesc, TerrainParams,
     terrain_slot,
 };
+use crate::post::{Post, PostSettings, Tonemap};
 use crate::shadows::{CASCADES, Cascades, SHADOW_SIZE};
+use crate::sky::{Sky, SkyLights};
 use crate::targets::{DEPTH_FORMAT, GBUFFER_FORMATS, HDR_FORMAT, ID_FORMAT, SSAO_FORMAT, ViewLayouts};
 use crate::texture::GpuTexture;
 
@@ -186,6 +187,10 @@ pub struct ViewSettings {
     pub sun_colour: Vec3,
     /// The ambient light's fill colour, added to the sky's.
     pub fill: Vec3,
+    /// The sky's lights: the atmosphere drawn where nothing is and over
+    /// everything far, and lighting the scene. Without, the background colour
+    /// shows and a day's sky lights it (the viewers).
+    pub sky: Option<SkyLights>,
     pub background: [f64; 3],
     /// The user's exposure plus the scene's, in EV (the image is exposed to
     /// its average first).
@@ -206,6 +211,7 @@ impl Default for ViewSettings {
             sun_dir: Vec3::new(0.4, -0.6, 0.7).normalize(),
             sun_colour: Vec3::new(3.2, 3.0, 2.7),
             fill: Vec3::ZERO,
+            sky: None,
             background: [0.18, 0.2, 0.24],
             exposure_ev: 0.0,
             scotopic: [1.0, 1.0, 1.0, 0.0],
@@ -304,7 +310,10 @@ pub struct Renderer {
     shadow_frame_group: wgpu::BindGroup,
     /// One layer per cascade.
     shadow_layers: Vec<wgpu::TextureView>,
-    env_group: wgpu::BindGroup,
+    /// The world's sky (the map's), and the day sky lighting the viewers:
+    /// each keeps one environment map.
+    world_sky: std::sync::Mutex<Sky>,
+    studio_sky: std::sync::Mutex<Sky>,
     ssao_buffer: wgpu::Buffer,
     post: Post,
     sampler: wgpu::Sampler,
@@ -406,30 +415,6 @@ fn in_pass(draw: &GpuDraw, pass: Pass) -> Option<bool> {
     }
 }
 
-/// A cube texture of one colour on every face, standing in for the sky's
-/// environment maps.
-fn solid_cube(ctx: &GpuContext, label: &str, rgba: [u8; 4]) -> wgpu::TextureView {
-    let texture = ctx.device.create_texture_with_data(
-        &ctx.queue,
-        &wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        },
-        wgpu::util::TextureDataOrder::LayerMajor,
-        &rgba.repeat(6),
-    );
-    texture.create_view(&wgpu::TextureViewDescriptor {
-        dimension: Some(wgpu::TextureViewDimension::Cube),
-        ..Default::default()
-    })
-}
-
 impl Renderer {
     pub fn new(ctx: &GpuContext) -> Self {
         let device = &ctx.device;
@@ -454,23 +439,9 @@ impl Renderer {
                 count: None,
             }],
         });
-        let env_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("environment"),
-            entries: &[
-                texture_entry_of(
-                    0,
-                    wgpu::TextureSampleType::Float { filterable: true },
-                    wgpu::TextureViewDimension::Cube,
-                ),
-                texture_entry_of(
-                    1,
-                    wgpu::TextureSampleType::Float { filterable: true },
-                    wgpu::TextureViewDimension::Cube,
-                ),
-                texture_entry(2, true),
-                sampler_entry(3, wgpu::SamplerBindingType::Filtering),
-            ],
-        });
+        let world_sky = Sky::new(ctx);
+        let studio_sky = Sky::new(ctx);
+        let env_layout = world_sky.env_layout();
         let material_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("material"),
             entries: &[
@@ -593,28 +564,6 @@ impl Renderer {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        let env_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("environment"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Linear,
-            ..Default::default()
-        });
-        // Until there's a sky: a plain sky colour all round.
-        let env_irradiance = solid_cube(ctx, "irradiance", [140, 166, 204, 255]);
-        let env_prefiltered = solid_cube(ctx, "prefiltered", [140, 166, 204, 255]);
-        let env_brdf = GpuTexture::solid(ctx, "brdf", [255, 0, 0, 255]);
-        let env_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("environment"),
-            layout: &env_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&env_irradiance) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&env_prefiltered) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&env_brdf.view_2d) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&env_sampler) },
-            ],
-        });
-
         let module = |label, source: String| {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(label),
@@ -640,10 +589,10 @@ impl Renderer {
         let skinned_gbuffer_pl =
             pipeline_layout("skinned g-buffer", &[Some(&frame_layout), Some(&material_layout), Some(&bones_layout)]);
         let forward_pl =
-            pipeline_layout("forward", &[Some(&frame_layout), Some(&material_layout), None, Some(&env_layout)]);
+            pipeline_layout("forward", &[Some(&frame_layout), Some(&material_layout), None, Some(env_layout)]);
         let skinned_forward_pl = pipeline_layout(
             "skinned forward",
-            &[Some(&frame_layout), Some(&material_layout), Some(&bones_layout), Some(&env_layout)],
+            &[Some(&frame_layout), Some(&material_layout), Some(&bones_layout), Some(env_layout)],
         );
         let terrain_pl = pipeline_layout("terrain", &[Some(&frame_layout), Some(&terrain_layout)]);
         let shadow_pl = pipeline_layout("shadow", &[Some(&shadow_frame_layout)]);
@@ -750,7 +699,7 @@ impl Renderer {
             })
         };
         let lighting_pl =
-            pipeline_layout("lighting", &[Some(&frame_layout), Some(&view_layouts.lighting), None, Some(&env_layout)]);
+            pipeline_layout("lighting", &[Some(&frame_layout), Some(&view_layouts.lighting), None, Some(env_layout)]);
         let background_pl = pipeline_layout("background", &[Some(&frame_layout), Some(&view_layouts.background)]);
         let ssao_pl = pipeline_layout("ssao", &[Some(&frame_layout), Some(&view_layouts.ssao)]);
         let blur_pl = pipeline_layout("ssao blur", &[None, Some(&view_layouts.blur)]);
@@ -836,7 +785,8 @@ impl Renderer {
             shadow_frames,
             shadow_frame_group,
             shadow_layers,
-            env_group,
+            world_sky: std::sync::Mutex::new(world_sky),
+            studio_sky: std::sync::Mutex::new(studio_sky),
             ssao_buffer,
             post: Post::new(ctx),
             sampler,
@@ -1005,7 +955,8 @@ impl Renderer {
     }
 
     pub fn create_targets(&self, ctx: &GpuContext, width: u32, height: u32) -> RenderTargets {
-        RenderTargets::new(ctx, &self.view_layouts, &self.ssao_buffer, &self.post, width, height)
+        let sky = self.world_sky.lock().unwrap();
+        RenderTargets::new(ctx, &self.view_layouts, &self.ssao_buffer, &self.post, &sky, width, height)
     }
 
     /// Draws one model with an orbiting camera (the model viewer).
@@ -1348,6 +1299,15 @@ impl Renderer {
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
 
         let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+        // The sky's environment maps, redrawn when its lights change.
+        let mut sky = match &settings.sky {
+            Some(_) => self.world_sky.lock().unwrap(),
+            None => self.studio_sky.lock().unwrap(),
+        };
+        match &settings.sky {
+            Some(lights) => sky.update(ctx, &mut encoder, lights, camera.eye),
+            None => sky.update(ctx, &mut encoder, &SkyLights::default_day(), Vec3::ZERO),
+        }
         // The sun's shadow maps, a cascade at a time.
         if cascades.is_some() {
             for (i, layer) in self.shadow_layers.iter().enumerate() {
@@ -1407,14 +1367,17 @@ impl Renderer {
             "lighting",
             &targets.lit,
             &p.lighting,
-            &[(0, &self.frame_group), (1, &targets.lighting_group), (3, &self.env_group)],
+            &[(0, &self.frame_group), (1, &targets.lighting_group), (3, sky.env_group())],
         );
-        fullscreen(
-            "background",
-            &targets.hdr,
-            &p.background,
-            &[(0, &self.frame_group), (1, &targets.background_group)],
-        );
+        match &settings.sky {
+            Some(lights) => sky.draw(ctx, &mut encoder, &targets.sky, &targets.hdr, camera, lights),
+            None => fullscreen(
+                "background",
+                &targets.hdr,
+                &p.background,
+                &[(0, &self.frame_group), (1, &targets.background_group)],
+            ),
+        }
         // Blended draws over it, lit as they go.
         {
             let load = wgpu::LoadOp::Load;
@@ -1429,7 +1392,7 @@ impl Renderer {
                 ..Default::default()
             });
             rp.set_bind_group(0, &self.frame_group, &[]);
-            rp.set_bind_group(3, &self.env_group, &[]);
+            rp.set_bind_group(3, sky.env_group(), &[]);
             models_pass(&mut rp, draw, Pass::Blend);
         }
         let now = std::time::Instant::now();

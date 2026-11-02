@@ -20,6 +20,7 @@ mod post;
 pub mod preview;
 mod renderer;
 mod shadows;
+pub mod sky;
 mod targets;
 pub mod texture;
 
@@ -36,6 +37,7 @@ pub use renderer::{
     Scene, ViewSettings,
 };
 pub use shadows::{CASCADES, Cascade, Cascades};
+pub use sky::{Sky, SkyLights, SkyTargets};
 pub use targets::{OUTPUT_FORMAT, RenderTargets};
 pub use texture::{GpuTexture, TextureKind};
 
