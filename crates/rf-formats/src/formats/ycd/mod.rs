@@ -37,7 +37,7 @@
 mod anim;
 mod channel;
 mod clip;
-mod util;
+pub(crate) mod util;
 
 use std::collections::HashMap;
 
