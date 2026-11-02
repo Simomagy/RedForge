@@ -1,0 +1,33 @@
+﻿
+group:default
+states:
+    endless_summer  unloaded
+    valentine_shootout  ok
+ipls:
+    vjpztgda_0x407017ea endless_summer:arthur_story
+    jxurtpda_0x35dcdb96 endless_summer:john_story
+    
+    // valentine shootout section start
+    axintrpa_0xde98d5ec  valentine_shootout:during
+    defeawaa_0xb774db8e  valentine_shootout:during
+    jkyaicla_0x2ffb78b0  valentine_shootout:during
+    aeqrlyla_0xa1dc3753  valentine_shootout:during
+    pyjbdsma_0xd57783e4  valentine_shootout:during
+    rogdwija_0x3b8f523d  valentine_shootout:during
+    qloaylea_0xc5840527  valentine_shootout:after_shootout
+    lpmclkca_0xb26ba1a4  valentine_shootout:after_shootout //jail
+    val_02_lockdown_gun  valentine_shootout:after_shootout //gunsmith
+    val_02_lockdown_law  valentine_shootout:after_shootout //law office
+    val_02_lockdown_bank  valentine_shootout:after_shootout //bank
+    val_02_lockdown_hotel  valentine_shootout:after_shootout //hotel
+    yinskida_0x493af420  valentine_shootout:after_shootout //general store
+    lptggnea_0x0bdd396b  valentine_shootout:after_shootout
+    qhwxvwha_0x10d66211  valentine_shootout:after_shootout //unfinished house
+    qloaylea_0xc5840527  valentine_shootout:after_shootout //doctor
+    dqdctpia_0xd1b04d39  valentine_shootout:after_shootout //saloon
+    lhmmfvha_0x0b7454f3  valentine_shootout:after_shootout //saloon signs damaged
+    // valentine shootout section end
+
+
+entitysets:
+

@@ -321,6 +321,7 @@ mod tests {
                 physics_dictionary: 0,
                 asset_type: AssetType::DRAWABLE,
                 asset_name: h("prop"),
+                time_flags: 0,
                 ytyp: f(0),
                 index: 0,
             },

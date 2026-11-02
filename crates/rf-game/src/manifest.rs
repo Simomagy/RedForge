@@ -46,12 +46,20 @@ pub struct Archetype {
     pub physics_dictionary: u32,
     pub asset_type: AssetType,
     pub asset_name: u32,
+    /// A `CTimeArchetypeDef`'s `timeFlags`: bit `h` set when it shows at hour
+    /// `h`. 0 for other classes.
+    pub time_flags: u32,
     /// The ytyp it's from, and its index in the ytyp's `archetypes`.
     pub ytyp: FileRef,
     pub index: u32,
 }
 
 impl Archetype {
+    /// `CTimeArchetypeDef`'s class name hash.
+    pub const TIME_CLASS: u32 = 0x76B0_C56C;
+    /// `CMloArchetypeDef`'s class name hash.
+    pub const MLO_CLASS: u32 = 0x1050_6455;
+
     fn read(b: &DataBag, ytyp: FileRef, index: u32) -> Self {
         Self {
             name: b.hash("name"),
@@ -70,6 +78,7 @@ impl Archetype {
             physics_dictionary: b.hash("physicsDictionary"),
             asset_type: AssetType(b.i32("assetType")),
             asset_name: b.hash("assetName"),
+            time_flags: b.u32("timeFlags"),
             ytyp,
             index,
         }
