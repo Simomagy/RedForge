@@ -94,3 +94,39 @@ fn anim_dictionaries_convert_both_ways() {
         assert_eq!(d.entries.len(), d2.entries.len(), "{path}");
     }
 }
+
+/// Every clip's animations, evaluated through the clip: each plays from the
+/// clip's dictionary, and gives finite values, unit quaternions for rotations.
+#[test]
+fn clips_evaluate() {
+    let Some((fs, hashes)) = open() else { return };
+    let (mut clips, mut values) = (0, 0);
+    for (path, data) in sample(&fs, ".ycd", 30) {
+        let d = ycd::read(&data, &hashes).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let anims = d.anims();
+        for clip in d.clips() {
+            let hashes = clip.animation_hashes();
+            let found: Vec<_> = hashes.iter().filter_map(|h| anims.get(h)).copied().collect();
+            // Clips play animations of their own dictionary, or all of another's.
+            assert!(found.is_empty() || found.len() == hashes.len(), "{path}: {:?}", clip.name);
+            clips += 1;
+            for a in found {
+                let ids = a.bone_ids.as_deref().unwrap_or(&[]);
+                for step in 0..=4 {
+                    let p = a.frame_position(a.duration * step as f32 / 4.0);
+                    for (i, id) in ids.iter().enumerate() {
+                        let v = a.evaluate(&p, i);
+                        assert!(v.iter().all(|c| c.is_finite()), "{path}: {:?} track {i}: {v:?}", a.name);
+                        let len = v.iter().map(|c| c * c).sum::<f32>().sqrt();
+                        if id.type_id == 1 && len > 0.0 {
+                            // Two unit quaternions blended: a little short at most.
+                            assert!((0.7..=1.001).contains(&len), "{path}: {:?} track {i}: {v:?}", a.name);
+                        }
+                        values += 1;
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("{clips} clips, {values} track values");
+}

@@ -55,10 +55,118 @@ impl VertexExtra {
     }
 }
 
+/// What skinned vertices have beyond a [`Vertex`]: up to 8 bones (as RDR2's
+/// skinned geometry has, in two sets of 4) by their index in the model's bone
+/// mapping, and their weights. A second vertex stream, only uploaded for skinned
+/// meshes that are drawn posed; the shader reads it as one `vec4<u32>`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+pub struct VertexSkin {
+    /// Unorm8 weights of the first 4 bones, then of the next 4.
+    pub weights: [[u8; 4]; 2],
+    /// The bones' indices; the first index 255 marks a cloth vertex (whose
+    /// other values are cloth vertices, not bones).
+    pub indices: [[u8; 4]; 2],
+}
+
+impl VertexSkin {
+    pub const ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![12 => Uint32x4];
+
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<VertexSkin>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
+/// Decodes a geometry's bone weights and indices, `None` when it has neither.
+/// Values are read as the C#'s skinning shader does (`index * 255.002`,
+/// truncated); a geometry with indices but no weights gives the first bone all
+/// the weight.
+///
+/// Cloth vertices (manes, coat tails) follow a cloth simulation in the game,
+/// which isn't done here: each takes the bones of the nearest skinned vertex of
+/// the geometry, so that it moves with the body (stiffly) instead of staying in
+/// the bind pose. All-cloth geometry keeps its cloth marks and stays as it is.
+pub fn decode_skin(g: &Geometry) -> Option<Vec<VertexSkin>> {
+    let layout = g.layout;
+    let sems: Vec<u8> = (0..layout.element_count()).map(|e| layout.semantic(e) & 7).collect();
+    if !sems.contains(&semantic::BLEND_INDICES) {
+        return None;
+    }
+    let mut out = vec![VertexSkin { weights: [[255, 0, 0, 0], [0; 4]], indices: [[0; 4]; 2] }; g.vertex_count()];
+    let mut positions = vec![[0.0f32; 3]; g.vertex_count()];
+    let mut seen = [0usize; 8];
+    for (e, &sem) in sems.iter().enumerate() {
+        let index = seen[sem as usize];
+        seen[sem as usize] += 1;
+        if index > 1 || !matches!(sem, semantic::BLEND_WEIGHTS | semantic::BLEND_INDICES | semantic::POSITION) {
+            continue;
+        }
+        for (v, out) in out.iter_mut().enumerate() {
+            let Ok(x) = g.vertex_value(v, e) else { break };
+            match sem {
+                semantic::BLEND_WEIGHTS => out.weights[index] = to_unorm8(x),
+                semantic::BLEND_INDICES => out.indices[index] = x.map(|c| (c * 255.002).clamp(0.0, 255.0) as u8),
+                _ if index == 0 => positions[v] = [x[0], x[1], x[2]],
+                _ => {}
+            }
+        }
+    }
+    attach_cloth(&mut out, &positions);
+    Some(out)
+}
+
+/// Gives each cloth vertex the bones of the nearest skinned one (sweeping the
+/// skinned vertices sorted along x).
+fn attach_cloth(skin: &mut [VertexSkin], positions: &[[f32; 3]]) {
+    let is_cloth = |s: &VertexSkin| s.indices[0][0] == 255;
+    let mut skinned: Vec<usize> = (0..skin.len()).filter(|&v| !is_cloth(&skin[v])).collect();
+    if skinned.is_empty() || skinned.len() == skin.len() {
+        return;
+    }
+    skinned.sort_by(|&a, &b| positions[a][0].total_cmp(&positions[b][0]));
+    let dist2 = |a: [f32; 3], b: [f32; 3]| (0..3).map(|i| (a[i] - b[i]) * (a[i] - b[i])).sum::<f32>();
+    for v in 0..skin.len() {
+        if !is_cloth(&skin[v]) {
+            continue;
+        }
+        let p = positions[v];
+        let start = skinned.partition_point(|&s| positions[s][0] < p[0]);
+        let (mut best, mut best_d) = (skinned[start.min(skinned.len() - 1)], f32::MAX);
+        // Outwards from the vertex's x both ways, until x alone is too far.
+        for &s in &skinned[start..] {
+            let dx = positions[s][0] - p[0];
+            if dx * dx >= best_d {
+                break;
+            }
+            let d = dist2(positions[s], p);
+            if d < best_d {
+                (best, best_d) = (s, d);
+            }
+        }
+        for &s in skinned[..start].iter().rev() {
+            let dx = p[0] - positions[s][0];
+            if dx * dx >= best_d {
+                break;
+            }
+            let d = dist2(positions[s], p);
+            if d < best_d {
+                (best, best_d) = (s, d);
+            }
+        }
+        skin[v] = skin[best];
+    }
+}
+
 pub struct GpuMesh {
     pub vertices: wgpu::Buffer,
     /// [`VertexExtra`]s, for terrain.
     pub extra: Option<wgpu::Buffer>,
+    /// [`VertexSkin`]s, for skinned meshes uploaded to be drawn posed.
+    pub skin: Option<wgpu::Buffer>,
     pub indices: wgpu::Buffer,
     pub index_count: u32,
     pub lines: bool,
@@ -128,6 +236,12 @@ pub fn decode_extra(g: &Geometry) -> Vec<VertexExtra> {
 impl GpuMesh {
     /// Uploads a geometry; `extra` adds the [`VertexExtra`] stream.
     pub fn upload(ctx: &GpuContext, g: &Geometry, extra: bool) -> Option<Self> {
+        Self::upload_with(ctx, g, extra, false)
+    }
+
+    /// Uploads a geometry; `extra` adds the [`VertexExtra`] stream, `skin` the
+    /// [`VertexSkin`] one (when the geometry has bone indices).
+    pub fn upload_with(ctx: &GpuContext, g: &Geometry, extra: bool, skin: bool) -> Option<Self> {
         let indices = g.indices()?;
         if indices.is_empty() || g.vertex_count() == 0 {
             return None;
@@ -165,6 +279,42 @@ impl GpuMesh {
                 usage: wgpu::BufferUsages::VERTEX,
             })
         });
-        Some(Self { vertices: vb, extra, indices: ib, index_count, lines: g.topology == Topology::LineList, min, max })
+        let skin = skin.then(|| decode_skin(g)).flatten().map(|s| {
+            ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label,
+                contents: bytemuck::cast_slice(&s),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
+        Some(Self {
+            vertices: vb,
+            extra,
+            skin,
+            indices: ib,
+            index_count,
+            lines: g.topology == Topology::LineList,
+            min,
+            max,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloth_vertices_take_the_nearest_skinned_vertex_bones() {
+        let bone = |i: u8| VertexSkin { weights: [[255, 0, 0, 0], [0; 4]], indices: [[i, 0, 0, 0], [0; 4]] };
+        let cloth = VertexSkin { weights: [[85, 85, 85, 128], [0; 4]], indices: [[255, 1, 2, 3], [0; 4]] };
+        let mut skin = [bone(4), cloth, bone(7), cloth];
+        let positions = [[0.0, 0.0, 0.0], [0.9, 0.0, 0.3], [1.0, 0.0, 0.0], [-0.2, 5.0, 0.0]];
+        attach_cloth(&mut skin, &positions);
+        assert_eq!(skin, [bone(4), bone(7), bone(7), bone(4)]);
+
+        // All cloth: nothing to follow, the marks stay.
+        let mut all = [cloth, cloth];
+        attach_cloth(&mut all, &positions[..2]);
+        assert_eq!(all, [cloth, cloth]);
     }
 }

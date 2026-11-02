@@ -50,6 +50,11 @@ narrowed to props, drawable dictionaries, fragments or interiors. Clicking an
 object picks the Place tool with it; then a click in the map places it in the
 ymap chosen under "Place in" (Q/E turn it, a right click stops).
 
+A clip dictionary (ycd) opened from Game Files plays its clips on a ped or
+animal, put together from its metaped as the game does (the C#'s default
+`mp_male`, or the animal a creature's clips name), with play/pause, a time
+slider, speed and loop.
+
 Editing an entity of a game ymap makes that ymap edited: the map shows the
 edited data from then on. Deleting fixes the LOD indices (`parentIndex`,
 `numChildren`) in the ymap, its parent and its children, and refuses entities
@@ -64,8 +69,10 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
     target/release/redforge
 ```
 
-`REDFORGE_OPEN` is a game path (a model, texture or ymap), `world`,
-`world:<place>` or `world:x,y,z[,yaw,pitch]`. `REDFORGE_SELECT_CENTRE=1`
+`REDFORGE_OPEN` is a game path (a model, texture, clip dictionary or ymap), `world`,
+`world:<place>` or `world:x,y,z[,yaw,pitch]`. For a clip dictionary,
+`REDFORGE_ANIM_PED` picks the ped and `REDFORGE_ANIM_TIME` stops the clip at a
+time (seconds). `REDFORGE_SELECT_CENTRE=1`
 selects what's in the middle of the world map before the screenshot, and
 `REDFORGE_TEST_DRAG=1` then drags the gizmo with made-up mouse events.
 `REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside the world map
@@ -76,11 +83,11 @@ with that search, and chooses the first object.
 | Crate | What it is |
 |---|---|
 | `rf-formats` | The game's file formats as plain data: RPF8 archives; RSC8 resources (ydr, ydd, yft, ytd, ybn, ycd, yad, yld, yed, ynv, yfd, ypmd, yldb, yvr, ywr); metadata (ymap, ytyp, ymt, PSO, RBF); fxdb; DDS. No rendering, no UI. |
-| `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes, texture dictionary relationships (GTXD, HD bindings). |
+| `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes, texture dictionary relationships (GTXD, HD bindings), peds put together from their metapeds. |
 | `rf-world` | The world: map nodes, ymaps and their entities, the LOD tree, interiors, cull boxes and map states, streamed around a camera. |
 | `rf-editor` | The editor: the ymaps and ytyps being edited, the selection, undo and redo, LOD-safe deletes, saving. No UI. |
-| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain). |
-| `rf-app` | The `redforge` app: egui, with Game Files, the model, texture and XML viewers, the map, Properties and Objects. |
+| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain); skinned models posed by clips. |
+| `rf-app` | The `redforge` app: egui, with Game Files, the model, animation, texture, XML and hex viewers, the map, Project, Hierarchy, Properties and Objects. |
 | `rf-cli` | The `rf` command: list, extract and check game files. |
 
 ## The `rf` command

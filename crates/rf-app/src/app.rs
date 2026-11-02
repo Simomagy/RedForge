@@ -19,6 +19,7 @@ use crate::project_pane::ProjectPane;
 use crate::properties::Properties;
 use crate::settings::{GAME_FOLDER, Settings};
 use crate::viewers::Gpu;
+use crate::viewers::anim::AnimViewer;
 use crate::viewers::hex::HexViewer;
 use crate::viewers::model::ModelViewer;
 use crate::viewers::text::TextViewer;
@@ -41,6 +42,8 @@ enum GameState {
 pub enum Tab {
     Welcome,
     Model(Box<ModelViewer>),
+    /// A clip dictionary's clips played on a ped.
+    Anim(Box<AnimViewer>),
     Texture(Box<TextureViewer>),
     Text(Box<TextViewer>),
     Hex(Box<HexViewer>),
@@ -195,6 +198,7 @@ impl RedForgeApp {
                 let ext = path.rsplit('.').next().unwrap_or("");
                 match ext {
                     "ydr" | "ydd" | "yft" => Tab::Model(Box::new(ModelViewer::open(ctx, game, f))),
+                    "ycd" => Tab::Anim(Box::new(AnimViewer::open(ctx, game, f))),
                     "ytd" => Tab::Texture(Box::new(TextureViewer::open(ctx, game, f))),
                     "ymap" => match MapView::ymap(game, &self.gpu, f) {
                         Ok(v) => Tab::Map(Box::new(v)),
@@ -224,7 +228,16 @@ impl RedForgeApp {
     /// Shows a document with the others (in place of the welcome page).
     fn show_tab(&mut self, tab: Tab) {
         let document = |t: &Tab| {
-            matches!(t, Tab::Welcome | Tab::Map(_) | Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_))
+            matches!(
+                t,
+                Tab::Welcome
+                    | Tab::Map(_)
+                    | Tab::Model(_)
+                    | Tab::Anim(_)
+                    | Tab::Texture(_)
+                    | Tab::Text(_)
+                    | Tab::Hex(_)
+            )
         };
         if let Some(path) = self.dock.find_tab_from(document) {
             self.dock.set_focused_node_and_surface(egui_dock::NodePath { surface: path.surface, node: path.node });
@@ -453,6 +466,7 @@ impl TabViewer for Tabs<'_> {
         match tab {
             Tab::Welcome => "Welcome".into(),
             Tab::Model(v) => format!("🧊 {}", v.title).into(),
+            Tab::Anim(v) => format!("🏃 {}", v.title).into(),
             Tab::Texture(v) => format!("🖼 {}", v.title).into(),
             Tab::Text(v) => format!("📄 {}", v.title).into(),
             Tab::Hex(v) => format!("{} (hex)", v.title).into(),
@@ -469,6 +483,7 @@ impl TabViewer for Tabs<'_> {
         match tab {
             Tab::Welcome => egui::Id::new("welcome"),
             Tab::Model(v) => egui::Id::new(("model", &v.path)),
+            Tab::Anim(v) => egui::Id::new(("anim", &v.path)),
             Tab::Texture(v) => egui::Id::new(("texture", &v.path)),
             Tab::Text(v) => egui::Id::new(("text", &v.path)),
             Tab::Hex(v) => egui::Id::new(("hex", &v.path)),
@@ -486,7 +501,8 @@ impl TabViewer for Tabs<'_> {
             Tab::Welcome => {
                 ui.centered_and_justified(|ui| {
                     ui.label(
-                        "Open a model (ydr, ydd, yft), a texture dictionary (ytd) or any other file from Game Files.",
+                        "Open a model (ydr, ydd, yft), a texture dictionary (ytd), a clip dictionary (ycd) or any \
+                         other file from Game Files.",
                     );
                 });
             }
@@ -496,6 +512,7 @@ impl TabViewer for Tabs<'_> {
                     ui.label("The game isn't loaded.");
                 }
             },
+            Tab::Anim(v) => v.ui(ui, self.gpu),
             Tab::Texture(v) => v.ui(ui, self.gpu),
             Tab::Text(v) => v.ui(ui),
             Tab::Hex(v) => v.ui(ui),
@@ -540,6 +557,7 @@ impl TabViewer for Tabs<'_> {
     fn on_close(&mut self, tab: &mut Tab) -> egui_dock::widgets::tab_viewer::OnCloseResponse {
         match tab {
             Tab::Model(v) => v.free(self.gpu),
+            Tab::Anim(v) => v.free(self.gpu),
             Tab::Texture(v) => v.free(self.gpu),
             Tab::Map(v) => v.free(self.gpu),
             Tab::Objects => self.objects.free(self.gpu),
@@ -779,7 +797,7 @@ impl eframe::App for RedForgeApp {
 
         // Viewers waiting on a background job need frames to notice it finishing.
         let waiting = self.dock.iter_all_tabs().any(|(_, t)| match t {
-            Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_) | Tab::Map(_) => true,
+            Tab::Model(_) | Tab::Anim(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_) | Tab::Map(_) => true,
             // Objects asks for frames itself while its thumbnails load.
             Tab::Welcome | Tab::Properties | Tab::Project | Tab::Hierarchy | Tab::GameFiles | Tab::Objects => false,
         });

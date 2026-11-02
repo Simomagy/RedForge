@@ -56,6 +56,7 @@ mod device;
 mod files;
 mod init;
 mod manifest;
+pub mod peds;
 pub mod timecycle;
 
 use std::collections::HashMap;

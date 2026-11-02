@@ -6,7 +6,10 @@
 //! - [`GpuModel`]: a drawable's geometries and materials by LOD.
 //! - [`Renderer`]: draws models into [`RenderTargets`] (HDR, then tonemapped
 //!   to 8-bit sRGB that egui shows directly).
+//! - [`Pose`]: a skeleton posed by a clip, which [`Renderer::render_posed`]
+//!   skins models with.
 
+pub mod anim;
 pub mod assets;
 mod camera;
 mod context;
@@ -16,13 +19,16 @@ pub mod preview;
 mod renderer;
 pub mod texture;
 
+pub use anim::Pose;
 pub use camera::{CameraView, FlyCamera, Frustum, OrbitCamera, Ray};
 pub use context::{GpuContext, wanted_features};
-pub use model::{AlphaMode, DecalMode, GpuModel, MaterialDesc, NoTextures, Slot, TerrainDesc, TextureSource};
+pub use model::{
+    AlphaMode, DecalMode, GpuModel, MaterialDesc, ModelOptions, NoTextures, Slot, TerrainDesc, TextureSource,
+};
 pub use preview::{PreviewMode, PreviewTarget, TexturePreview};
 pub use renderer::{
-    DebugView, DrawBatch, GpuMaterial, Instance, MaterialKind, OUTPUT_FORMAT, Pick, PickRequest, RenderStats,
-    RenderTargets, Renderer, ViewSettings,
+    DebugView, DrawBatch, GpuMaterial, Instance, MaterialKind, OUTPUT_FORMAT, Pick, PickRequest, PosedModel,
+    RenderStats, RenderTargets, Renderer, ViewSettings,
 };
 pub use texture::{GpuTexture, TextureKind};
 

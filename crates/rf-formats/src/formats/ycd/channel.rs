@@ -437,6 +437,63 @@ impl Channel {
         })
     }
 
+    /// `EvaluateFloat`: a float channel's value at a frame of its sequence (frames
+    /// past the end wrap round, as in the C#); 0 for the other types.
+    pub fn evaluate_float(&self, frame: usize) -> f32 {
+        let at = |v: &[f32]| if v.is_empty() { 0.0 } else { v[frame % v.len()] };
+        match &self.data {
+            ChannelData::StaticFloat { value } => *value,
+            ChannelData::RawFloat { values: Some(v) }
+            | ChannelData::QuantizeFloat { values: Some(v), .. }
+            | ChannelData::LinearFloat { values: Some(v), .. }
+            | ChannelData::IncrementalFloat { values: Some(v), .. } => at(v),
+            ChannelData::IndirectQuantizeFloat { values: Some(values), frames: Some(frames), .. } => {
+                if frames.is_empty() {
+                    return 0.0;
+                }
+                values.get(frames[frame % frames.len()] as usize).copied().unwrap_or(0.0)
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// `EvaluateVector`: what a vector or quaternion channel does to the value
+    /// its track is putting together, `c` being the component the track is at.
+    /// A static vector fills xyz (or yzw after a float), a static quaternion
+    /// all of it; a cached quaternion follows the floats before it, putting
+    /// back the component they leave out (type 7), then normalises.
+    pub fn evaluate_vector(&self, c: usize, v: &mut [f32; 4]) {
+        match &self.data {
+            ChannelData::StaticQuaternion { value } => {
+                if c == 0 {
+                    *v = *value;
+                }
+            }
+            ChannelData::StaticVector3 { value } => match c {
+                0 => v[..3].copy_from_slice(value),
+                1 => v[1..].copy_from_slice(value),
+                _ => {}
+            },
+            ChannelData::CachedQuaternion { second, quat_index } => {
+                if !second {
+                    let [x, y, z, _] = *v;
+                    let w = (1.0 - x * x - y * y - z * z).max(0.0).sqrt();
+                    *v = match quat_index {
+                        0 => [w, x, y, z],
+                        1 => [x, w, y, z],
+                        2 => [x, y, w, z],
+                        _ => [x, y, z, w],
+                    };
+                }
+                let length = v.iter().map(|c| c * c).sum::<f32>().sqrt();
+                if length > 0.0 {
+                    v.iter_mut().for_each(|c| *c /= length);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// `Write(MetaNodeWriter)`. `IndirectQuantizeFloat`'s values must have been
     /// checked with [`Channel::frame_values`] (the readers here do it).
     pub fn write_xml(&self, w: &mut XmlWriter) {

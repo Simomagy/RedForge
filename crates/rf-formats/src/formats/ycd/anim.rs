@@ -258,6 +258,55 @@ impl Anim {
     }
 }
 
+/// Where a time falls in an animation (`AnimationFramePosition`): the frames
+/// either side and how much of each.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FramePosition {
+    pub frame0: usize,
+    pub frame1: usize,
+    pub alpha0: f32,
+    pub alpha1: f32,
+}
+
+impl Anim {
+    /// `GetFramePosition`: the frames at a time (in seconds) of the animation,
+    /// which loops (its last frame is its first again) and interpolates.
+    pub fn frame_position(&self, t: f32) -> FramePosition {
+        let frames = (self.frame_count as i32 - 1) as f32;
+        let pos = if self.duration > 0.0 { t / self.duration * frames } else { 0.0 };
+        let alpha1 = pos - pos.floor();
+        let frame0 = (pos.max(0.0) as usize).checked_rem(self.frame_count as usize).unwrap_or(0);
+        FramePosition { frame0, frame1: frame0 + 1, alpha0: 1.0 - alpha1, alpha1 }
+    }
+
+    /// `Evaluate`: the value of a track (by its index in `bone_ids`) at a frame
+    /// position, blended between the two frames (the short way round for
+    /// quaternions). Zero where the sequence has no such track.
+    pub fn evaluate(&self, frame: &FramePosition, track: usize) -> [f32; 4] {
+        let size = self.sequence_size as usize;
+        if size == 0 {
+            return [0.0; 4];
+        }
+        let s = frame.frame0 / size;
+        let f0 = frame.frame0 % size;
+        let Some(t) = self
+            .sequences
+            .as_ref()
+            .and_then(|seqs| seqs.get(s)?.as_ref()?.tracks.as_ref()?.get(track)?.as_ref())
+            .filter(|t| t.channels.is_some())
+        else {
+            return [0.0; 4];
+        };
+        let v0 = t.evaluate(f0);
+        let mut v1 = t.evaluate(f0 + 1);
+        let quaternion = self.bone_ids.as_ref().and_then(|ids| ids.get(track)).is_some_and(|id| id.type_id == 1);
+        if quaternion && v0.iter().zip(&v1).map(|(a, b)| a * b).sum::<f32>() < 0.0 {
+            v1 = v1.map(|c| -c);
+        }
+        std::array::from_fn(|i| v0[i] * frame.alpha0 + v1[i] * frame.alpha1)
+    }
+}
+
 /// A track: the channels of one bone id, by index (x, y, z, w, or a cached
 /// quaternion at 3 or 4).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -268,6 +317,36 @@ pub struct Track {
 }
 
 impl Track {
+    /// `EvaluateVector`: the track's value at a frame of its sequence, each
+    /// channel giving the next component(s) in order.
+    pub fn evaluate(&self, frame: usize) -> [f32; 4] {
+        let mut v = [0.0; 4];
+        let mut c = 0;
+        for ch in self.channels.iter().flatten().flatten() {
+            match &ch.data {
+                ChannelData::StaticVector3 { .. } => {
+                    ch.evaluate_vector(c, &mut v);
+                    c += 3;
+                }
+                ChannelData::StaticQuaternion { .. } => {
+                    ch.evaluate_vector(c, &mut v);
+                    c += 4;
+                }
+                ChannelData::CachedQuaternion { .. } => {
+                    ch.evaluate_vector(c, &mut v);
+                    c += 1;
+                }
+                _ => {
+                    if let Some(x) = v.get_mut(c) {
+                        *x = ch.evaluate_float(frame);
+                    }
+                    c += 1;
+                }
+            }
+        }
+        v
+    }
+
     pub fn write_xml(&self, w: &mut XmlWriter) {
         w.node_array_opt("Channels", self.channels.as_deref(), |w, c| c.write_xml(w));
     }

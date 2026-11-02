@@ -298,6 +298,15 @@ impl Clip {
         })
     }
 
+    /// How long the clip plays, in seconds: a multi-clip's duration (its parts'
+    /// total), a single clip's span of its animation.
+    pub fn duration(&self) -> f32 {
+        match &self.kind {
+            ClipKind::Single(s) => s.end_time - s.start_time,
+            ClipKind::Multi(m) => m.duration,
+        }
+    }
+
     /// The animations the clip plays, by hash.
     pub fn animation_hashes(&self) -> Vec<u32> {
         match &self.kind {
