@@ -34,8 +34,31 @@ impl Vertex {
     }
 }
 
+/// What terrain vertices have beyond a [`Vertex`]: a third texcoord and a
+/// second tangent. A second vertex stream, only uploaded for terrain.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+pub struct VertexExtra {
+    pub uv2: [f32; 2],
+    pub tangent1: [f32; 4],
+}
+
+impl VertexExtra {
+    pub const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![12 => Float32x2, 13 => Float32x4];
+
+    pub fn layout() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: size_of::<VertexExtra>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBUTES,
+        }
+    }
+}
+
 pub struct GpuMesh {
     pub vertices: wgpu::Buffer,
+    /// [`VertexExtra`]s, for terrain.
+    pub extra: Option<wgpu::Buffer>,
     pub indices: wgpu::Buffer,
     pub index_count: u32,
     pub lines: bool,
@@ -80,8 +103,31 @@ pub fn decode_vertices(g: &Geometry) -> Vec<Vertex> {
     out
 }
 
+/// Decodes a geometry's third texcoord and second tangent.
+pub fn decode_extra(g: &Geometry) -> Vec<VertexExtra> {
+    let n = g.vertex_count();
+    let layout = g.layout;
+    let mut out = vec![VertexExtra { tangent1: [1.0, 0.0, 0.0, 1.0], ..Default::default() }; n];
+    let mut seen = [0usize; 8];
+    for e in 0..layout.element_count() {
+        let sem = layout.semantic(e) as usize & 7;
+        let index = seen[sem];
+        seen[sem] += 1;
+        for (v, out) in out.iter_mut().enumerate() {
+            let Ok(x) = g.vertex_value(v, e) else { break };
+            match (sem as u8, index) {
+                (semantic::TANGENT, 1) => out.tangent1 = [x[0], x[1], x[2], if x[3] < 0.0 { -1.0 } else { 1.0 }],
+                (semantic::TEXCOORD, 2) => out.uv2 = [x[0], x[1]],
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 impl GpuMesh {
-    pub fn upload(ctx: &GpuContext, g: &Geometry) -> Option<Self> {
+    /// Uploads a geometry; `extra` adds the [`VertexExtra`] stream.
+    pub fn upload(ctx: &GpuContext, g: &Geometry, extra: bool) -> Option<Self> {
         let indices = g.indices()?;
         if indices.is_empty() || g.vertex_count() == 0 {
             return None;
@@ -112,6 +158,13 @@ impl GpuMesh {
             contents: bytemuck::cast_slice(&idx),
             usage: wgpu::BufferUsages::INDEX,
         });
-        Some(Self { vertices: vb, indices: ib, index_count, lines: g.topology == Topology::LineList, min, max })
+        let extra = extra.then(|| {
+            ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label,
+                contents: bytemuck::cast_slice(&decode_extra(g)),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
+        Some(Self { vertices: vb, extra, indices: ib, index_count, lines: g.topology == Topology::LineList, min, max })
     }
 }

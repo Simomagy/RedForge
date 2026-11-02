@@ -191,10 +191,8 @@ impl Ready {
                 for (i, d) in lod.iter().enumerate() {
                     ui.collapsing(format!("{i}: {}", d.material.name), |ui| {
                         ui.label(format!("{:?}", d.alpha));
-                        for (slot, t) in rf_render::Slot::ALL.iter().zip(&d.material.textures) {
-                            if let Some(t) = t {
-                                ui.label(format!("{}: {}", slot.label(), t.name));
-                            }
+                        for (slot, t) in &d.material.textures {
+                            ui.label(format!("{slot}: {}", t.name));
                         }
                     });
                 }

@@ -100,6 +100,133 @@ pub struct MaterialDesc<'a> {
     /// For two-layer shaders: the channel of the second vertex colour that
     /// blends the layers.
     pub two_layer: Option<u8>,
+    pub normal_map: NormalMap,
+    pub material_map: MaterialMap,
+}
+
+/// What a normal map holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NormalMap {
+    /// Tangent-space XY in red and green.
+    #[default]
+    TangentXY,
+    /// The normal itself, in RGB (terrain LODs).
+    Direct,
+}
+
+/// What a material map ("_ma") holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MaterialMap {
+    /// Metalness in red, roughness in green.
+    #[default]
+    MetalRoughness,
+    /// Smoothness in green (terrain LODs).
+    Smoothness,
+    /// Roughness in red (terrain SLODs).
+    Roughness,
+}
+
+/// The constants of the terrain shaders ("terrain_uber_4lyr"...), as the C#
+/// `BlendShader` names them.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TerrainParams {
+    /// Normal map strength per layer ("bumpiness").
+    pub bump_scales: [f32; 4],
+    /// Scale and offset of texcoord 0 for layers that use it ("uvscalebias").
+    pub uv_scale_offset: [f32; 4],
+    /// The texcoord (1-3) of each layer ("uvset").
+    pub uv_indices: [f32; 4],
+    /// The texcoord (1-3) of the lookup texture, in x ("lookupuvset").
+    pub lookup_index: [f32; 4],
+    /// How much the tint texture colours each layer ("tintintensity"...).
+    pub tint_levels: [f32; 4],
+    pub tint_blends: [f32; 4],
+    /// Height blending ("hbbrangescale1234", "hbbrangebias1234").
+    pub hbb_scales: [f32; 4],
+    pub hbb_offsets: [f32; 4],
+}
+
+impl Default for TerrainParams {
+    fn default() -> Self {
+        Self {
+            bump_scales: [1.0; 4],
+            uv_scale_offset: [1.0, 1.0, 0.0, 0.0],
+            uv_indices: [1.0; 4],
+            lookup_index: [1.0; 4],
+            tint_levels: [0.0; 4],
+            tint_blends: [0.0; 4],
+            hbb_scales: [1.0; 4],
+            hbb_offsets: [0.0; 4],
+        }
+    }
+}
+
+/// Terrain texture slots: diffuse 0-3, normal 0-3, material 0-3, then these.
+pub mod terrain_slot {
+    pub const LOOKUP: usize = 12;
+    pub const TINT: usize = 13;
+    pub const TINT_NORMAL: usize = 14;
+    pub const COUNT: usize = 15;
+}
+
+/// A terrain shader's textures and constants (`SetupTerrainShader`).
+pub struct TerrainDesc<'a> {
+    pub shader_name: String,
+    pub textures: [Option<&'a ShaderTexture>; terrain_slot::COUNT],
+    pub params: TerrainParams,
+}
+
+impl<'a> TerrainDesc<'a> {
+    /// The terrain description of a shader, if it's a terrain shader.
+    pub fn from_shader(shader: &'a Shader, shader_name: String) -> Option<Self> {
+        if !names::TERRAIN.contains(&shader.name_hash) {
+            return None;
+        }
+        let mut d =
+            TerrainDesc { shader_name, textures: [None; terrain_slot::COUNT], params: TerrainParams::default() };
+        for p in shader.parameters.as_ref().and_then(|p| p.params.as_deref()).unwrap_or(&[]) {
+            match p.info.param_type() {
+                ShaderParamType::Texture => {
+                    let slot = match p.info.name {
+                        0xce7b968e => 0, // diffusetexture_layer0
+                        0xd883aa9e => 1,
+                        0x32b9df09 => 2,
+                        0x3d10f3b7 => 3,
+                        0x27dbd2be => 4, // bumptexture_layer0
+                        0x7e1f7f44 => 5,
+                        0x4c759bf1 => 6,
+                        0xde84c011 => 7,
+                        0x3022de38 => 8, // materialmapatexture_layer0
+                        0x42110214 => 9,
+                        0x0cd6179f => 10,
+                        0x3ea37b39 => 11,
+                        0xc075f9b6 => terrain_slot::LOOKUP,      // lookuptexture
+                        0x3fb7964f => terrain_slot::TINT,        // tinttexture
+                        0x1a016c7e => terrain_slot::TINT_NORMAL, // tintbumptexture
+                        _ => continue,
+                    };
+                    d.textures[slot] = p.texture.as_ref();
+                }
+                ShaderParamType::CBuffer => {
+                    let t = &mut d.params;
+                    match p.info.name {
+                        0xf6712b81 => t.bump_scales = p.vector,     // bumpiness
+                        0xc8ccec64 => t.uv_scale_offset = p.vector, // uvscalebias
+                        0x724bed95 => t.uv_indices = p.vector,      // uvset
+                        0xf354f896 => t.lookup_index = p.vector,    // lookupuvset
+                        0xdb26e4de => t.tint_levels = p.vector,     // tintintensity
+                        0x1caef69a => t.tint_blends = p.vector,     // tintblendamount
+                        0xb2339a6c => t.hbb_scales = p.vector,      // hbbrangescale1234
+                        0x03754af2 => t.hbb_offsets = p.vector,     // hbbrangebias1234
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        Some(d)
+    }
 }
 
 mod names {
@@ -156,6 +283,33 @@ mod names {
     ];
     pub const DECAL_NORMAL_ONLY: u32 = 0x5e927617; // standard_decal_normal_only
     pub const DECAL_DIRT: u32 = 0xd94d6305; // decal_dirt
+
+    pub const TERRAIN: &[u32] = &[
+        0x39dc7754, // terrain_uber_2lyr_pxm_hbb
+        0xe87260a0, // terrain_uber_4lyr
+        0x9f6397e3, // terrain_uber_4lyr_hbb
+        0x3c497e4a, // terrain_uber_4lyr_pxm
+        0x770b903e, // terrain_uber_4lyr_pxm_hbb
+        0xa91fc138, // terrain_uber_4lyr_spx_dm_hbb
+        0xa592dae9, // terrain_uber_4lyr_spx_dm_hbb_1111
+        0x435b4e43, // terrain_uber_4lyr_spx_dm_hbb_1121
+        0xded0f9db, // terrain_uber_4lyr_spx_dm_hbb_1221
+        0x61b67683, // terrain_uber_4lyr_spx_dm_hbb_2111
+        0x27a95f41, // terrain_uber_4lyr_spx_dm_hbb_2221
+        0xe775ca5c, // terrain_uber_4lyr_mud
+        0xa9b256d3, // terrain_uber_4lyr_mud_dm_hbb
+        0x2cb19c4a, // terrain_uber_4lyr_quicksand_dm_hbb
+        0x7584b19b, // terrain_uber_4lyr_snow_dm_hbb
+        0x6e803e23, // terrain_uber_4lyr_snowglt_pxm_hbb
+        0xaeaf82e3, // terrain_uber_4lyr_snowglt_spx_dm_hbb
+        0x4f7d3fbe, // terrain_uber_3+1lyr_snow_dm_hbb
+    ];
+    pub const TERRAIN_LOD: &[u32] = &[
+        0xd76ad078, // terrain_lod_grass_wetness
+        0x42a96d26, // terrain_lod_2lyr
+        0x31873a26, // terrain_lod_2lyr_grass_wetness
+    ];
+    pub const TERRAIN_SLOD: u32 = 0x3614acb6; // terrain_slod
 }
 
 /// Textures the C# RedForge doesn't map onto its default shader.
@@ -281,6 +435,11 @@ impl<'a> MaterialDesc<'a> {
             d.decal_masks = [0.0, 1.0, 0.0, 0.0];
         } else if name == names::DECAL_DIRT {
             d.decal = DecalMode::Dirt;
+        }
+        if names::TERRAIN_LOD.contains(&name) {
+            (d.normal_map, d.material_map) = (NormalMap::Direct, MaterialMap::Smoothness);
+        } else if name == names::TERRAIN_SLOD {
+            (d.normal_map, d.material_map) = (NormalMap::Direct, MaterialMap::Roughness);
         }
         d
     }
@@ -432,18 +591,28 @@ impl GpuModel {
             let Some(lod) = lod else { continue };
             for model in lod.models.iter().flatten().flatten() {
                 for g in model.geometries.iter().flatten().flatten() {
-                    let Some(mesh) = GpuMesh::upload(ctx, g) else { continue };
                     let si = g.shader_id as usize;
                     let shader = shaders.get(si).and_then(Option::as_ref);
+                    let terrain = shader.is_some_and(|s| names::TERRAIN.contains(&s.name_hash));
+                    let Some(mesh) = GpuMesh::upload(ctx, g, terrain) else { continue };
                     let (material, alpha) = match shader {
                         Some(s) => {
-                            let desc = MaterialDesc::from_shader(s, hashes.name(s.name_hash));
-                            let alpha = desc.alpha;
                             if materials[si].is_none() {
-                                let textures = desc.textures.map(|t| resolver.resolve(t));
-                                materials[si] = Some(Arc::new(renderer.create_material(ctx, &desc, textures)));
+                                let name = hashes.name(s.name_hash);
+                                let m = match TerrainDesc::from_shader(s, name.clone()) {
+                                    Some(t) => {
+                                        let textures = t.textures.map(|t| resolver.resolve(t));
+                                        renderer.create_terrain_material(ctx, &t, textures)
+                                    }
+                                    None => {
+                                        let desc = MaterialDesc::from_shader(s, name);
+                                        let textures = desc.textures.map(|t| resolver.resolve(t));
+                                        renderer.create_material(ctx, &desc, textures)
+                                    }
+                                };
+                                materials[si] = Some(Arc::new(m));
                             }
-                            (materials[si].clone().unwrap(), alpha)
+                            (materials[si].clone().unwrap(), AlphaMode::from_draw_bucket(s.draw_bucket))
                         }
                         None => (renderer.default_material(), AlphaMode::Opaque),
                     };

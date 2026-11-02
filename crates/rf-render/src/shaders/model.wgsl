@@ -1,4 +1,5 @@
-// Game geometry, lit by a sun and a sky, into an HDR target.
+// Game geometry, lit by a sun and a sky, into an HDR target (after
+// common.wgsl).
 //
 // Materials follow RDR2's "standard" shaders: a diffuse map, a normal map with
 // XY in its red and green channels, and a material map ("_ma") with metalness in
@@ -6,18 +7,6 @@
 // of the second vertex colour; a tint palette colours the diffuse by the vertex
 // colour's blue (column) and the entity's tint (row). Decals take their opacity
 // from the diffuse and vertex alphas, scaled by how much reaches the albedo.
-
-struct Frame {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    // xyz: direction towards the sun.
-    sun_dir: vec4<f32>,
-    sun_colour: vec4<f32>,
-    sky_colour: vec4<f32>,
-    ground_colour: vec4<f32>,
-    // x: debug view (0 lit, 1 albedo, 2 normals, 3 material, 4 vertex colour)
-    options: vec4<u32>,
-};
 
 struct Material {
     tint: vec4<f32>,
@@ -28,9 +17,10 @@ struct Material {
     // x: decal mode (0 none, 1 decal, 2 dirt), y: has tint palette,
     // z: two layers, w: the channel of colour1 that blends them
     modes: vec4<u32>,
+    // x: normal map (0 tangent-space XY, 1 the normal in RGB),
+    // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R)
+    config: vec4<u32>,
 };
-
-@group(0) @binding(0) var<uniform> frame: Frame;
 
 @group(1) @binding(0) var<uniform> material: Material;
 @group(1) @binding(1) var t_albedo: texture_2d<f32>;
@@ -88,22 +78,6 @@ fn vs_main(v: VertexIn) -> VertexOut {
     return o;
 }
 
-const PI: f32 = 3.14159265;
-
-fn ggx_specular(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, roughness: f32, f0: vec3<f32>) -> vec3<f32> {
-    let h = normalize(v + l);
-    let a = max(roughness * roughness, 0.002);
-    let a2 = a * a;
-    let nh = max(dot(n, h), 0.0);
-    let nv = max(dot(n, v), 1e-4);
-    let nl = max(dot(n, l), 0.0);
-    let d = a2 / (PI * pow(nh * nh * (a2 - 1.0) + 1.0, 2.0));
-    let k = a * 0.5;
-    let g = (nv / (nv * (1.0 - k) + k)) * (nl / (nl * (1.0 - k) + k));
-    let f = f0 + (1.0 - f0) * pow(1.0 - max(dot(h, v), 0.0), 5.0);
-    return d * g * f / (4.0 * nv * max(nl, 1e-4));
-}
-
 // The palette colour for this vertex, or white where the palette is black.
 fn palette_tint(i: VertexOut) -> vec3<f32> {
     let size = textureDimensions(t_tint);
@@ -145,38 +119,31 @@ fn shade(i: VertexOut, front: bool) -> vec4<f32> {
     }
     if material.params.z > 0.5 {
         let nm = mix(textureSample(t_normal, s_wrap, i.uv0), textureSample(t_normal2, s_wrap, i.uv0), layer);
-        var xy = (nm.xy * 2.0 - 1.0) * material.params.x;
-        let z = sqrt(max(1.0 - dot(xy, xy), 0.0));
-        let t = normalize(i.tangent.xyz - n * dot(n, i.tangent.xyz));
-        let b = cross(n, t) * i.tangent.w;
-        n = normalize(t * xy.x + b * xy.y + n * z);
+        if material.config.x == 1u {
+            n = normalize(nm.xyz * 2.0 - 1.0);
+        } else {
+            let t = normalize(i.tangent.xyz - n * dot(n, i.tangent.xyz));
+            let b = cross(t, n) * i.tangent.w;
+            n = normal_mapping(nm.xy, material.params.x, n, t, b);
+        }
     }
 
     var metal = 0.0;
     var roughness = 0.6;
     if material.params.w > 0.5 {
         let p = mix(textureSample(t_params, s_wrap, i.uv0), textureSample(t_params2, s_wrap, i.uv0), layer);
-        metal = p.r;
-        roughness = clamp(p.g, 0.04, 1.0);
+        switch material.config.y {
+            case 1u: { roughness = 1.0 - p.g; }
+            case 2u: { roughness = p.r; }
+            default: {
+                metal = p.r;
+                roughness = p.g;
+            }
+        }
+        roughness = clamp(roughness, 0.04, 1.0);
     }
 
-    switch frame.options.x {
-        case 1u: { return vec4<f32>(albedo_s.rgb, albedo_s.a); }
-        case 2u: { return vec4<f32>(n * 0.5 + 0.5, 1.0); }
-        case 3u: { return vec4<f32>(metal, roughness, 0.0, 1.0); }
-        case 4u: { return vec4<f32>(i.colour0.rgb, 1.0); }
-        default: {}
-    }
-
-    let v = normalize(frame.camera_pos.xyz - i.world);
-    let l = normalize(frame.sun_dir.xyz);
-    let diffuse_colour = albedo_s.rgb * (1.0 - metal);
-    let f0 = mix(vec3<f32>(0.04), albedo_s.rgb, metal);
-    let nl = max(dot(n, l), 0.0);
-    let sun = frame.sun_colour.rgb * nl * (diffuse_colour / PI + ggx_specular(n, v, l, roughness, f0));
-    let sky = mix(frame.ground_colour.rgb, frame.sky_colour.rgb, n.z * 0.5 + 0.5);
-    let ambient = sky * (diffuse_colour + f0 * 0.25 * (1.0 - roughness));
-    return vec4<f32>(sun + ambient, albedo_s.a);
+    return lit(i.world, albedo_s, n, metal, roughness, i.colour0);
 }
 
 @fragment

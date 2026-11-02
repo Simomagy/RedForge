@@ -8,8 +8,11 @@ use wgpu::util::DeviceExt;
 
 use crate::GpuContext;
 use crate::camera::{CameraView, OrbitCamera};
-use crate::mesh::Vertex;
-use crate::model::{AlphaMode, DecalMode, GpuModel, MaterialDesc, Slot};
+use crate::mesh::{Vertex, VertexExtra};
+use crate::model::{
+    AlphaMode, DecalMode, GpuModel, MaterialDesc, MaterialMap, NormalMap, Slot, TerrainDesc, TerrainParams,
+    terrain_slot,
+};
 use crate::texture::GpuTexture;
 
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -36,6 +39,7 @@ struct MaterialUniform {
     params: [f32; 4],
     decal_masks: [f32; 4],
     modes: [u32; 4],
+    config: [u32; 4],
 }
 
 /// One drawn instance of a model: its transform and the entity's values the
@@ -101,12 +105,22 @@ impl Default for ViewSettings {
     }
 }
 
+/// Which pipeline draws a material.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MaterialKind {
+    #[default]
+    Standard,
+    /// The terrain shader: four layers blended by masks and heights.
+    Terrain,
+}
+
 /// A GPU material: its constants and textures.
 pub struct GpuMaterial {
     pub name: String,
+    pub kind: MaterialKind,
     pub bind_group: wgpu::BindGroup,
-    /// For showing what a material uses, by [`Slot`].
-    pub textures: [Option<Arc<GpuTexture>>; 7],
+    /// For showing what a material uses: each texture with its use.
+    pub textures: Vec<(&'static str, Arc<GpuTexture>)>,
 }
 
 /// The textures a view renders into, resized with it.
@@ -140,6 +154,7 @@ pub struct RenderStats {
 pub struct Renderer {
     instance_buffer: std::sync::Mutex<Option<wgpu::Buffer>>,
     material_layout: wgpu::BindGroupLayout,
+    terrain_layout: wgpu::BindGroupLayout,
     tonemap_layout: wgpu::BindGroupLayout,
     frame_buffer: wgpu::Buffer,
     tonemap_buffer: wgpu::Buffer,
@@ -150,10 +165,12 @@ pub struct Renderer {
     tonemap: wgpu::RenderPipeline,
     white: Arc<GpuTexture>,
     flat_normal: Arc<GpuTexture>,
+    black: Arc<GpuTexture>,
     default_material: Arc<GpuMaterial>,
 }
 
 struct Pipelines {
+    terrain: wgpu::RenderPipeline,
     opaque: wgpu::RenderPipeline,
     blend: wgpu::RenderPipeline,
     decal: wgpu::RenderPipeline,
@@ -229,6 +246,13 @@ impl Renderer {
                 sampler_entry(9, wgpu::SamplerBindingType::Filtering),
             ],
         });
+        let mut terrain_entries = vec![uniform_entry(0, wgpu::ShaderStages::FRAGMENT)];
+        terrain_entries.extend((0..terrain_slot::COUNT as u32).map(|i| texture_entry(1 + i, true)));
+        terrain_entries.push(sampler_entry(1 + terrain_slot::COUNT as u32, wgpu::SamplerBindingType::Filtering));
+        let terrain_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("terrain"),
+            entries: &terrain_entries,
+        });
         let tonemap_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("tonemap"),
             entries: &[texture_entry(0, false), uniform_entry(1, wgpu::ShaderStages::FRAGMENT)],
@@ -270,13 +294,34 @@ impl Renderer {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("model.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/model.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(include_str!("shaders/common.wgsl"), include_str!("shaders/model.wgsl")).into(),
+            ),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("model"),
             bind_group_layouts: &[Some(&frame_layout), Some(&material_layout)],
             immediate_size: 0,
         });
+        let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("terrain.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(include_str!("shaders/common.wgsl"), include_str!("shaders/terrain.wgsl")).into(),
+            ),
+        });
+        let terrain_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("terrain"),
+            bind_group_layouts: &[Some(&frame_layout), Some(&terrain_layout)],
+            immediate_size: 0,
+        });
+        let depth = |write: bool, bias: i32| wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(write),
+            // Reversed Z.
+            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+            stencil: Default::default(),
+            bias: wgpu::DepthBiasState { constant: bias, slope_scale: if bias != 0 { 1.0 } else { 0.0 }, clamp: 0.0 },
+        };
         let pipeline = |label: &str, topology, blend: Option<wgpu::BlendState>, depth_write: bool, bias: i32| {
             let buffers = [Some(Vertex::layout()), Some(instance_layout())];
             let targets =
@@ -291,18 +336,7 @@ impl Renderer {
                     buffers: &buffers,
                 },
                 primitive: wgpu::PrimitiveState { topology, cull_mode: None, ..Default::default() },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(depth_write),
-                    // Reversed Z.
-                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
-                    stencil: Default::default(),
-                    bias: wgpu::DepthBiasState {
-                        constant: bias,
-                        slope_scale: if bias != 0 { 1.0 } else { 0.0 },
-                        clamp: 0.0,
-                    },
-                }),
+                depth_stencil: Some(depth(depth_write, bias)),
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
@@ -316,7 +350,34 @@ impl Renderer {
         };
         let tri = wgpu::PrimitiveTopology::TriangleList;
         let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
+        let terrain = {
+            let buffers = [Some(Vertex::layout()), Some(instance_layout()), Some(VertexExtra::layout())];
+            let targets =
+                [Some(wgpu::ColorTargetState { format: HDR_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })];
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("terrain"),
+                layout: Some(&terrain_pl),
+                vertex: wgpu::VertexState {
+                    module: &terrain_shader,
+                    entry_point: Some("vs_main"),
+                    compilation_options: Default::default(),
+                    buffers: &buffers,
+                },
+                primitive: wgpu::PrimitiveState { topology: tri, cull_mode: None, ..Default::default() },
+                depth_stencil: Some(depth(true, 0)),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &terrain_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &targets,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let pipelines = Pipelines {
+            terrain,
             opaque: pipeline("opaque", tri, None, true, 0),
             blend: pipeline("blend", tri, alpha, false, 0),
             decal: pipeline("decal", tri, alpha, false, 2),
@@ -356,9 +417,11 @@ impl Renderer {
 
         let white = Arc::new(GpuTexture::solid(ctx, "white", [255, 255, 255, 255]));
         let flat_normal = Arc::new(GpuTexture::solid(ctx, "flat normal", [128, 128, 255, 255]));
+        let black = Arc::new(GpuTexture::solid(ctx, "black", [0, 0, 0, 0]));
         let mut r = Self {
             instance_buffer: Default::default(),
             material_layout,
+            terrain_layout,
             tonemap_layout,
             frame_buffer,
             tonemap_buffer,
@@ -369,6 +432,7 @@ impl Renderer {
             tonemap,
             white,
             flat_normal,
+            black,
             default_material: Arc::new(placeholder_material(ctx)),
         };
         let grey = Arc::new(GpuTexture::solid(ctx, "grey", [160, 160, 160, 255]));
@@ -414,6 +478,19 @@ impl Renderer {
                 desc.two_layer.is_some() as u32,
                 desc.two_layer.unwrap_or(0) as u32,
             ],
+            config: [
+                match desc.normal_map {
+                    NormalMap::TangentXY => 0,
+                    NormalMap::Direct => 1,
+                },
+                match desc.material_map {
+                    MaterialMap::MetalRoughness => 0,
+                    MaterialMap::Smoothness => 1,
+                    MaterialMap::Roughness => 2,
+                },
+                0,
+                0,
+            ],
         };
         let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&desc.shader_name),
@@ -448,7 +525,69 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&self.point_sampler) },
             ],
         });
-        GpuMaterial { name: desc.shader_name.clone(), bind_group, textures }
+        let textures = Slot::ALL.iter().zip(textures).filter_map(|(s, t)| Some((s.label(), t?))).collect();
+        GpuMaterial { name: desc.shader_name.clone(), kind: MaterialKind::Standard, bind_group, textures }
+    }
+
+    /// A material for the terrain shader; `textures` by [`terrain_slot`].
+    pub fn create_terrain_material(
+        &self,
+        ctx: &GpuContext,
+        desc: &TerrainDesc,
+        textures: [Option<Arc<GpuTexture>>; terrain_slot::COUNT],
+    ) -> GpuMaterial {
+        let mut params: TerrainParams = desc.params;
+        if textures[terrain_slot::TINT].is_none() {
+            params.tint_blends = [0.0; 4];
+        }
+        let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&desc.shader_name),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let fallback = |slot: usize| -> &GpuTexture {
+            match slot {
+                4..8 | terrain_slot::TINT_NORMAL => &self.flat_normal,
+                terrain_slot::LOOKUP => &self.black,
+                _ => &self.white,
+            }
+        };
+        let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }];
+        for (i, t) in textures.iter().enumerate() {
+            let t = t.as_deref().unwrap_or_else(|| fallback(i));
+            entries.push(wgpu::BindGroupEntry {
+                binding: 1 + i as u32,
+                resource: wgpu::BindingResource::TextureView(&t.view_2d),
+            });
+        }
+        entries.push(wgpu::BindGroupEntry {
+            binding: 1 + terrain_slot::COUNT as u32,
+            resource: wgpu::BindingResource::Sampler(&self.sampler),
+        });
+        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&desc.shader_name),
+            layout: &self.terrain_layout,
+            entries: &entries,
+        });
+        const LABELS: [&str; terrain_slot::COUNT] = [
+            "Diffuse 1",
+            "Diffuse 2",
+            "Diffuse 3",
+            "Diffuse 4",
+            "Normal 1",
+            "Normal 2",
+            "Normal 3",
+            "Normal 4",
+            "Material 1",
+            "Material 2",
+            "Material 3",
+            "Material 4",
+            "Lookup",
+            "Tint",
+            "Tint normal",
+        ];
+        let textures = LABELS.iter().zip(textures).filter_map(|(l, t)| Some((*l, t?))).collect();
+        GpuMaterial { name: desc.shader_name.clone(), kind: MaterialKind::Terrain, bind_group, textures }
     }
 
     pub fn create_targets(&self, ctx: &GpuContext, width: u32, height: u32) -> RenderTargets {
@@ -586,10 +725,15 @@ impl Renderer {
                         if draw_phase != phase {
                             continue;
                         }
-                        let pipeline = match (draw.mesh.lines, phase) {
-                            (true, _) => &self.pipelines.lines,
-                            (_, AlphaMode::Blend) => &self.pipelines.blend,
-                            (_, AlphaMode::Decal) => &self.pipelines.decal,
+                        let pipeline = match (draw.material.kind, draw.mesh.lines, phase) {
+                            (MaterialKind::Terrain, ..) => {
+                                let Some(extra) = &draw.mesh.extra else { continue };
+                                pass.set_vertex_buffer(2, extra.slice(..));
+                                &self.pipelines.terrain
+                            }
+                            (_, true, _) => &self.pipelines.lines,
+                            (_, _, AlphaMode::Blend) => &self.pipelines.blend,
+                            (_, _, AlphaMode::Decal) => &self.pipelines.decal,
                             _ => &self.pipelines.opaque,
                         };
                         pass.set_pipeline(pipeline);
@@ -661,5 +805,5 @@ fn placeholder_material(ctx: &GpuContext) -> GpuMaterial {
     let layout = ctx.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
     let bind_group =
         ctx.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[] });
-    GpuMaterial { name: String::new(), bind_group, textures: Default::default() }
+    GpuMaterial { name: String::new(), kind: MaterialKind::Standard, bind_group, textures: Vec::new() }
 }
