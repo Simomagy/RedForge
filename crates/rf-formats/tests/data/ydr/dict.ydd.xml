@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RDR2DrawableDictionary version="1">
+ <Drawables>
+  <Item version="1">
+   <Name>zebra</Name>
+   <Hash>zebra</Hash>
+   <LodDistHigh value="20" />
+   <ShaderGroup>
+    <Shaders>
+     <Item>
+      <Name>ped_standard</Name>
+      <DrawBucket value="0" />
+      <Parameters>
+       <BufferSizes>16</BufferSizes>
+       <Items>
+        <Item type="Texture" name="diffusetex" index="0" texture="zebra_d" />
+        <Item type="CBuffer" name="alphascale" buffer="0" offset="0" length="4" x="1" />
+       </Items>
+      </Parameters>
+     </Item>
+    </Shaders>
+   </ShaderGroup>
+   <LodHigh>
+    <Models>
+     <Item>
+      <HasSkin value="True" />
+      <BoneMapping>0 1</BoneMapping>
+      <BoundingBoxMin x="-1" y="-1" z="-1" />
+      <BoundingBoxMax x="1" y="1" z="1" />
+      <Geometries>
+       <Item>
+        <ShaderID value="0" />
+        <BoundingBoxMin x="-1" y="-1" z="-1" />
+        <BoundingBoxMax x="1" y="0" z="1" />
+        <VertexLayout>
+         <Semantics>PWINT</Semantics>
+         <Formats>35692</Formats>
+         <NonInterleaved value="True" />
+        </VertexLayout>
+        <Vertices>
+-1 -1 -1	255 0 0 0	0 1 0 0	0 0 1 0	0 0
+1 0 1	128 127 0 0	1 0 0 0	0 1 0 0	1 1
+        </Vertices>
+        <Indices>0 1 1</Indices>
+       </Item>
+       <Item>
+        <ShaderID value="0" />
+        <BoundingBoxMin x="0" y="0" z="0" />
+        <BoundingBoxMax x="1" y="1" z="1" />
+        <VertexLayout>
+         <Semantics>P</Semantics>
+         <Formats>3</Formats>
+         <NonInterleaved value="True" />
+        </VertexLayout>
+        <Vertices>
+0 1 0
+        </Vertices>
+       </Item>
+      </Geometries>
+     </Item>
+    </Models>
+   </LodHigh>
+  </Item>
+  <Item version="1">
+   <Name>aardvark</Name>
+   <Hash>aardvark</Hash>
+   <BoundingBoxMax x="1" y="1" z="1" />
+   <Skeleton>
+    <Unknown_24 value="0" />
+    <Unknown_50 />
+    <Unknown_54 />
+    <Unknown_58 />
+    <Unknown_60 value="256" />
+    <ParentBoneTag value="0" />
+    <Bones />
+   </Skeleton>
+  </Item>
+ </Drawables>
+</RDR2DrawableDictionary>

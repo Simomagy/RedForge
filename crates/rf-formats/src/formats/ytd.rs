@@ -818,6 +818,12 @@ impl TextureDictionary {
 
     /// Writes the dictionary, its textures and (if it has one) the block map.
     pub fn write(&self, w: &mut Rsc8Writer) -> BlockId {
+        self.write_with_textures(w).0
+    }
+
+    /// [`write`](Self::write), also returning each texture's block (`None` for
+    /// a null texture), for what points to them (drawables' shader parameters).
+    pub fn write_with_textures(&self, w: &mut Rsc8Writer) -> (BlockId, Vec<Option<BlockId>>) {
         let id = w.reserve();
         let mut b = BlockBuf::with_capacity(Self::BLOCK_LENGTH);
         b.u64(self.vft);
@@ -835,9 +841,11 @@ impl TextureDictionary {
         // Rsc8PtrArr: room for the capacity, and a null pointer when that's 0.
         let count = self.textures.as_ref().map_or(0, |t| t.len() as u16);
         let slots = count.max(self.textures_capacity) as usize;
+        let mut texture_ids = Vec::new();
         let ptrs = match &self.textures {
             Some(items) if slots > 0 => {
                 let mut ids: Vec<Option<BlockId>> = items.iter().map(|t| t.as_ref().map(|t| t.write(w))).collect();
+                texture_ids = ids.clone();
                 ids.resize(slots, None);
                 Some(w.pointer_array(&ids))
             }
@@ -848,7 +856,7 @@ impl TextureDictionary {
         b.u16(self.textures_capacity);
         b.u32(self.textures_unknown);
         w.set(id, b, false);
-        id
+        (id, texture_ids)
     }
 
     /// The dictionary's XML: a version attribute and the textures.
