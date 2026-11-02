@@ -10,6 +10,7 @@ use rf_formats::hash::HashIndex;
 use rf_formats::rpf8::{FileRef, Rpf8FileSystem};
 use rf_game::{Archetype, GameData};
 
+use crate::batch::InstanceBatch;
 use crate::math::{self, Aabb, Quat, Vec3};
 
 /// `"entities"`, of a `CMapData`, a `CMloArchetypeDef` and a `CMloEntitySet`.
@@ -314,6 +315,8 @@ pub(crate) struct MapData {
     child_start: Vec<u32>,
     children: Vec<u32>,
     pub interiors: Vec<Interior>,
+    /// Its instanced props and grass.
+    pub batches: Vec<Arc<InstanceBatch>>,
 }
 
 impl MapData {
@@ -329,7 +332,8 @@ impl MapData {
         archetypes: &HashMap<u32, Archetype>,
         interior: &dyn Fn(u32) -> Option<Arc<InteriorDef>>,
     ) -> MapData {
-        let mut map = MapData { flags: bag.u32(0x67D2_6872), ..Default::default() }; // "flags"
+        let batches = crate::batch::read_batches(bag).into_iter().map(Arc::new).collect();
+        let mut map = MapData { flags: bag.u32(0x67D2_6872), batches, ..Default::default() }; // "flags"
         let defs = match bag.object(ENTITIES) {
             Some(Value::Bags(b)) => b.as_slice(),
             _ => &[],

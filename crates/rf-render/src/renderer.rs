@@ -120,12 +120,22 @@ pub struct Instance {
     /// What [`Renderer::pick`] finds where this instance is drawn; 0 for
     /// nothing.
     pub id: u32,
-    pub _pad: [u32; 2],
+    /// A world-space normal its whole model is lit with instead of its own
+    /// (grass, lit as the ground), as signed bytes with 127 in w; 0 for none.
+    pub normal: u32,
+    pub _pad: u32,
 }
 
 impl Instance {
     pub fn new(transform: Mat4, tint: u32, id: u32) -> Self {
-        Self { transform: transform.to_cols_array_2d(), tint: tint as f32, id, _pad: [0; 2] }
+        Self { transform: transform.to_cols_array_2d(), tint: tint as f32, id, normal: 0, _pad: 0 }
+    }
+
+    /// Lit as if facing `normal` everywhere.
+    pub fn with_normal(self, normal: Vec3) -> Self {
+        let n = normal.normalize_or(Vec3::Z);
+        let b = |v: f32| ((v.clamp(-1.0, 1.0) * 127.0).round() as i8) as u8 as u32;
+        Self { normal: b(n.x) | b(n.y) << 8 | b(n.z) << 16 | 127 << 24, ..self }
     }
 }
 
@@ -303,11 +313,13 @@ struct LightBuffer {
     group: wgpu::BindGroup,
 }
 
-/// One model's LOD, drawn with a range of the frame's instance transforms.
+/// One model's LOD, drawn with a range of the frame's instance transforms, or
+/// of a buffer of its own ([`Renderer::create_instance_buffer`]).
 pub struct DrawBatch<'a> {
     pub model: &'a GpuModel,
     pub lod: usize,
     pub instances: std::ops::Range<u32>,
+    pub buffer: Option<&'a wgpu::Buffer>,
 }
 
 /// What [`Renderer::render_scene`] draws: every instance, the batches the
@@ -466,8 +478,8 @@ fn sampler_entry(binding: u32, ty: wgpu::SamplerBindingType) -> wgpu::BindGroupL
 
 /// The [`Instance`]s, one per draw, as a vertex buffer.
 fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
-    const ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
-        7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32, 14 => Uint32
+    const ATTRS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+        7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32, 14 => Uint32, 15 => Uint32
     ];
     wgpu::VertexBufferLayout {
         array_stride: size_of::<Instance>() as u64,
@@ -1232,7 +1244,14 @@ impl Renderer {
         let lod = settings.lod.min(3);
         let lod = if model.lods[lod].is_empty() { model.highest_lod() } else { lod };
         let instance = Instance::new(Mat4::IDENTITY, 0, 0);
-        self.render(ctx, targets, &view, settings, &[instance], &[DrawBatch { model, lod, instances: 0..1 }]);
+        self.render(
+            ctx,
+            targets,
+            &view,
+            settings,
+            &[instance],
+            &[DrawBatch { model, lod, instances: 0..1, buffer: None }],
+        );
     }
 
     /// Draws batches of model instances into `targets.output`: `instances`
@@ -1278,14 +1297,22 @@ impl Renderer {
     ) -> RenderStats {
         let mut stats = RenderStats { instances: scene.instances.len(), ..Default::default() };
         let cascades = scene.shadows.filter(|_| settings.shadows).map(|(c, _)| c);
-        self.frame(ctx, targets, camera, settings, scene.instances, cascades, scene.lights, &mut |rp, pass| {
+        self.frame(ctx, targets, camera, settings, scene.instances, cascades, scene.lights, &mut |rp, pass, frame| {
             let batches = match (pass, scene.shadows) {
                 (Pass::Shadow(i), Some((_, casters))) if !all_cast => &casters[i][..],
                 _ => scene.batches,
             };
+            // The instance buffer bound: the frame's, or a batch's own.
+            let mut bound = frame.map(|b| b as *const wgpu::Buffer);
             for batch in batches {
                 if batch.instances.is_empty() {
                     continue;
+                }
+                if let Some(b) = batch.buffer.or(frame)
+                    && bound != Some(b as *const _)
+                {
+                    rp.set_vertex_buffer(1, b.slice(..));
+                    bound = Some(b as *const _);
                 }
                 for draw in &batch.model.lods[batch.lod.min(3)] {
                     let Some(pipeline) = self.pipeline(rp, draw, pass) else { continue };
@@ -1354,7 +1381,7 @@ impl Renderer {
 
         let mut stats = RenderStats { instances: instances.len(), ..Default::default() };
         let cascades = settings.shadows.then(|| Cascades::new(camera, settings.sun_dir));
-        self.frame(ctx, targets, camera, settings, &instances, cascades.as_ref(), &[], &mut |rp, pass| {
+        self.frame(ctx, targets, camera, settings, &instances, cascades.as_ref(), &[], &mut |rp, pass, _| {
             for ((m, insts), &first) in models.iter().zip(&draw_instances).zip(&rig_slots) {
                 for (draw, &inst) in m.model.lods[m.lod.min(3)].iter().zip(insts) {
                     let skinned = draw.rig.zip(draw.mesh.skin.as_ref()).zip(bone_group.as_ref());
@@ -1427,6 +1454,16 @@ impl Renderer {
             (Pass::Blend, ..) => &p.blend,
             (Pass::Decal, ..) => &p.decal,
             _ => &p.opaque,
+        })
+    }
+
+    /// A buffer of instances for [`DrawBatch::buffer`], for instances drawn
+    /// again and again (the map's instanced props and grass).
+    pub fn create_instance_buffer(&self, ctx: &GpuContext, instances: &[Instance]) -> wgpu::Buffer {
+        ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("instance batch"),
+            contents: bytemuck::cast_slice(instances),
+            usage: wgpu::BufferUsages::VERTEX,
         })
     }
 
@@ -1537,7 +1574,7 @@ impl Renderer {
         instances: &[Instance],
         cascades: Option<&Cascades>,
         lights: &[Light],
-        draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, Pass),
+        draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, Pass, Option<&wgpu::Buffer>),
     ) {
         let frame = self.frame_uniform(targets, camera, settings, cascades);
         ctx.queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame));
@@ -1568,13 +1605,14 @@ impl Renderer {
             ctx.queue.write_buffer(&buffer, 0, bytes);
             buffer
         });
-        let models_pass =
-            |rp: &mut wgpu::RenderPass<'_>, draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, Pass), pass| {
-                if let Some(ib) = &instance_buffer {
-                    rp.set_vertex_buffer(1, ib.slice(..));
-                }
-                draw(rp, pass);
-            };
+        let models_pass = |rp: &mut wgpu::RenderPass<'_>,
+                           draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, Pass, Option<&wgpu::Buffer>),
+                           pass| {
+            if let Some(ib) = &instance_buffer {
+                rp.set_vertex_buffer(1, ib.slice(..));
+            }
+            draw(rp, pass, instance_buffer.as_ref());
+        };
         let colour = |view, load: wgpu::LoadOp<wgpu::Color>| {
             Some(wgpu::RenderPassColorAttachment {
                 view,

@@ -66,7 +66,7 @@
 //!
 //! # Not ported
 //!
-//! Grass and prop instance batches (`instancedData`), imposters, physics and
+//! Trees' imposters past their last LOD (`RDR2ImposterManager`), physics and
 //! static bounds, navmeshes and paths, lights, time cycle modifiers, occluders,
 //! AMV zones, scenario regions, interior rooms and portals, the map data
 //! groups' bounds, `EnableIPL` for a ymap missing from the map data cache (the
@@ -88,6 +88,7 @@
 //! - A ymap's parents are streamed with it even when disabled, as in the C#, so
 //!   a disabled parent of a streamed ymap still shows.
 
+mod batch;
 mod edit;
 mod map;
 mod math;
@@ -105,11 +106,22 @@ use rf_formats::hash::{HashIndex, joaat};
 use rf_formats::rpf8::{FileRef, Rpf8FileSystem};
 use rf_game::{AssetType, GameData};
 
+pub use crate::batch::{BatchCell, InstanceBatch, read_batches};
 pub use crate::edit::EntityInfo;
 use crate::map::{MapData, Sources};
+pub use crate::math::Aabb;
 use crate::nodes::{Bvh, MAP_STATES, Node};
 pub use crate::nodes::{CullBox, MapStateEntitySet, MapStateGroup, parse_map_states};
 use crate::stream::{EntityRef, Loaded};
+
+/// A batch of instanced props or grass in range of the camera.
+#[derive(Clone, Debug)]
+pub struct VisibleBatch {
+    /// Its map's name and its index in the map, which stay the same when the
+    /// map is loaded again.
+    pub key: (u32, u32),
+    pub batch: Arc<InstanceBatch>,
+}
 
 /// An entity to draw.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -276,6 +288,7 @@ pub struct World {
     rewalk: bool,
     stamp: u32,
     visible: Vec<VisibleEntity>,
+    visible_batches: Vec<VisibleBatch>,
     interiors_visible: usize,
     cull_boxes_active: usize,
     last_evict: Instant,
@@ -339,6 +352,7 @@ impl World {
             rewalk: false,
             stamp: 0,
             visible: Vec::new(),
+            visible_batches: Vec::new(),
             interiors_visible: 0,
             cull_boxes_active: 0,
             last_evict: Instant::now(),
@@ -389,6 +403,17 @@ impl World {
             if !self.hidden.is_empty() {
                 self.visible.retain(|e| !self.hidden.contains(&e.id));
             }
+            self.visible_batches.clear();
+            for &node in &self.streamed {
+                let Some(l) = self.loaded.get(&node) else { continue };
+                for (i, b) in l.map.batches.iter().enumerate() {
+                    let inside = b.bounds.contains(camera);
+                    if inside || math::distance(b.bounds.centre(), camera) < b.lod_dist_max {
+                        let key = (nodes[node as usize].name, i as u32);
+                        self.visible_batches.push(VisibleBatch { key, batch: b.clone() });
+                    }
+                }
+            }
             self.rewalk = false;
         }
         self.evict();
@@ -396,6 +421,12 @@ impl World {
 
     pub fn visible(&self) -> &[VisibleEntity] {
         &self.visible
+    }
+
+    /// The prop and grass batches in range (`RecurseAddStreamEntity`'s
+    /// batches): their instances show by cell, each cell at its LOD.
+    pub fn visible_batches(&self) -> &[VisibleBatch] {
+        &self.visible_batches
     }
 
     pub fn stats(&self) -> WorldStats {

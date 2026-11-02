@@ -10,7 +10,8 @@ It is early work. Today:
   from XML, matching the C# RedForge;
 - the app opens the game, browses its files and shows models, textures and XML;
 - the world map streams the game's map around a free camera (View → World map),
-  with its LODs, interiors, terrain and time of day; a ymap opens on its own;
+  with its LODs, interiors, terrain, instanced trees, bushes, rocks and grass,
+  and time of day; a ymap opens on its own;
 - entities can be selected, moved, rotated, scaled, edited in Properties,
   duplicated, copied, deleted and placed, with undo;
 - projects (`.rfproj`, as the C# RedForge's) hold the edited ymaps and ytyps

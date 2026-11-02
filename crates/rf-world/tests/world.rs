@@ -68,6 +68,21 @@ fn streams_valentine() {
     let no_model = vis.iter().filter(|e| model_files(&gd, e.archetype).is_none()).count();
     assert!(no_model < 10, "{no_model} without a model");
 
+    // Its trees, bushes, rocks and grass: instanced batches, by cell.
+    let batches = world.visible_batches();
+    let grass = batches.iter().filter(|b| b.batch.grass).count();
+    assert!(grass > 20 && batches.len() - grass > 20, "{grass} grass batches of {}", batches.len());
+    for b in batches {
+        assert!(
+            b.batch.cells.iter().all(|c| c.start < c.end)
+                && b.batch.cells.last().unwrap().end as usize == b.batch.len()
+        );
+        assert!(model_files(&gd, b.batch.archetype).is_some(), "{:x}", b.batch.archetype);
+    }
+    let tree = batches.iter().find(|b| b.batch.archetype == joaat("p_tree_engoak_01")).expect("an oak batch");
+    let t = tree.batch.transform(0);
+    assert!((t[12] - val[0]).hypot(t[13] - val[1]) < 1000.0 && t[14] > 50.0, "{t:?}");
+
     // A barn of Valentine is there, placed where its ymap says.
     let barn = vis.iter().find(|e| e.archetype == joaat("val_01_aucbarns_barn2"));
     if let Some(b) = barn {

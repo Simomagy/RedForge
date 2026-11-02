@@ -1,6 +1,7 @@
 //! The map: the streamed world, edited through the app's [`Editor`], or one
 //! ymap's entities, with a free camera.
 
+mod batches;
 mod globals;
 pub mod models;
 pub mod tools;
@@ -29,8 +30,8 @@ use tools::{Tool, Tools};
 enum Source {
     /// The streamed world around the camera, in the app's editor.
     World,
-    /// One ymap's entities, all of them.
-    Ymap(Vec<VisibleEntity>),
+    /// One ymap's entities, all of them, and its prop and grass batches.
+    Ymap(Vec<VisibleEntity>, Vec<rf_world::VisibleBatch>),
 }
 
 /// The C#'s `RDR2Light.LuxScale`: what the game's light units are in the
@@ -80,6 +81,8 @@ pub struct MapView {
     game: Arc<Game>,
     source: Source,
     models: ModelCache,
+    /// The instanced props' and grass's buffers.
+    batch_buffers: batches::BatchBuffers,
     camera: FlyCamera,
     view: ViewSettings,
     hour: f32,
@@ -89,6 +92,8 @@ pub struct MapView {
     exposure: f32,
     /// How many of the map's lights the last frame drew.
     lights_drawn: usize,
+    /// How many instanced props and grass, in how many batches, it drew.
+    batch_instances_drawn: (usize, usize),
     /// Whether scripted ymaps (lockdowns, gang camps...) show, as in the C#.
     scripted: bool,
     /// Metres per second.
@@ -117,7 +122,10 @@ fn entity_transform(position: [f32; 3], rotation: [f32; 4], scale_xy: f32, scale
 /// A box around some points: (min, max).
 type Bounds = Option<(Vec3, Vec3)>;
 
-fn ymap_entities(game: &Game, file: FileRef) -> anyhow::Result<(Vec<VisibleEntity>, Bounds)> {
+fn ymap_entities(
+    game: &Game,
+    file: FileRef,
+) -> anyhow::Result<(Vec<VisibleEntity>, Vec<rf_world::VisibleBatch>, Bounds)> {
     let meta = Meta::read(&game.fs.extract_loose(file)?)?;
     let root = meta.root.as_ref().ok_or_else(|| anyhow::anyhow!("empty map data"))?;
     let mut out = Vec::new();
@@ -140,7 +148,20 @@ fn ymap_entities(game: &Game, file: FileRef) -> anyhow::Result<(Vec<VisibleEntit
             id: EntityId { node: 0, entity: i as u32, interior_entity: u32::MAX },
         });
     }
-    Ok((out, bounds))
+    let name = game.fs.entry(file).name_hash;
+    let batches: Vec<rf_world::VisibleBatch> = rf_world::read_batches(root)
+        .into_iter()
+        .enumerate()
+        .map(|(i, b)| rf_world::VisibleBatch { key: (name, i as u32), batch: Arc::new(b) })
+        .collect();
+    for b in &batches {
+        let (lo, hi) = (Vec3::from(b.batch.bounds.min), Vec3::from(b.batch.bounds.max));
+        bounds = Some(match bounds {
+            Some((a, c)) => (a.min(lo), c.max(hi)),
+            None => (lo, hi),
+        });
+    }
+    Ok((out, batches, bounds))
 }
 
 impl MapView {
@@ -172,9 +193,9 @@ impl MapView {
 
     pub fn ymap(game: &Arc<Game>, gpu: &Gpu, file: FileRef) -> anyhow::Result<Self> {
         let path = game.path(file);
-        let (entities, bounds) = ymap_entities(game, file)?;
+        let (entities, batches, bounds) = ymap_entities(game, file)?;
         let title = path.rsplit('/').next().unwrap_or(&path).to_owned();
-        let mut v = Self::new(game, gpu, Source::Ymap(entities), title, path);
+        let mut v = Self::new(game, gpu, Source::Ymap(entities, batches), title, path);
         if let Some((min, max)) = bounds {
             let centre = (min + max) * 0.5;
             let size = (max - min).length().max(20.0);
@@ -200,6 +221,8 @@ impl MapView {
             timecycle: None,
             exposure: 0.0,
             lights_drawn: 0,
+            batch_buffers: Default::default(),
+            batch_instances_drawn: (0, 0),
             scripted: true,
             speed: 30.0,
             targets: None,
@@ -477,14 +500,16 @@ impl MapView {
         }
 
         // What to draw.
-        let visible: Vec<VisibleEntity> = match (&self.source, editor.as_deref_mut()) {
-            (Source::World, Some(ed)) => {
-                ed.world.update(self.camera.position.into(), self.hour);
-                ed.world.visible().to_vec()
-            }
-            (Source::Ymap(e), _) => e.clone(),
-            _ => Vec::new(),
-        };
+        let (visible, visible_batches): (Vec<VisibleEntity>, Vec<rf_world::VisibleBatch>) =
+            match (&self.source, editor.as_deref_mut()) {
+                (Source::World, Some(ed)) => {
+                    ed.world.update(self.camera.position.into(), self.hour);
+                    (ed.world.visible().to_vec(), ed.world.visible_batches().to_vec())
+                }
+                (Source::Ymap(e, b), _) => (e.clone(), b.clone()),
+                _ => (Vec::new(), Vec::new()),
+            };
+        self.batch_buffers.upload(gpu, &visible_batches, Duration::from_millis(6));
         self.light(camera.eye);
         let targets = self.targets.as_ref().unwrap();
         let frustum = camera.frustum();
@@ -543,10 +568,40 @@ impl MapView {
         let ranges_seen = ranges(&groups);
         let ranges_cast: Vec<_> = casters.iter().map(&mut ranges).collect();
         fn to_batches(r: &[(Arc<GpuModel>, usize, std::ops::Range<u32>)]) -> Vec<DrawBatch<'_>> {
-            r.iter().map(|(m, lod, r)| DrawBatch { model: m, lod: *lod, instances: r.clone() }).collect()
+            r.iter().map(|(m, lod, r)| DrawBatch { model: m, lod: *lod, instances: r.clone(), buffer: None }).collect()
         }
-        let batches = to_batches(&ranges_seen);
-        let cast: [Vec<DrawBatch>; CASCADES] = std::array::from_fn(|i| to_batches(&ranges_cast[i]));
+        let mut batches = to_batches(&ranges_seen);
+        let mut cast: [Vec<DrawBatch>; CASCADES] = std::array::from_fn(|i| to_batches(&ranges_cast[i]));
+
+        // The instanced props and grass: each batch's cells in view, at their
+        // LOD. Grass only casts into the nearer cascades.
+        let mut batch_models = Vec::new();
+        for vb in &visible_batches {
+            let Some(model) = self.models.get(vb.batch.archetype) else { continue };
+            let lod_dist = data.archetypes.get(&vb.batch.archetype).map_or(0.0, |a| a.lod_dist);
+            batch_models.push((vb, model, lod_dist));
+        }
+        let mut drawn_batch_instances = 0;
+        for (vb, model, lod_dist) in &batch_models {
+            let Some(buffer) = self.batch_buffers.buffer(vb.key) else { continue };
+            let dists = batches::lod_dists(&vb.batch, model, *lod_dist);
+            let eye = camera.eye;
+            let seen = |c: Vec3, r: f32| frustum.sphere_visible(c, r);
+            for (lod, r) in batches::runs(&vb.batch, model, dists, eye, &seen) {
+                drawn_batch_instances += (r.end - r.start) as usize;
+                batches.push(DrawBatch { model, lod, instances: r, buffer: Some(buffer) });
+            }
+            if let Some(c) = &cascades {
+                let reach = if vb.batch.grass { 2 } else { CASCADES };
+                for (i, list) in cast.iter_mut().enumerate().take(reach) {
+                    let casts = |p: Vec3, r: f32| c.casts(i, p, r);
+                    for (lod, r) in batches::runs(&vb.batch, model, dists, eye, &casts) {
+                        list.push(DrawBatch { model, lod, instances: r, buffer: Some(buffer) });
+                    }
+                }
+            }
+        }
+        self.batch_instances_drawn = (drawn_batch_instances, visible_batches.len());
         let scene = Scene {
             instances: &instances,
             batches: &batches,
@@ -573,13 +628,14 @@ impl MapView {
         self.models.upload(&gpu.ctx, &gpu.renderer, Duration::from_millis(8));
         if self.last_evict.elapsed() > Duration::from_secs(5) {
             self.models.evict(Duration::from_secs(60));
+            self.batch_buffers.evict(Duration::from_secs(20));
             self.last_evict = Instant::now();
         }
 
         let (ready, loading, textures) = self.models.stats();
         let p = self.camera.position;
         let mut text = format!(
-            "{:.0} {:.0} {:.0}   {:.1} ms\n{} entities, {} drawn in {} draw calls, {} lights\nmodels {ready} (+{loading} loading), textures {textures}",
+            "{:.0} {:.0} {:.0}   {:.1} ms\n{} entities, {} drawn in {} draw calls, {} lights\n{} instanced props and grass drawn, of {} batches\nmodels {ready} (+{loading} loading), textures {textures}",
             p.x,
             p.y,
             p.z,
@@ -587,7 +643,9 @@ impl MapView {
             visible.len(),
             self.stats.instances,
             self.stats.draw_calls,
-            self.lights_drawn
+            self.lights_drawn,
+            self.batch_instances_drawn.0,
+            self.batch_instances_drawn.1
         );
         if let Some(ed) = editor.as_deref() {
             let s = ed.world.stats();

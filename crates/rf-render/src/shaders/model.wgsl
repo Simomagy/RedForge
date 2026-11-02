@@ -57,6 +57,8 @@ struct VertexIn {
     // The tint palette row.
     @location(11) tint: f32,
     @location(14) id: u32,
+    // A world normal to light the whole model with (grass), when w isn't 0.
+    @location(15) inst_normal: u32,
 };
 
 struct VertexOut {
@@ -80,6 +82,9 @@ fn vertex_out(v: VertexIn, position: vec3<f32>, normal: vec3<f32>, tangent: vec3
     o.clip = frame.view_proj * world;
     o.world = world.xyz;
     o.normal = normal_m * normal;
+    if (v.inst_normal >> 24u) != 0u {
+        o.normal = unpack4x8snorm(v.inst_normal).xyz;
+    }
     o.tangent = vec4<f32>(normal_m * tangent, v.tangent.w);
     o.uv0 = v.uv0;
     o.colour0 = v.colour0;
