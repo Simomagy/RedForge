@@ -1,5 +1,5 @@
-// Game geometry, lit by a sun and a sky, into an HDR target (after
-// common.wgsl).
+// Game geometry into the G-buffer, or lit as it's drawn for blended draws
+// (after common.wgsl and lighting.wgsl).
 //
 // Materials follow RDR2's "standard" shaders: a diffuse map, a normal map with
 // XY in its red and green channels, and a material map ("_ma") with metalness in
@@ -22,6 +22,8 @@ struct Material {
     // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R),
     // z: water (glossy)
     config: vec4<u32>,
+    // x: emission (0-1)
+    extra: vec4<f32>,
     // A ped part's palette: the columns (0-255) the diffuse's red, green and
     // blue pick, and the row (0-1) in w.
     palette: vec4<f32>,
@@ -152,7 +154,15 @@ fn ped_palette(c: vec3<f32>) -> vec3<f32> {
     return r * c.r + g * c.g + b * c.b;
 }
 
-fn shade(i: VertexOut, front: bool) -> vec4<f32> {
+// What a fragment is: its surface, and how much of each G-buffer target it
+// covers (a decal's masks; 1 for anything else).
+struct Fragment {
+    surface: Surface,
+    alphas: vec4<f32>,
+    alpha: f32,
+};
+
+fn fragment(i: VertexOut, front: bool) -> Fragment {
     let two_layer = material.modes.z != 0u;
     let layer = select(0.0, saturate(i.colour1[material.modes.w & 3u] * 10.0 - 4.5), two_layer);
     let decal_mode = material.modes.x;
@@ -172,9 +182,16 @@ fn shade(i: VertexOut, front: bool) -> vec4<f32> {
         albedo_s = vec4<f32>(mix(albedo_s.rgb, diffuse2.rgb, layer), 1.0);
     }
     albedo_s *= material.tint;
+    var alphas = vec4<f32>(1.0);
     switch decal_mode {
-        case 1u: { albedo_s.a = diffuse.a * i.colour0.a * material.decal_masks.x; }
-        case 2u: { albedo_s.a = saturate(dot(diffuse.rgb, material.decal_masks.rgb) * i.colour0.a); }
+        case 1u: {
+            albedo_s.a = diffuse.a * i.colour0.a;
+            alphas = material.decal_masks * albedo_s.a;
+        }
+        case 2u: {
+            albedo_s.a = saturate(dot(diffuse.rgb, material.decal_masks.rgb) * i.colour0.a);
+            alphas = vec4<f32>(albedo_s.a);
+        }
         default: {}
     }
     if (material.params.y > 0.0 && albedo_s.a < material.params.y) || (decal_mode != 0u && albedo_s.a <= 0.0) {
@@ -196,28 +213,61 @@ fn shade(i: VertexOut, front: bool) -> vec4<f32> {
         }
     }
 
+    // Without a material map: rough and not metal (the C#'s MeshSmoothness 0).
     var metal = 0.0;
-    var roughness = 0.6;
+    var smoothness = 0.0;
     if material.params.w > 0.5 {
         let p = mix(textureSample(t_params, s_wrap, i.uv0), textureSample(t_params2, s_wrap, i.uv0), layer);
         switch material.config.y {
-            case 1u: { roughness = 1.0 - p.g; }
-            case 2u: { roughness = p.r; }
+            case 1u: { smoothness = p.g; }
+            case 2u: { smoothness = 1.0 - p.r; }
             default: {
                 metal = p.r;
-                roughness = p.g;
+                smoothness = 1.0 - p.g;
             }
         }
-        roughness = clamp(roughness, 0.04, 1.0);
     }
     if material.config.z == 1u {
-        roughness = 0.1;
+        smoothness = 0.9;
+    }
+    if frame.options.x == 4u {
+        albedo_s = vec4<f32>(i.colour0.rgb, albedo_s.a);
     }
 
-    return lit(i.world, albedo_s, n, metal, roughness, i.colour0);
+    let s = Surface(albedo_s.rgb, n, saturate(smoothness), metal, 1.0, 0.0, material.extra.x);
+    return Fragment(s, alphas, albedo_s.a);
 }
 
 @fragment
-fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> SceneOut {
-    return scene_out(shade(i, front), i.id, i.clip);
+fn fs_gbuffer(i: VertexOut, @builtin(front_facing) front: bool) -> GBufferOut {
+    let f = fragment(i, front);
+    return gbuffer_out(f.surface, f.alphas, i.id, i.clip);
+}
+
+// Blended draws (glass, water...), lit as they're drawn over the scene.
+struct ForwardOut {
+    @location(0) colour: vec4<f32>,
+    @location(1) pick: vec2<u32>,
+};
+
+@fragment
+fn fs_forward(i: VertexOut, @builtin(front_facing) front: bool) -> ForwardOut {
+    let f = fragment(i, front);
+    var c = light_surface(f.surface, i.world, 1.0);
+    switch frame.options.x {
+        case 1u, 4u: { c = f.surface.albedo; }
+        case 2u: { c = f.surface.normal * 0.5 + 0.5; }
+        case 3u: { c = vec3<f32>(f.surface.metal, 1.0 - f.surface.smoothness, 0.0); }
+        default: {}
+    }
+    return ForwardOut(vec4<f32>(c, f.alpha), vec2<u32>(i.id, bitcast<u32>(i.clip.z)));
+}
+
+// Shadow maps of cut-out and blended draws: only what's solid enough.
+@fragment
+fn fs_shadow(i: VertexOut) {
+    let a = textureSample(t_albedo, s_wrap, i.uv0).a * material.tint.a;
+    if a < max(material.params.y, 0.5) {
+        discard;
+    }
 }

@@ -4,8 +4,9 @@
 //! - [`GpuContext`]: the device; the app shares eframe's.
 //! - [`GpuTexture`]: a game texture, every format and mip.
 //! - [`GpuModel`]: a drawable's geometries and materials by LOD.
-//! - [`Renderer`]: draws models into [`RenderTargets`] (HDR, then tonemapped
-//!   to 8-bit sRGB that egui shows directly).
+//! - [`Renderer`]: draws models into [`RenderTargets`], deferred: a G-buffer
+//!   lit by the sun (with cascaded shadows, [`Cascades`]) and the sky, then
+//!   tonemapped to 8-bit sRGB that egui shows directly.
 //! - [`Pose`]: a skeleton posed by a clip, which [`Renderer::render_posed`]
 //!   skins models with.
 
@@ -17,6 +18,8 @@ pub mod mesh;
 pub mod model;
 pub mod preview;
 mod renderer;
+mod shadows;
+mod targets;
 pub mod texture;
 
 pub use anim::Pose;
@@ -27,9 +30,11 @@ pub use model::{
 };
 pub use preview::{PreviewMode, PreviewTarget, TexturePreview};
 pub use renderer::{
-    DebugView, DrawBatch, GpuMaterial, Instance, MaterialKind, OUTPUT_FORMAT, Pick, PickRequest, PosedModel,
-    RenderStats, RenderTargets, Renderer, ViewSettings,
+    DebugView, DrawBatch, GpuMaterial, Instance, MaterialKind, Pick, PickRequest, PosedModel, RenderStats, Renderer,
+    Scene, ViewSettings,
 };
+pub use shadows::{CASCADES, Cascade, Cascades};
+pub use targets::{OUTPUT_FORMAT, RenderTargets};
 pub use texture::{GpuTexture, TextureKind};
 
 #[derive(Debug, thiserror::Error)]

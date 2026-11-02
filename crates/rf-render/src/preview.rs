@@ -3,7 +3,7 @@
 use bytemuck::{Pod, Zeroable};
 
 use crate::GpuContext;
-use crate::renderer::OUTPUT_FORMAT;
+use crate::targets::OUTPUT_FORMAT;
 use crate::texture::GpuTexture;
 
 /// Which part of a texture to show.

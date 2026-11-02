@@ -57,10 +57,35 @@ pub struct TimeCycleState {
     pub fill_ambient: [f32; 3],
     /// The night sky's own glow.
     pub sky_glow: [f32; 3],
+    /// The moon's light, before the timecycle's colour.
+    pub moon_intensity: f32,
     /// Added to the exposure (night is darker), in EV.
     pub exposure_ev: f32,
+    /// Night vision: the blue grey colours fade to in the dark (a luminance
+    /// of 1), and how much (0 by day).
+    pub scotopic: [f32; 4],
     /// 0 by day, 1 at night (smooth through dusk and dawn).
     pub night: f32,
+}
+
+/// The C# RedForge's settings for the night (`RDR2.NightExposure`,
+/// `RDR2.NightVision`, `RDR2.MoonLight`, `RDR2.SkyGlow`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NightSettings {
+    /// How much darker night is than day, in EV.
+    pub exposure: f32,
+    /// Multiplies how much colours fade to blue grey in the dark.
+    pub vision: f32,
+    /// The moon's brightness before the timecycle's (0.1 is about a full moon).
+    pub moon: f32,
+    /// Multiplies the night sky's own glow.
+    pub sky_glow: f32,
+}
+
+impl Default for NightSettings {
+    fn default() -> Self {
+        Self { exposure: -3.0, vision: 1.0, moon: 0.1, sky_glow: 1.0 }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -134,6 +159,11 @@ impl TimeCycle {
 
     /// `GetState`: the lighting at an hour (0-24).
     pub fn state(&self, hour: f32) -> TimeCycleState {
+        self.state_with(hour, &NightSettings::default())
+    }
+
+    /// The lighting at an hour, as the C#'s `RDR2TimeCycle.GetState`.
+    pub fn state_with(&self, hour: f32, night_settings: &NightSettings) -> TimeCycleState {
         let (i0, i1, t) = Self::keyframes(hour);
         let a1 = if i1 == 0 { SUN_ANGLES[0] + std::f32::consts::TAU } else { SUN_ANGLES[i1] };
         let sun_angle = SUN_ANGLES[i0] + (a1 - SUN_ANGLES[i0]) * t;
@@ -141,7 +171,7 @@ impl TimeCycle {
         let fill = self.get("local_atmosphere_fill_ambient_light_intensity", hour, 1.0)
             * self.get("ambient_sky_intensity", hour, 1.0)
             * LUX_SCALE;
-        let glow = self.get("sky_air_glow_base_intensity", hour, 0.0) * LUX_SCALE;
+        let glow = self.get("sky_air_glow_base_intensity", hour, 0.0) * LUX_SCALE * night_settings.sky_glow;
         // Dusk from the sun about 6° high, halfway at sunset, full night 6° below.
         let night = ((0.1 - sun_angle.sin()) / 0.2).clamp(0.0, 1.0);
         let night = night * night * (3.0 - 2.0 * night);
@@ -152,7 +182,16 @@ impl TimeCycle {
             sky_moon_intensity: self.get("sky_scattering_moon_intensity_multiplier", hour, 1.0),
             fill_ambient: self.rgb("local_atmosphere_fill_ambient_light_color", hour, 0.0).map(|c| c * fill),
             sky_glow: self.rgb("sky_air_glow_base_color", hour, 0.0).map(|c| c * glow),
-            exposure_ev: self.get("postfx_exposure", hour, 0.0),
+            moon_intensity: LUX_SCALE * night_settings.moon,
+            exposure_ev: self.get("postfx_exposure", hour, 0.0) + night_settings.exposure * night,
+            scotopic: {
+                let [r, g, b] = [("r", 0.37), ("g", 0.54), ("b", 1.0)]
+                    .map(|(c, d)| self.get(&format!("postfx_scotopic_col_{c}"), hour, d));
+                let lum = (r * 0.2126 + g * 0.7152 + b * 0.0722).max(0.01);
+                let amount =
+                    self.get("postfx_scotopic_blue_shift_intensity", hour, 0.7) * night * night_settings.vision;
+                [r / lum, g / lum, b / lum, amount]
+            },
             night,
         }
     }

@@ -139,7 +139,7 @@ fn layer_normal(
 }
 
 @fragment
-fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> SceneOut {
+fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> GBufferOut {
     var n = normalize(i.normal);
     if !front {
         n = -n;
@@ -181,6 +181,10 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> SceneOut {
     let normal = normalize(n0 * bf.x + n1 * bf.y + n2 * bf.z + n3 * bf.w);
     let p = p0 * bf.x + p1 * bf.y + p2 * bf.z + p3 * bf.w;
     // Roughness in green; terrain isn't metal.
-    let roughness = clamp(p.g, 0.04, 1.0);
-    return scene_out(lit(i.world, vec4<f32>(albedo.rgb, 1.0), normal, 0.0, roughness, i.colour0), i.id, i.clip);
+    var c = albedo.rgb;
+    if frame.options.x == 4u {
+        c = i.colour0.rgb;
+    }
+    let s = Surface(c, normal, 1.0 - saturate(p.g), 0.0, 1.0, 0.0, 0.0);
+    return gbuffer_out(s, vec4<f32>(1.0), i.id, i.clip);
 }

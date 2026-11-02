@@ -13,7 +13,9 @@ use glam::{Mat4, Quat, Vec3};
 use rf_editor::Editor;
 use rf_formats::formats::meta::Meta;
 use rf_formats::rpf8::FileRef;
-use rf_render::{DrawBatch, FlyCamera, GpuModel, Instance, RenderStats, RenderTargets, ViewSettings};
+use rf_render::{
+    CASCADES, Cascades, DrawBatch, FlyCamera, GpuModel, Instance, RenderStats, RenderTargets, Scene, ViewSettings,
+};
 use rf_world::{EntityId, VisibleEntity};
 
 use crate::game::Game;
@@ -27,6 +29,10 @@ enum Source {
     /// One ymap's entities, all of them.
     Ymap(Vec<VisibleEntity>),
 }
+
+/// The sun's light before the atmosphere and the timecycle (the C#'s star
+/// colour in `CreateEarthScene`).
+const SUN_COLOUR: [f32; 3] = [10.0, 10.0, 12.1];
 
 pub struct MapView {
     pub title: String,
@@ -224,28 +230,21 @@ impl MapView {
         c.position += mv * self.speed * factor * dt;
     }
 
-    /// The view's lighting at the hour, from the weather's timecycle: the sun
-    /// by day, a dim bluish moon on the other side at night. (A stand-in
-    /// until the renderer has the C#'s atmosphere and exposure.)
+    /// The view's lighting at the hour, from the weather's timecycle, as the
+    /// C#'s `Player` sets it: the sun by day, the moon on the other side at
+    /// night, each times the timecycle's light colour; its fill light.
     fn light(&mut self) {
-        let base = ViewSettings::default();
         let Some(tc) = &self.timecycle else {
             self.view.exposure = self.exposure;
             return;
         };
         let s = tc.state(self.hour);
         let to_sun = Vec3::from(rf_game::timecycle::TimeCycle::sun_direction(s.sun_angle));
-        let night = s.night;
-        let sun = Vec3::from(s.light_colour) * 1.1;
-        let moon = Vec3::new(0.35, 0.45, 0.7) * 0.25;
-        self.view.sun_dir = if to_sun.z >= 0.0 { to_sun } else { -to_sun };
-        self.view.sun_colour = if to_sun.z >= 0.0 { sun.lerp(moon, night) } else { moon };
-        let ambient = 1.0 - night * 0.92;
-        let fill = Vec3::from(s.fill_ambient) * 0.5;
-        self.view.sky_colour = base.sky_colour * ambient + fill;
-        self.view.ground_colour = base.ground_colour * ambient + fill * 0.5;
-        self.view.background =
-            [0.18 * ambient as f64, 0.2 * ambient as f64, 0.24 * ambient as f64 + 0.02 * night as f64];
+        let (dir, colour) =
+            if to_sun.z >= 0.0 { (to_sun, Vec3::from(SUN_COLOUR)) } else { (-to_sun, Vec3::splat(s.moon_intensity)) };
+        self.view.sun_dir = dir;
+        self.view.sun_colour = colour * Vec3::from(s.light_colour);
+        self.view.fill = Vec3::from(s.fill_ambient);
         self.view.exposure = self.exposure * 2f32.powf(s.exposure_ev);
     }
 
@@ -435,7 +434,12 @@ impl MapView {
 
         // Group the entities by model and LOD; each group is one batch of
         // instances. Each instance's id is its entity's place in `drawn`, + 1.
-        let mut groups: HashMap<(usize, usize), (Arc<GpuModel>, Vec<Instance>)> = HashMap::new();
+        // What casts into each of the sun's shadow cascades goes in groups of
+        // its own (the C#'s shadow views of the same entities).
+        type Groups = HashMap<(usize, usize), (Arc<GpuModel>, Vec<Instance>)>;
+        let cascades = self.view.shadows.then(|| Cascades::new(&camera, self.view.sun_dir));
+        let mut groups: Groups = HashMap::new();
+        let mut casters: [Groups; CASCADES] = Default::default();
         let mut drawn = Vec::new();
         for e in &visible {
             let Some(model) = self.models.get(e.archetype) else { continue };
@@ -444,27 +448,43 @@ impl MapView {
             let centre = t.transform_point3((min + max) * 0.5);
             let scale = t.x_axis.truncate().length().max(t.z_axis.truncate().length());
             let radius = (max - min).length() * 0.5 * scale;
-            if !frustum.sphere_visible(centre, radius) {
-                continue;
-            }
             let dist = centre.distance(camera.eye) - radius;
             let lod = model.lod_for_distance(dist.max(0.0));
             let key = (Arc::as_ptr(&model) as usize, lod);
+            if let Some(c) = &cascades {
+                for (i, g) in casters.iter_mut().enumerate() {
+                    if c.casts(i, centre, radius) {
+                        g.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint, 0));
+                    }
+                }
+            }
+            if !frustum.sphere_visible(centre, radius) {
+                continue;
+            }
             drawn.push(e.id);
             let id = drawn.len() as u32;
             groups.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint, id));
         }
         self.drawn = Arc::new(drawn);
         let mut instances = Vec::new();
-        let mut ranges = Vec::new();
-        for ((_, lod), (model, list)) in &groups {
-            let start = instances.len() as u32;
-            instances.extend_from_slice(list);
-            ranges.push((model.clone(), *lod, start..instances.len() as u32));
+        let mut ranges = |groups: &Groups| {
+            let mut out = Vec::new();
+            for ((_, lod), (model, list)) in groups {
+                let start = instances.len() as u32;
+                instances.extend_from_slice(list);
+                out.push((model.clone(), *lod, start..instances.len() as u32));
+            }
+            out
+        };
+        let ranges_seen = ranges(&groups);
+        let ranges_cast: Vec<_> = casters.iter().map(&mut ranges).collect();
+        fn to_batches(r: &[(Arc<GpuModel>, usize, std::ops::Range<u32>)]) -> Vec<DrawBatch<'_>> {
+            r.iter().map(|(m, lod, r)| DrawBatch { model: m, lod: *lod, instances: r.clone() }).collect()
         }
-        let batches: Vec<DrawBatch> =
-            ranges.iter().map(|(m, lod, r)| DrawBatch { model: m, lod: *lod, instances: r.clone() }).collect();
-        self.stats = gpu.renderer.render(&gpu.ctx, targets, &camera, &self.view, &instances, &batches);
+        let batches = to_batches(&ranges_seen);
+        let cast: [Vec<DrawBatch>; CASCADES] = std::array::from_fn(|i| to_batches(&ranges_cast[i]));
+        let scene = Scene { instances: &instances, batches: &batches, shadows: cascades.as_ref().map(|c| (c, &cast)) };
+        self.stats = gpu.renderer.render_scene(&gpu.ctx, targets, &camera, &self.view, &scene);
         gpu.show_texture(&mut self.texture_id, &targets.display_view);
         if let Some(id) = self.texture_id {
             ui.painter().image(

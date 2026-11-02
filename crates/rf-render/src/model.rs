@@ -108,6 +108,9 @@ pub struct MaterialDesc<'a> {
     /// red, green and blue weigh three colours of the tint palette, at these
     /// columns (0-255) and this row (0-1, in w).
     pub palette: Option<[f32; 4]>,
+    /// How much the surface glows with its own colour (0-1): the shader's
+    /// "intensity" or "emissivemultiplier" / 40, as the C#'s `EmissiveMult`.
+    pub emissive: f32,
 }
 
 /// What a normal map holds.
@@ -237,6 +240,8 @@ impl<'a> TerrainDesc<'a> {
 
 mod names {
     pub const BUMPINESS: u32 = 0xf6712b81;
+    pub const INTENSITY: u32 = 0xefcd993d;
+    pub const EMISSIVE_MULTIPLIER: u32 = 0x5eebed48;
     pub const DECAL_OPACITY: [u32; 4] = [0x0bc0cd58, 0x9db47191, 0x2be58df5, 0x39172858]; // decalblendopacitygbuffer0..3
     pub const DIRT_DECAL_MASK: u32 = 0x3e95fa90;
 
@@ -471,6 +476,7 @@ impl<'a> MaterialDesc<'a> {
                 }
                 ShaderParamType::CBuffer => match p.info.name {
                     names::BUMPINESS => d.bumpiness = p.vector[0],
+                    names::INTENSITY | names::EMISSIVE_MULTIPLIER => d.emissive = (p.vector[0] * 0.025).clamp(0.0, 1.0),
                     names::DIRT_DECAL_MASK => d.decal_masks = p.vector,
                     h => {
                         if let Some(i) = names::DECAL_OPACITY.iter().position(|&o| o == h) {
