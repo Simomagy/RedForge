@@ -117,6 +117,14 @@ fn move_delete_place_and_undo() {
     let root = back.root.unwrap();
     assert_eq!(lod::entities(&root).len(), 1);
     assert_eq!(lod::entities(&root)[0].as_ref().unwrap().hash("archetypeName"), archetype);
+    // Saving worked out its extents: they hold the placed entity.
+    let inside = |min: &str, max: &str| {
+        let (lo, hi) = (Vec3::from(root.vec3(min)), Vec3::from(root.vec3(max)));
+        lo.cmple(placed.position).all() && hi.cmpge(placed.position).all() && lo != hi
+    };
+    assert!(inside("entitiesExtentsMin", "entitiesExtentsMax"));
+    assert!(inside("streamingExtentsMin", "streamingExtentsMax"));
+    assert_ne!(root.u32("contentFlags"), 0);
     std::fs::remove_dir_all(&dir).unwrap();
 
     // Undoing everything removes the new ymap.
