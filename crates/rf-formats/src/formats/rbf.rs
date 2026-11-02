@@ -21,8 +21,18 @@
 //! - from XML, text content is written as bytes with a terminating 0, unless the
 //!   element has a `content="char_array"`/`"short_array"` attribute.
 //!
+//! So the XML isn't stable through round trips, as in the C# (e.g. an
+//! `<Item key="0" value="10" />` comes back as a float, which an array of
+//! structures then drops), and content without a name is written as `<>`, which
+//! can't be read back (by the C# either).
+//!
+//! The C#'s `Save` doesn't reproduce the game's files byte for byte (descriptors
+//! are keyed by name only, and the structure header's two unknown shorts are
+//! written as 0), but what it writes reads back to the same tree.
+//!
 //! Known gaps: `xmlns` declarations aren't counted as attributes and CDATA is read
-//! as text, unlike `XDocument`.
+//! as text, unlike `XDocument`; `NumberStyles.Any` float parsing (`value`
+//! attributes) is reproduced for the usual forms, not currency symbols.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -217,7 +227,7 @@ pub fn read(data: &[u8]) -> Result<RbfItem> {
                         bail!("RBF: short array past the end of the data");
                     }
                     RbfValue::BytesShortArray(
-                        bytes.chunks_exact(2).take(n).map(|c| i16::from_le_bytes([c[0], c[1]])).collect(),
+                        bytes.as_chunks::<2>().0.iter().take(n).map(|c| i16::from_le_bytes(*c)).collect(),
                     )
                 }
                 "string" => {
@@ -381,9 +391,7 @@ fn create_schema_class(item: &mut RbfItem, hashes: &HashIndex) -> SchemaClass {
 
 /// `CreateDataBag`: a bag for a structure.
 fn create_data_bag(item: &mut RbfItem, hashes: &HashIndex) -> Option<DataBag> {
-    if item.structure().is_none() {
-        return None;
-    }
+    item.structure()?;
     let cls = Arc::new(create_schema_class(item, hashes));
     let mut bag = DataBag::new(cls.clone());
     let RbfValue::Structure(s) = &mut item.value else { unreachable!() };
@@ -595,6 +603,39 @@ fn parse_numbers<T: std::str::FromStr>(text: &str) -> Result<Vec<T>> {
         .collect()
 }
 
+/// A text node's text as `XmlDocument.LoadXml` reads it: without end-of-line
+/// normalization, so `\r\n` stays (roxmltree turns it into `\n`).
+fn node_text<'a>(n: roxmltree::Node<'a, '_>, input: &'a str) -> std::borrow::Cow<'a, str> {
+    let text = n.text().unwrap_or("");
+    let raw = input.get(n.range()).unwrap_or("");
+    if !raw.contains('\r') || raw.contains('<') {
+        return text.into();
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        let Some(end) = rest[i..].find(';') else { return text.into() };
+        let ent = &rest[i + 1..i + end];
+        let c = match ent {
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "amp" => Some('&'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => match ent.strip_prefix("#x").or_else(|| ent.strip_prefix("#X")) {
+                Some(h) => u32::from_str_radix(h, 16).ok().and_then(char::from_u32),
+                None => ent.strip_prefix('#').and_then(|d| d.parse().ok()).and_then(char::from_u32),
+            },
+        };
+        let Some(c) = c else { return text.into() };
+        out.push(c);
+        rest = &rest[i + end + 1..];
+    }
+    out.push_str(rest);
+    out.into()
+}
+
 /// The text nodes an `XmlDocument` keeps (it drops whitespace-only ones).
 fn is_kept_text(n: roxmltree::Node) -> bool {
     n.is_text() && !n.text().unwrap_or("").chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n'))
@@ -616,7 +657,7 @@ fn traverse(node: roxmltree::Node, input: &str) -> Result<Option<RbfItem>> {
             let f = |s: &str| dotnet_parse_float(s).unwrap_or(0.0);
             return Ok(Some(RbfItem { name: Some(name.to_owned()), value: RbfValue::Float3([f(x), f(y), f(z)]) }));
         } else if !has_elements && attrs.is_empty() && !input[node.range()].ends_with("/>") {
-            let text: String = node.children().filter(|c| c.is_text()).filter_map(|c| c.text()).collect();
+            let text: String = node.children().filter(|c| c.is_text()).map(|c| node_text(c, input)).collect();
             let mut bytes = ascii_bytes(&text);
             bytes.push(0);
             let s = RbfStructure {
@@ -637,15 +678,15 @@ fn traverse(node: roxmltree::Node, input: &str) -> Result<Option<RbfItem>> {
         return Ok(Some(RbfItem { name: Some(name.to_owned()), value: RbfValue::Structure(s) }));
     }
     if node.is_text() {
-        let text = node.text().unwrap_or("");
+        let text = node_text(node, input);
         let bytes = match node.parent().and_then(|p| p.attribute("content")) {
-            Some("char_array") => (!text.is_empty()).then(|| parse_numbers::<u8>(text)).transpose()?,
+            Some("char_array") => (!text.is_empty()).then(|| parse_numbers::<u8>(&text)).transpose()?,
             Some("short_array") => {
-                Some(parse_numbers::<u16>(text)?.into_iter().flat_map(|v| v.to_le_bytes()).collect())
+                Some(parse_numbers::<u16>(&text)?.into_iter().flat_map(|v| v.to_le_bytes()).collect())
             }
             Some(_) => None,
             None => {
-                let mut b = ascii_bytes(text);
+                let mut b = ascii_bytes(&text);
                 b.push(0);
                 Some(b)
             }
@@ -790,6 +831,14 @@ mod tests {
                     <A>y</A>\n  </Item>\n </List>\n <Dup>1</Dup>\n <Dup1>2</Dup1>\n</Root>\n";
         assert_eq!(out, want);
         assert_eq!(h.get(joaat("Dup1")).as_deref(), Some("Dup1"));
+    }
+
+    #[test]
+    fn text_keeps_crlf() {
+        let tree = from_xml_tree("<R>\r\n<M>a\r\nb &amp; c</M></R>").unwrap();
+        let RbfValue::Structure(r) = &tree.value else { panic!() };
+        let RbfValue::Structure(m) = &r.children[0].as_ref().unwrap().value else { panic!() };
+        assert_eq!(m.children[0].as_ref().unwrap().value, RbfValue::Bytes(b"a\r\nb & c\0".to_vec()));
     }
 
     #[test]
