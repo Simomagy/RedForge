@@ -182,6 +182,9 @@ fn compare_xml(
         let mut problems = Vec::new();
         if let Some((n, la, lb)) = first_diff(&xa, &xb) {
             problems.push(format!("line {n}:\n      C#:   {}\n      Rust: {}", la.trim(), lb.trim()));
+        } else if xa != xb {
+            // `lines()` hides `\r` and a missing final newline.
+            problems.push("the XML differs only in line endings".into());
         }
         if it.kind.has_folder() {
             problems.extend(diff_folders(&it.externals_in(a), &it.externals_in(b)));
