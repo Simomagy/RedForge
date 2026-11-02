@@ -9,6 +9,7 @@ use rf_render::{GpuContext, Renderer, TexturePreview};
 
 use crate::browser::{Browser, BrowserAction};
 use crate::game::{Game, LoadMessage, is_game_folder, start_loading};
+use crate::map::MapView;
 use crate::settings::{GAME_FOLDER, Settings};
 use crate::viewers::Gpu;
 use crate::viewers::model::ModelViewer;
@@ -34,6 +35,7 @@ pub enum Tab {
     Model(Box<ModelViewer>),
     Texture(Box<TextureViewer>),
     Text(Box<TextViewer>),
+    Map(Box<MapView>),
 }
 
 /// For testing without anyone at the screen: opens a file, takes a screenshot
@@ -111,6 +113,13 @@ impl RedForgeApp {
                 match ext {
                     "ydr" | "ydd" | "yft" => Tab::Model(Box::new(ModelViewer::open(ctx, game, f))),
                     "ytd" => Tab::Texture(Box::new(TextureViewer::open(ctx, game, f))),
+                    "ymap" => match MapView::ymap(game, &self.gpu, f) {
+                        Ok(v) => Tab::Map(Box::new(v)),
+                        Err(e) => {
+                            log::warn!("{e:#}");
+                            Tab::Text(Box::new(TextViewer::open_xml(ctx, game, f)))
+                        }
+                    },
                     _ => Tab::Text(Box::new(TextViewer::open_xml(ctx, game, f))),
                 }
             }
@@ -212,6 +221,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Model(v) => format!("🧊 {}", v.title).into(),
             Tab::Texture(v) => format!("🖼 {}", v.title).into(),
             Tab::Text(v) => format!("📄 {}", v.title).into(),
+            Tab::Map(v) => format!("🗺 {}", v.title).into(),
         }
     }
 
@@ -221,6 +231,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Model(v) => egui::Id::new(("model", &v.path)),
             Tab::Texture(v) => egui::Id::new(("texture", &v.path)),
             Tab::Text(v) => egui::Id::new(("text", &v.path)),
+            Tab::Map(v) => egui::Id::new(("map", &v.path)),
         }
     }
 
@@ -241,6 +252,7 @@ impl TabViewer for Tabs<'_> {
             },
             Tab::Texture(v) => v.ui(ui, self.gpu),
             Tab::Text(v) => v.ui(ui),
+            Tab::Map(v) => v.ui(ui, self.gpu),
         }
     }
 
@@ -248,6 +260,7 @@ impl TabViewer for Tabs<'_> {
         match tab {
             Tab::Model(v) => v.free(self.gpu),
             Tab::Texture(v) => v.free(self.gpu),
+            Tab::Map(v) => v.free(self.gpu),
             _ => {}
         }
         egui_dock::widgets::tab_viewer::OnCloseResponse::Close
@@ -278,6 +291,16 @@ impl eframe::App for RedForgeApp {
 
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
+                if let GameState::Ready(g) = &self.game {
+                    let g = g.clone();
+                    ui.menu_button("View", |ui| {
+                        if ui.button("World map").clicked() {
+                            let tab = Tab::Map(Box::new(MapView::world(&g, &self.gpu)));
+                            self.dock.push_to_focused_leaf(tab);
+                            ui.close();
+                        }
+                    });
+                }
                 ui.menu_button("File", |ui| {
                     if ui.button("Game folder…").clicked() {
                         let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
@@ -343,7 +366,7 @@ impl eframe::App for RedForgeApp {
 
         // Viewers waiting on a background job need frames to notice it finishing.
         let waiting = self.dock.iter_all_tabs().any(|(_, t)| match t {
-            Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) => true,
+            Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Map(_) => true,
             Tab::Welcome => false,
         });
         if waiting {

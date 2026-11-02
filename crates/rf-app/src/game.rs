@@ -35,11 +35,11 @@ impl Folder {
 
 pub struct Game {
     pub folder: PathBuf,
-    pub fs: Rpf8FileSystem,
+    pub fs: Arc<Rpf8FileSystem>,
     pub hashes: Arc<HashIndex>,
     pub index: AssetIndex,
     /// Archetypes, texture dictionary relationships and the like.
-    pub data: GameData,
+    pub data: Arc<GameData>,
     pub tree: Folder,
     /// Every path, lowercase, for searching.
     pub paths: Vec<(String, FileRef)>,
@@ -92,7 +92,7 @@ fn load(folder: PathBuf, progress: impl Fn(&str)) -> Result<Game> {
     }
     tree.sort();
     log::info!("{} files in {} archives, ready in {:.2?}", fs.file_count(), fs.archives.len(), t.elapsed());
-    Ok(Game { folder, fs, hashes: Arc::new(hashes), index, data, tree, paths })
+    Ok(Game { folder, fs: Arc::new(fs), hashes: Arc::new(hashes), index, data: Arc::new(data), tree, paths })
 }
 
 pub enum LoadMessage {

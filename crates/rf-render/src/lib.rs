@@ -16,11 +16,13 @@ pub mod preview;
 mod renderer;
 pub mod texture;
 
-pub use camera::OrbitCamera;
+pub use camera::{CameraView, FlyCamera, Frustum, OrbitCamera};
 pub use context::{GpuContext, wanted_features};
 pub use model::{AlphaMode, GpuModel, MaterialDesc, NoTextures, TextureSource};
 pub use preview::{PreviewMode, PreviewTarget, TexturePreview};
-pub use renderer::{DebugView, GpuMaterial, OUTPUT_FORMAT, RenderTargets, Renderer, ViewSettings};
+pub use renderer::{
+    DebugView, DrawBatch, GpuMaterial, OUTPUT_FORMAT, RenderStats, RenderTargets, Renderer, ViewSettings,
+};
 pub use texture::{GpuTexture, TextureKind};
 
 #[derive(Debug, thiserror::Error)]

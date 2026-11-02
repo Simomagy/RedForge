@@ -3,6 +3,7 @@
 mod app;
 mod browser;
 mod game;
+mod map;
 mod settings;
 mod viewers;
 

@@ -79,7 +79,7 @@ fn main() -> Result<()> {
     camera.frame(gpu.min.into(), gpu.max.into());
     let settings = ViewSettings { debug, ..Default::default() };
     let targets = renderer.create_targets(&ctx, 1280, 800);
-    renderer.render(&ctx, &targets, &camera, &settings, &[(&gpu, glam::Mat4::IDENTITY)]);
+    renderer.render_model(&ctx, &targets, &camera, &settings, &gpu);
     let pixels = renderer.read_output(&ctx, &targets);
     image::save_buffer(out, &pixels, targets.width, targets.height, image::ColorType::Rgba8)?;
     println!("saved {out}");

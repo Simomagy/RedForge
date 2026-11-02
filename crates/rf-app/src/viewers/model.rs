@@ -248,7 +248,7 @@ impl Ready {
         if self.dirty
             && let Some(m) = &self.models[self.selected]
         {
-            gpu.renderer.render(&gpu.ctx, targets, &self.camera, &self.view, &[(m, glam::Mat4::IDENTITY)]);
+            gpu.renderer.render_model(&gpu.ctx, targets, &self.camera, &self.view, m);
             gpu.show_texture(&mut self.texture_id, &targets.display_view);
             self.dirty = false;
         }

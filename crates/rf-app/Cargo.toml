@@ -23,3 +23,4 @@ rf-formats.workspace = true
 rf-render = { path = "../rf-render" }
 rfd = "0.17.2"
 rf-game = { path = "../rf-game" }
+rf-world = { path = "../rf-world" }

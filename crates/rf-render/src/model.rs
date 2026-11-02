@@ -113,6 +113,8 @@ pub struct GpuModel {
     pub lods: [Vec<GpuDraw>; 4],
     pub min: [f32; 3],
     pub max: [f32; 3],
+    /// Up to which distance each LOD is drawn (the drawable's `LodDistHigh`...).
+    pub lod_dists: [f32; 4],
     /// Texture names that couldn't be found.
     pub missing_textures: Vec<String>,
 }
@@ -120,6 +122,22 @@ pub struct GpuModel {
 impl GpuModel {
     pub fn highest_lod(&self) -> usize {
         self.lods.iter().position(|l| !l.is_empty()).unwrap_or(0)
+    }
+
+    /// The LOD to draw at a distance: the first that reaches it, or the
+    /// lowest there is.
+    pub fn lod_for_distance(&self, distance: f32) -> usize {
+        let mut last = self.highest_lod();
+        for i in 0..4 {
+            if self.lods[i].is_empty() {
+                continue;
+            }
+            last = i;
+            if distance <= self.lod_dists[i] {
+                return i;
+            }
+        }
+        last
     }
 
     pub fn draw_count(&self) -> usize {
@@ -239,7 +257,7 @@ impl GpuModel {
         if min[0] > max[0] {
             (min, max) = (d.bounding_box_min, d.bounding_box_max);
         }
-        Self { name: name.to_owned(), lods, min, max, missing_textures: resolver.missing }
+        Self { name: name.to_owned(), lods, min, max, lod_dists: d.lod_dists, missing_textures: resolver.missing }
     }
 }
 

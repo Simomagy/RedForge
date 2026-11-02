@@ -7,7 +7,7 @@ use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::GpuContext;
-use crate::camera::OrbitCamera;
+use crate::camera::{CameraView, OrbitCamera};
 use crate::mesh::Vertex;
 use crate::model::{AlphaMode, GpuModel, MaterialDesc};
 use crate::texture::GpuTexture;
@@ -104,7 +104,22 @@ pub struct RenderTargets {
     tonemap_group: wgpu::BindGroup,
 }
 
+/// One model's LOD, drawn with a range of the frame's instance transforms.
+pub struct DrawBatch<'a> {
+    pub model: &'a GpuModel,
+    pub lod: usize,
+    pub instances: std::ops::Range<u32>,
+}
+
+/// What a frame drew.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RenderStats {
+    pub instances: usize,
+    pub draw_calls: usize,
+}
+
 pub struct Renderer {
+    instance_buffer: std::sync::Mutex<Option<wgpu::Buffer>>,
     material_layout: wgpu::BindGroupLayout,
     tonemap_layout: wgpu::BindGroupLayout,
     frame_buffer: wgpu::Buffer,
@@ -302,6 +317,7 @@ impl Renderer {
         let white = Arc::new(GpuTexture::solid(ctx, "white", [255, 255, 255, 255]));
         let flat_normal = Arc::new(GpuTexture::solid(ctx, "flat normal", [128, 128, 255, 255]));
         let mut r = Self {
+            instance_buffer: Default::default(),
             material_layout,
             tonemap_layout,
             frame_buffer,
@@ -409,21 +425,39 @@ impl Renderer {
         RenderTargets { width, height, hdr, depth, output, output_view, display_view, tonemap_group }
     }
 
-    /// Draws `models` (with their transforms) into `targets.output`.
-    pub fn render(
+    /// Draws one model with an orbiting camera (the model viewer).
+    pub fn render_model(
         &self,
         ctx: &GpuContext,
         targets: &RenderTargets,
         camera: &OrbitCamera,
         settings: &ViewSettings,
-        models: &[(&GpuModel, Mat4)],
+        model: &GpuModel,
     ) {
-        let aspect = targets.width as f32 / targets.height as f32;
-        let view_proj = camera.projection(aspect) * camera.view();
+        let view = camera.camera_view(targets.width as f32 / targets.height as f32);
+        let lod = settings.lod.min(3);
+        let lod = if model.lods[lod].is_empty() { model.highest_lod() } else { lod };
+        self.render(ctx, targets, &view, settings, &[Mat4::IDENTITY], &[DrawBatch { model, lod, instances: 0..1 }]);
+    }
+
+    /// Draws batches of model instances into `targets.output`: `instances`
+    /// holds every transform, and each batch draws one model's LOD with a
+    /// range of them.
+    pub fn render(
+        &self,
+        ctx: &GpuContext,
+        targets: &RenderTargets,
+        camera: &CameraView,
+        settings: &ViewSettings,
+        instances: &[Mat4],
+        batches: &[DrawBatch],
+    ) -> RenderStats {
+        let view_proj = camera.projection * camera.view;
         let debug = settings.debug as u32;
+        let mut stats = RenderStats { instances: instances.len(), ..Default::default() };
         let frame = FrameUniform {
             view_proj: view_proj.to_cols_array_2d(),
-            camera_pos: camera.eye().extend(1.0).to_array(),
+            camera_pos: camera.eye.extend(1.0).to_array(),
             sun_dir: settings.sun_dir.normalize().extend(0.0).to_array(),
             sun_colour: settings.sun_colour.extend(0.0).to_array(),
             sky_colour: settings.sky_colour.extend(0.0).to_array(),
@@ -435,14 +469,22 @@ impl Renderer {
         let tm = TonemapUniform { values: [settings.exposure, 11.2, passthrough, 0.0] };
         ctx.queue.write_buffer(&self.tonemap_buffer, 0, bytemuck::bytes_of(&tm));
 
-        // One instance transform per model; draws index into it.
-        let instances: Vec<[f32; 16]> = models.iter().map(|(_, m)| m.to_cols_array()).collect();
+        // The transforms go in one buffer, kept between frames and grown as needed.
         let instance_buffer = (!instances.is_empty()).then(|| {
-            ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("instances"),
-                contents: bytemuck::cast_slice(&instances),
-                usage: wgpu::BufferUsages::VERTEX,
-            })
+            let mut slot = self.instance_buffer.lock().unwrap();
+            let bytes: &[u8] = bytemuck::cast_slice(instances);
+            if slot.as_ref().is_none_or(|b| b.size() < bytes.len() as u64) {
+                let size = (bytes.len() as u64).next_power_of_two().max(64 * 1024);
+                *slot = Some(ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("instances"),
+                    size,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            let buffer = slot.clone().unwrap();
+            ctx.queue.write_buffer(&buffer, 0, bytes);
+            buffer
         });
 
         let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
@@ -472,10 +514,11 @@ impl Renderer {
             }
             // Opaque and cut-out first, then decals, then blended draws.
             for phase in [AlphaMode::Opaque, AlphaMode::Decal, AlphaMode::Blend] {
-                for (mi, (model, _)) in models.iter().enumerate() {
-                    let lod = settings.lod.min(3);
-                    let lod = if model.lods[lod].is_empty() { model.highest_lod() } else { lod };
-                    for draw in &model.lods[lod] {
+                for batch in batches {
+                    if batch.instances.is_empty() {
+                        continue;
+                    }
+                    for draw in &batch.model.lods[batch.lod.min(3)] {
                         let draw_phase = if draw.alpha == AlphaMode::Cutout { AlphaMode::Opaque } else { draw.alpha };
                         if draw_phase != phase {
                             continue;
@@ -490,8 +533,8 @@ impl Renderer {
                         pass.set_bind_group(1, &draw.material.bind_group, &[]);
                         pass.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
                         pass.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
-                        let i = mi as u32;
-                        pass.draw_indexed(0..draw.mesh.index_count, 0, i..i + 1);
+                        pass.draw_indexed(0..draw.mesh.index_count, 0, batch.instances.clone());
+                        stats.draw_calls += 1;
                     }
                 }
             }
@@ -515,6 +558,7 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         ctx.queue.submit([encoder.finish()]);
+        stats
     }
 
     /// Reads the output back as tightly packed RGBA8 (sRGB) rows.
