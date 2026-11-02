@@ -13,6 +13,7 @@ use std::time::Instant;
 
 use indexmap::IndexMap;
 use rayon::prelude::*;
+use rf_formats::dotnet::dotnet_sort;
 use rf_formats::hash::{HashIndex, joaat};
 use rf_formats::rpf8::{FileRef, Rpf8FileSystem};
 
@@ -273,9 +274,15 @@ impl<'a> Builder<'a> {
             self.load_dat_file_content(&mut pack, &content);
             packs.push(pack);
         }
-        // List.Sort isn't stable, but no two packs have the same order.
-        packs.sort_by_key(|p| (p.order, p.minor_order));
-        self.content.mandatory_packs = packs;
+        // By order, then minor order. Several packs have the same, so the order
+        // of .NET's unstable sort matters.
+        let mut order: Vec<usize> = (0..packs.len()).collect();
+        dotnet_sort(&mut order, &|&a, &b| {
+            let (a, b) = (&packs[a], &packs[b]);
+            a.order.cmp(&b.order).then(a.minor_order.cmp(&b.minor_order)) as i32
+        });
+        let mut packs: Vec<Option<DataPack>> = packs.into_iter().map(Some).collect();
+        self.content.mandatory_packs = order.into_iter().filter_map(|i| packs[i].take()).collect();
 
         // The level (platform:/data/levels) and its data files.
         let Some(levels) = self.meta_load("platform:/data/levels") else {

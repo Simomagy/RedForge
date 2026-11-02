@@ -1,5 +1,9 @@
 //! Bit-exact reproductions of .NET behaviour that game data was built with.
 
+/// .NET's `List<T>.Sort(Comparison<T>)`, whose unstable order of equal items
+/// the C# RedForge's results depend on.
+pub use crate::formats::ybn::math::dotnet_sort;
+
 /// `System.Random` constructed with a seed (the legacy Knuth subtractive
 /// generator that .NET keeps for seeded instances).
 ///

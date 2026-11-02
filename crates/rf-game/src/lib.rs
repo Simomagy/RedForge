@@ -42,8 +42,6 @@
 //!   `0x<HASH>.rpf` instead of the C#'s made-up collision name; nothing can look
 //!   up either. The names the C# adds to its string index on the way (DLC
 //!   folders, `<name>.rpf`) aren't added.
-//! - The C# sorts the DLC packs by order with an unstable sort; this sort is
-//!   stable. No two packs have the same order.
 //! - Data bags are kept as plain structs of the fields the C# reads
 //!   ([`Archetype`], [`MapDataGroup`]...), not whole bags;
 //!   [`GameData::archetype_bag`] reads an archetype's bag from its ytyp.
