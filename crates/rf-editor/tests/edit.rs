@@ -241,3 +241,57 @@ fn project_round_trip() {
     assert_eq!(entries.len(), 1);
     assert!(entries[0].path.is_some() && !entries[0].dirty);
 }
+
+#[test]
+fn custom_props_from_a_project() {
+    let Some(mut ed) = editor() else { return };
+    let val = ed.world.places().into_iter().find(|(n, _)| n == "Valentine").unwrap().1;
+    settle(&mut ed, val);
+    // A drawable archetype of the game to copy.
+    let ids: Vec<EntityId> = ed.world.visible().iter().map(|e| e.id).collect();
+    let (source, model) = ids
+        .iter()
+        .filter_map(|id| ed.world.entity(*id).map(|e| e.archetype))
+        .find_map(|a| {
+            let m = rf_world::model_files(ed.data(), a)?;
+            (m.kind == rf_world::ModelKind::Ydr).then_some((a, m))
+        })
+        .expect("a ydr archetype");
+
+    // A project with a new ytyp (one archetype, `rf_test_prop`) and its ydr.
+    let dir = tempfile::tempdir().unwrap();
+    let name = rf_formats::hash::joaat("rf_test_prop");
+    let fs = rf_formats::rpf8::Rpf8FileSystem::open(
+        Path::new(&std::env::var("REDFORGE_GAME_DIR").unwrap()),
+        rf_formats::rpf8::Rpf8Keys::from_game_folder(Path::new(&std::env::var("REDFORGE_GAME_DIR").unwrap())).unwrap(),
+        ed.hashes(),
+    )
+    .unwrap();
+    let mut arch = ed.data().archetype_bag(&fs, ed.hashes(), source).unwrap();
+    arch.set_hash("name", name);
+    arch.set_hash("assetName", name);
+    let mut types = Meta::create("CMapTypes").unwrap();
+    types.set_hash("name", rf_formats::hash::joaat("rf_test_types"));
+    types.set_object("archetypes", Some(rf_formats::formats::databag::Value::Bags(vec![Some(arch)])));
+    std::fs::write(dir.path().join("rf_test_types.ytyp"), Meta::new(Some(types)).save().unwrap()).unwrap();
+    std::fs::write(dir.path().join("rf_test_prop.ydr"), fs.extract_loose(model.file).unwrap()).unwrap();
+
+    ed.new_project(&dir.path().join("p.rfproj")).unwrap();
+    let problems = ed.add_project_folder(dir.path());
+    assert!(problems.is_empty(), "{problems:?}");
+    assert!(ed.take_data_change().is_some());
+    let a = ed.data().archetypes.get(&name).expect("the project's archetype");
+    assert_eq!(a.asset_name, name);
+    let files = rf_world::model_files(ed.data(), name).expect("its model");
+    assert_eq!(files.file.archive, rf_formats::rpf8::LOOSE, "the model is the project's file");
+
+    // Placed in a new ymap, it shows.
+    ed.new_map("rf_test_map").unwrap();
+    let id = ed.place(name, Placement { position: Vec3::from(val), ..Default::default() }).unwrap();
+    settle(&mut ed, val);
+    assert!(ed.world.visible().iter().any(|e| e.id == id && e.archetype == name));
+
+    // Out of the project, the archetype goes.
+    ed.close_project();
+    assert!(!ed.data().archetypes.contains_key(&name));
+}

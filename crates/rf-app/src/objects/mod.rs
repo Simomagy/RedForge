@@ -108,8 +108,9 @@ impl List {
         let started = std::time::Instant::now();
         let mut ytyp_index: HashMap<FileRef, u32> = HashMap::new();
         let mut ytyps = Vec::new();
-        let mut rows = Vec::with_capacity(game.data.archetypes.len());
-        for a in game.data.archetypes.values() {
+        let data = game.data();
+        let mut rows = Vec::with_capacity(data.archetypes.len());
+        for a in data.archetypes.values() {
             let ytyp = *ytyp_index.entry(a.ytyp).or_insert_with(|| {
                 let stem = file_stem(&game.path(a.ytyp)).to_owned();
                 ytyps.push((stem.clone(), stem.to_lowercase()));
@@ -151,6 +152,8 @@ fn file_stem(path: &str) -> &str {
 
 pub struct Objects {
     list: Option<Job<Arc<List>>>,
+    /// The game data's version the list was made from.
+    list_version: Option<u64>,
     search: String,
     filter: Option<Kind>,
     /// The rows passing the search and the filter, and which those were.
@@ -172,6 +175,7 @@ impl Objects {
     pub fn new(tile_size: f32) -> Self {
         Self {
             list: None,
+            list_version: None,
             search: String::new(),
             filter: None,
             shown: Vec::new(),
@@ -212,6 +216,12 @@ impl Objects {
         editor: Option<&mut Editor>,
         tools: &mut Tools,
     ) {
+        // The list again when the game data changes (a project's new archetypes).
+        if self.list_version != Some(game.data_version()) {
+            self.list_version = Some(game.data_version());
+            self.list = None;
+            self.shown_for = None;
+        }
         let job = self.list.get_or_insert_with(|| {
             let g = game.clone();
             Job::spawn(ui.ctx(), move || Ok(Arc::new(List::build(&g))))
@@ -397,7 +407,8 @@ impl Tile {
 
 /// The chosen object's name, type, ytyp, size and textures.
 fn details_ui(ui: &mut egui::Ui, game: &Game, chosen: Option<u32>) {
-    let Some(a) = chosen.and_then(|h| game.data.archetypes.get(&h)) else {
+    let data = game.data();
+    let Some(a) = chosen.and_then(|h| data.archetypes.get(&h)) else {
         ui.label(RichText::new("Choose an object, then click in the map to place it.").weak());
         return;
     };

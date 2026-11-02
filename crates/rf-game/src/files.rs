@@ -30,8 +30,8 @@ pub fn load_doc(fs: &Rpf8FileSystem, hashes: &HashIndex, f: FileRef) -> Option<D
             Meta::read(&d).map(|m| m.root.map(|bag| Doc { bag, schema: Some(m.schema) })).map_err(|e| e.to_string())
         })
     } else {
-        let name = &fs.archive(f).names[f.entry as usize];
-        fs.extract(f).map_err(|e| e.to_string()).and_then(|d| binary_doc(&d, name, hashes))
+        let name = fs.name(f);
+        fs.extract(f).map_err(|e| e.to_string()).and_then(|d| binary_doc(&d, &name, hashes))
     };
     match result {
         Ok(doc) => doc,

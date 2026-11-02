@@ -74,6 +74,37 @@ impl World {
         self.relink = true;
     }
 
+    /// Uses other game data (the game's with a project's files): new loads,
+    /// and the edited maps placed again now, use it. Maps already loaded stay
+    /// as they are (their archetypes' boxes and LOD distances only change for
+    /// archetypes a project replaces).
+    pub fn set_data(&mut self, data: Arc<rf_game::GameData>) {
+        for cancel in self.pending.values() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.pending.clear();
+        let old = &self.loader.src;
+        let src = Arc::new(crate::map::Sources {
+            fs: old.fs.clone(),
+            hashes: old.hashes.clone(),
+            data,
+            interiors: std::sync::Mutex::new(std::collections::HashMap::new()),
+        });
+        self.loader = crate::Loader::new(src);
+        let overrides: Vec<(u32, Arc<DataBag>)> = self.overrides.iter().map(|(n, b)| (*n, b.clone())).collect();
+        for (node, bag) in overrides {
+            let src = &self.loader.src;
+            let map = MapData::build(&bag, &src.data.archetypes, &|a| src.interior(a));
+            let mut l = Loaded::new(map);
+            if self.streamed.binary_search(&node).is_err() {
+                l.unwanted_since = Some(Instant::now());
+            }
+            self.loaded.insert(node, l);
+        }
+        self.restream = true;
+        self.relink = true;
+    }
+
     /// Goes back to the ymap's file (or, for a new ymap, removes it). With the
     /// file's data in `original`, the map is rebuilt from it now; else it's
     /// read again like any other.

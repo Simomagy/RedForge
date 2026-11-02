@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 pub use archive::{Rpf8Archive, Rpf8Header};
 pub use entry::{ENTRY_SIZE, Rpf8Entry, ext_name, rsc8_header};
-pub use filesystem::{FileRef, LoadError, Rpf8FileSystem};
+pub use filesystem::{FileRef, LOOSE, LoadError, Rpf8FileSystem};
 pub use keys::Rpf8Keys;
 
 #[derive(Debug, thiserror::Error)]

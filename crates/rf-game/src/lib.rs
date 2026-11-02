@@ -131,6 +131,29 @@ impl GameData {
         init::load(fs, hashes)
     }
 
+    /// The game's data with a project's files ([mounted](Rpf8FileSystem::mount)):
+    /// each replaces the game's stream entry of its name and type (the C#'s
+    /// `AddStreamEntry` for project files), and a ytyp's archetypes are added
+    /// (replacing the game's of the same name), so new props can be placed.
+    pub fn with_project(&self, fs: &Rpf8FileSystem, hashes: &HashIndex, files: &[FileRef]) -> GameData {
+        let mut gd = self.clone();
+        for &f in files {
+            let e = fs.entry(f);
+            if let Some(table) = gd.stream_entries.get_mut(stream_index(e.ext_id)) {
+                table.insert(e.name_hash, f);
+            }
+            if e.ext_id == init::YTYP
+                && let Some(doc) = load_doc(fs, hashes, f)
+            {
+                for a in manifest::ytyp_archetypes(&doc, f) {
+                    gd.archetypes.insert(a.name, a);
+                }
+                gd.ytyp_files.push(f);
+            }
+        }
+        gd
+    }
+
     // -----------------------------------------------------------------------
     // Stream entries
 

@@ -38,14 +38,34 @@ pub struct Game {
     pub fs: Arc<Rpf8FileSystem>,
     pub hashes: Arc<HashIndex>,
     pub index: AssetIndex,
-    /// Archetypes, texture dictionary relationships and the like.
-    pub data: Arc<GameData>,
+    /// Archetypes, texture dictionary relationships and the like: the game's,
+    /// or with the project's files on top (see [`Game::set_data`]), and how
+    /// many times it changed.
+    data: std::sync::RwLock<(u64, Arc<GameData>)>,
     pub tree: Folder,
     /// Every path, lowercase, for searching.
     pub paths: Vec<(String, FileRef)>,
 }
 
 impl Game {
+    /// The game data now.
+    pub fn data(&self) -> Arc<GameData> {
+        self.data.read().unwrap().1.clone()
+    }
+
+    /// Changes each time the data does, for caches built from it.
+    pub fn data_version(&self) -> u64 {
+        self.data.read().unwrap().0
+    }
+
+    /// Uses other game data (the project's files on top of the game's).
+    pub fn set_data(&self, data: Arc<GameData>) {
+        let mut d = self.data.write().unwrap();
+        if !Arc::ptr_eq(&d.1, &data) {
+            *d = (d.0 + 1, data);
+        }
+    }
+
     pub fn path(&self, f: FileRef) -> String {
         self.fs.path(f)
     }
@@ -92,7 +112,15 @@ fn load(folder: PathBuf, progress: impl Fn(&str)) -> Result<Game> {
     }
     tree.sort();
     log::info!("{} files in {} archives, ready in {:.2?}", fs.file_count(), fs.archives.len(), t.elapsed());
-    Ok(Game { folder, fs: Arc::new(fs), hashes: Arc::new(hashes), index, data: Arc::new(data), tree, paths })
+    Ok(Game {
+        folder,
+        fs: Arc::new(fs),
+        hashes: Arc::new(hashes),
+        index,
+        data: std::sync::RwLock::new((0, Arc::new(data))),
+        tree,
+        paths,
+    })
 }
 
 pub enum LoadMessage {

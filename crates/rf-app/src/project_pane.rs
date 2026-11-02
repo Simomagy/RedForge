@@ -118,13 +118,6 @@ impl ProjectPane {
                 self.entry_ui(ui, editor, e);
             }
         });
-        if !editor.unloaded.is_empty() {
-            ui.label(
-                RichText::new("Grey files aren't loaded yet: custom models, textures and new ytyps come later.")
-                    .weak()
-                    .small(),
-            );
-        }
         ui.separator();
         self.export_ui(ui, editor, settings);
         if let Some(s) = &self.status {
@@ -142,9 +135,7 @@ impl ProjectPane {
                 }
             }
             let mut text = RichText::new(format!("{}{}", e.name, if e.dirty { " *" } else { "" }));
-            if e.doc.is_none() {
-                text = text.weak();
-            } else if e.path.is_none() {
+            if e.path.is_none() {
                 text = text.italics();
             }
             let tip = match &e.path {

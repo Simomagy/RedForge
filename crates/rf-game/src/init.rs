@@ -550,7 +550,7 @@ impl<'a> Builder<'a> {
     }
 }
 
-const YTYP: u8 = 74;
+pub(crate) const YTYP: u8 = 74;
 
 fn push_unique(list: &mut Vec<FileRef>, f: FileRef) {
     if !list.contains(&f) {

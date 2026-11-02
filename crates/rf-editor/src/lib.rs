@@ -158,7 +158,12 @@ pub struct Editor {
     pub world: World,
     fs: Arc<Rpf8FileSystem>,
     hashes: Arc<HashIndex>,
+    /// The game's data, with the project's files on top.
     data: Arc<GameData>,
+    /// The game's own.
+    base_data: Arc<GameData>,
+    /// Whether `data` changed since the app last asked.
+    data_changed: bool,
     maps: HashMap<u32, MapDoc>,
     types: HashMap<FileRef, TypesDoc>,
     selection: Vec<EntityId>,
@@ -170,9 +175,9 @@ pub struct Editor {
     pub target: Option<u32>,
     /// The project: made when something is first edited, as in the C#.
     pub project: Option<Project>,
-    /// Project files that aren't loaded (custom models, textures, collisions
-    /// and new ytyps aren't yet).
-    pub unloaded: Vec<PathBuf>,
+    /// The project's other files (models, textures, collisions...): the game
+    /// data uses them in place of the game's of the same name.
+    pub assets: Vec<PathBuf>,
 }
 
 /// How many steps undo keeps.
@@ -185,7 +190,9 @@ impl Editor {
             world,
             fs,
             hashes,
+            base_data: data.clone(),
             data,
+            data_changed: false,
             maps: HashMap::new(),
             types: HashMap::new(),
             selection: Vec::new(),
@@ -194,7 +201,44 @@ impl Editor {
             clipboard: Vec::new(),
             target: None,
             project: None,
-            unloaded: Vec::new(),
+            assets: Vec::new(),
+        }
+    }
+
+    /// The game data with the project's files, when it changed since last
+    /// asked (the app's model caches then start over).
+    pub fn take_data_change(&mut self) -> Option<Arc<GameData>> {
+        std::mem::take(&mut self.data_changed).then(|| self.data.clone())
+    }
+
+    /// The game data with the project's files on top: every project file but
+    /// the ymaps ([mounted](Rpf8FileSystem::mount)) replaces the game's of the
+    /// same name, and the project's ytyps add their archetypes.
+    fn refresh_data(&mut self) {
+        let files: Vec<PathBuf> = self
+            .project
+            .as_ref()
+            .map(|p| p.items())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| project::extension(f) != "ymap")
+            .collect();
+        let mut refs = Vec::new();
+        for f in &files {
+            match self.fs.mount(f) {
+                Ok(r) => refs.push(r),
+                Err(e) => log::warn!("{}: {e}", f.display()),
+            }
+        }
+        let data = if refs.is_empty() {
+            self.base_data.clone()
+        } else {
+            Arc::new(self.base_data.with_project(&self.fs, &self.hashes, &refs))
+        };
+        if !Arc::ptr_eq(&data, &self.data) {
+            self.data = data.clone();
+            self.world.set_data(data);
+            self.data_changed = true;
         }
     }
 
@@ -286,6 +330,7 @@ impl Editor {
         let doc = self.types.get_mut(&file).unwrap();
         doc.saved = Some(doc.root.clone());
         doc.path = Some(path.to_owned());
+        self.refresh_data();
         Ok(())
     }
 
@@ -440,7 +485,8 @@ impl Editor {
             self.types.remove(&file);
         }
         self.project = None;
-        self.unloaded.clear();
+        self.assets.clear();
+        self.refresh_data();
         self.selection.clear();
         self.target = None;
         self.undo.clear();
@@ -478,6 +524,8 @@ impl Editor {
     }
 
     fn load_project_files(&mut self, files: &[PathBuf]) -> Vec<String> {
+        // The models, textures and ytyps first, so the ymaps find them.
+        self.refresh_data();
         let mut problems = Vec::new();
         for f in files {
             let result = match project::extension(f).as_str() {
@@ -487,11 +535,12 @@ impl Editor {
             };
             match result {
                 Ok(()) => {}
-                Err(e) if e.is_empty() => self.unloaded.push(f.clone()),
-                Err(e) => {
-                    problems.push(e);
-                    self.unloaded.push(f.clone());
+                Err(e) if e.is_empty() => {
+                    if !self.assets.contains(f) {
+                        self.assets.push(f.clone());
+                    }
                 }
+                Err(e) => problems.push(e),
             }
         }
         problems
@@ -560,7 +609,7 @@ impl Editor {
                 dirty: t.is_dirty(),
             });
         }
-        for f in &self.unloaded {
+        for f in &self.assets {
             let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
             out.push(ProjectEntry { name, doc: None, path: Some(f.clone()), dirty: false });
         }
@@ -728,8 +777,8 @@ impl Editor {
         std::fs::write(path, data).map_err(|e| format!("{}: {e}", path.display()))?;
         let project = self.project.get_or_insert_with(Project::new);
         project.add_file(path);
-        if !self.unloaded.iter().any(|f| f == path) {
-            self.unloaded.push(path.to_owned());
+        if !self.assets.iter().any(|f| f == path) {
+            self.assets.push(path.to_owned());
         }
         self.save_project_file()
     }
@@ -763,8 +812,9 @@ impl Editor {
                     self.types.remove(&file);
                 }
             }
-            None => self.unloaded.retain(|f| Some(f) != entry.path.as_ref()),
+            None => self.assets.retain(|f| Some(f) != entry.path.as_ref()),
         }
+        self.refresh_data();
         self.selection.retain(|id| self.maps.contains_key(&id.node));
         self.undo.clear();
         self.redo.clear();

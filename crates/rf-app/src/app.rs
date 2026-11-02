@@ -213,8 +213,7 @@ impl RedForgeApp {
     /// The world map, with the editor (made the first time), and Properties
     /// and Objects beside it.
     fn open_world(&mut self, game: &Arc<Game>, place: Option<&str>) -> bool {
-        let editor =
-            self.editor.get_or_insert_with(|| Editor::new(game.fs.clone(), game.hashes.clone(), game.data.clone()));
+        let editor = self.editor.get_or_insert_with(|| Editor::new(game.fs.clone(), game.hashes.clone(), game.data()));
         let Some(view) = world_view(game, &self.gpu, editor, place.unwrap_or_default()) else { return false };
         self.show_tab(Tab::Map(Box::new(view)));
         self.show_side_tab(Tab::Properties, false);
@@ -580,7 +579,7 @@ impl eframe::App for RedForgeApp {
                     LoadMessage::Done(result) => match *result {
                         Ok(g) => {
                             let g = Arc::new(g);
-                            self.editor = Some(Editor::new(g.fs.clone(), g.hashes.clone(), g.data.clone()));
+                            self.editor = Some(Editor::new(g.fs.clone(), g.hashes.clone(), g.data()));
                             self.blender.get_or_insert_with(|| BlenderLink::start(ctx, &self.settings));
                             self.game = GameState::Ready(g);
                             self.objects.reset(&self.gpu);
@@ -735,6 +734,12 @@ impl eframe::App for RedForgeApp {
         // Blender's requests, answered between frames.
         if let (Some(b), Some(ed), Some(g)) = (&mut self.blender, &mut self.editor, &game) {
             b.poll(ed, g);
+        }
+        // The project's files changed the game data: the caches start over.
+        if let (Some(ed), Some(g)) = (&mut self.editor, &game)
+            && let Some(data) = ed.take_data_change()
+        {
+            g.set_data(data);
         }
 
         // Ctrl+S saves the project's files, wherever the focus is.

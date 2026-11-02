@@ -207,7 +207,7 @@ impl Thumbnails {
     /// has none.
     fn bounds(&self, archetype: u32, model: &GpuModel) -> (Vec3, Vec3) {
         let from_model = (Vec3::from(model.min), Vec3::from(model.max));
-        let Some(a) = self.game.data.archetypes.get(&archetype) else { return from_model };
+        let Some(a) = self.game.data().archetypes.get(&archetype).cloned() else { return from_model };
         let (min, max) = (Vec3::from(a.bb_min), Vec3::from(a.bb_max));
         let size = max - min;
         if min.is_finite() && max.is_finite() && size.min_element() >= 0.0 && size.length() > 0.01 {

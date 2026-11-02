@@ -85,7 +85,7 @@ impl BridgeHost for Host<'_> {
         let mut out = Vec::new();
         for &id in self.editor.selection() {
             let (Some(archetype), Some(p)) = (self.archetype(id), self.editor.placement(id)) else { continue };
-            let Some(model) = ModelSource::of_archetype(&g.fs, &g.data, &g.hashes, archetype) else { continue };
+            let Some(model) = ModelSource::of_archetype(&g.fs, &g.data(), &g.hashes, archetype) else { continue };
             out.push(SelectedObject {
                 object: Sent { id, archetype },
                 name: g.hashes.name(archetype),

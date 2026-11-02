@@ -210,7 +210,7 @@ enum Done {
 }
 
 /// The loading threads.
-struct Loader {
+pub(crate) struct Loader {
     pool: rayon::ThreadPool,
     tx: mpsc::Sender<Done>,
     rx: mpsc::Receiver<Done>,
@@ -218,7 +218,7 @@ struct Loader {
 }
 
 impl Loader {
-    fn new(src: Arc<Sources>) -> Self {
+    pub(crate) fn new(src: Arc<Sources>) -> Self {
         let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads((cores / 2).clamp(2, 8))

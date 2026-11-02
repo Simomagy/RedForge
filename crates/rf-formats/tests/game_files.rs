@@ -51,7 +51,7 @@ fn resources_extract_raw_and_loose() {
             .files()
             .find(|(p, f)| p.ends_with(ext) && fs.entry(*f).is_encrypted() && fs.entry(*f).compressor() == 2)
             .unwrap_or_else(|| panic!("no encrypted, compressed {ext}"));
-        let e = *fs.entry(f);
+        let e = fs.entry(f);
         let raw = fs.extract(f).unwrap_or_else(|err| panic!("{path}: {err}"));
         assert_eq!(raw.len() as u64, e.decompressed_size(), "{path}");
 

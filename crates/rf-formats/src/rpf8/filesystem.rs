@@ -1,13 +1,25 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use rayon::prelude::*;
 
 use super::{Rpf8Archive, Rpf8Entry, Rpf8Error, Rpf8Keys};
 use crate::hash::HashIndex;
 
-/// A file inside the archives: (archive index, entry index).
+/// [`FileRef::archive`] of a file on disk, [mounted](Rpf8FileSystem::mount)
+/// beside the archives (`entry` is then its index among those).
+pub const LOOSE: u32 = u32::MAX;
+
+/// A file on disk mounted beside the archives, with an entry made up from it.
+struct LooseFile {
+    path: PathBuf,
+    entry: Rpf8Entry,
+}
+
+/// A file inside the archives: (archive index, entry index), or a mounted file
+/// on disk ([`LOOSE`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileRef {
     pub archive: u32,
@@ -33,6 +45,8 @@ pub struct Rpf8FileSystem {
     /// Lowercase full path → file.
     files: HashMap<Box<str>, FileRef>,
     pub errors: Vec<LoadError>,
+    /// Files on disk used like the archives' (a project's).
+    loose: RwLock<Vec<LooseFile>>,
 }
 
 impl Rpf8FileSystem {
@@ -78,6 +92,7 @@ impl Rpf8FileSystem {
             archives: Vec::new(),
             files: HashMap::new(),
             errors: Vec::new(),
+            loose: RwLock::new(Vec::new()),
         };
         for (mut archives, errors) in loaded {
             // Parent indices are local to each root's list until now.
@@ -121,16 +136,90 @@ impl Rpf8FileSystem {
         self.files.iter().map(|(k, v)| (&**k, *v))
     }
 
+    /// The archive a file is in (not for [mounted](Self::mount) files).
     pub fn archive(&self, f: FileRef) -> &Rpf8Archive {
         &self.archives[f.archive as usize]
     }
 
-    pub fn entry(&self, f: FileRef) -> &Rpf8Entry {
-        &self.archive(f).entries[f.entry as usize]
+    pub fn entry(&self, f: FileRef) -> Rpf8Entry {
+        match self.loose_file(f) {
+            Some((_, e)) => e,
+            None => self.archive(f).entries[f.entry as usize],
+        }
     }
 
+    /// Its full path in the archives, or on disk for a mounted file.
     pub fn path(&self, f: FileRef) -> String {
-        self.archive(f).entry_path(f.entry as usize)
+        match self.loose_file(f) {
+            Some((p, _)) => p.to_string_lossy().into_owned(),
+            None => self.archive(f).entry_path(f.entry as usize),
+        }
+    }
+
+    /// Its file name.
+    pub fn name(&self, f: FileRef) -> String {
+        match self.loose_file(f) {
+            Some((p, _)) => p.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+            None => self.archive(f).names[f.entry as usize].to_string(),
+        }
+    }
+
+    /// Uses a file on disk like the archives' files (a project's model,
+    /// textures, ytyp...): its entry is made up from its name and, for a
+    /// resource, its RSC8 header. Mounting the same path again gives the same
+    /// reference (with the file read again).
+    pub fn mount(&self, path: &Path) -> Result<FileRef, Rpf8Error> {
+        let mut head = [0u8; 16];
+        {
+            use std::io::Read;
+            let mut file = File::open(path)?;
+            let mut n = 0;
+            while n < 16 {
+                match file.read(&mut head[n..])? {
+                    0 => break,
+                    k => n += k,
+                }
+            }
+        }
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+        let (stem, ext) = name.rsplit_once('.').unwrap_or((&name, ""));
+        let ext_id = (0..=u8::MAX).find(|&id| super::ext_name(id) == Some(ext)).unwrap_or(0xFF);
+        let mut entry = Rpf8Entry {
+            name_hash: crate::hash::joaat(stem),
+            enc_config: 0,
+            key_id: 0xFF,
+            ext_id,
+            flags: 0,
+            data1: 0,
+            virtual_flags: 0,
+            physical_flags: 0,
+        };
+        if crate::rsc8::is_loose_resource(&head) {
+            let word = |i: usize| u32::from_le_bytes(head[i..i + 4].try_into().unwrap());
+            entry.flags = 1;
+            entry.virtual_flags = word(8);
+            entry.physical_flags = word(12);
+        }
+        let mut loose = self.loose.write().unwrap();
+        let index = match loose.iter().position(|l| l.path == path) {
+            Some(i) => {
+                loose[i].entry = entry;
+                i
+            }
+            None => {
+                loose.push(LooseFile { path: path.to_owned(), entry });
+                loose.len() - 1
+            }
+        };
+        Ok(FileRef { archive: LOOSE, entry: index as u32 })
+    }
+
+    fn loose_file(&self, f: FileRef) -> Option<(PathBuf, Rpf8Entry)> {
+        if f.archive != LOOSE {
+            return None;
+        }
+        let loose = self.loose.read().unwrap();
+        loose.get(f.entry as usize).map(|l| (l.path.clone(), l.entry))
     }
 
     /// The archive file on disk that holds an archive.
@@ -144,18 +233,25 @@ impl Rpf8FileSystem {
 
     /// A file's data, decrypted and decompressed.
     pub fn extract(&self, f: FileRef) -> Result<Vec<u8>, Rpf8Error> {
+        if let Some((path, e)) = self.loose_file(f) {
+            let data = std::fs::read(path)?;
+            return if e.is_resource() { crate::rsc8::read_loose(&data).map(|(_, d)| d) } else { Ok(data) };
+        }
         self.archive(f).extract(self.file_of(f), f.entry as usize, &self.keys)
     }
 
     /// A file as it would be on disk: resources with an `RSC8` header.
     pub fn extract_loose(&self, f: FileRef) -> Result<Vec<u8>, Rpf8Error> {
+        if let Some((path, _)) = self.loose_file(f) {
+            return Ok(std::fs::read(path)?);
+        }
         self.archive(f).extract_loose(self.file_of(f), f.entry as usize, &self.keys)
     }
 
     /// A resource as a loose file compressed with deflate, the way RedForge saves
     /// them; other files are just decompressed.
     pub fn extract_loose_deflate(&self, f: FileRef) -> Result<Vec<u8>, Rpf8Error> {
-        let e = *self.entry(f);
+        let e = self.entry(f);
         let data = self.extract(f)?;
         if !e.is_resource() {
             return Ok(data);

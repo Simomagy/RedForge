@@ -52,7 +52,7 @@ impl ModelViewer {
             let mut refs: Vec<FileRef> = Vec::new();
             for (name, _) in &file.drawables {
                 let piece = rf_formats::hash::joaat(&name.to_lowercase());
-                refs.extend(g.data.txds_for_piece(piece, file_hash));
+                refs.extend(g.data().txds_for_piece(piece, file_hash));
             }
             refs.extend(related_dictionaries(&g.fs, &g.index, &p));
             let mut seen = std::collections::HashSet::new();

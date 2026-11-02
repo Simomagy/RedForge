@@ -74,6 +74,8 @@ pub struct ModelCache {
     /// Set when a model was forgotten: what only it used can go.
     trim: bool,
     pub uploaded_last_frame: usize,
+    /// The game data's version the models came from.
+    data_version: u64,
 }
 
 fn decode(game: &Game, files: &Mutex<FileCache>, archetype: u32, mf: &ModelFiles) -> Decoded {
@@ -171,6 +173,7 @@ impl ModelCache {
     /// files between evictions.
     pub fn with_threads(game: Arc<Game>, threads: usize, kept_files: usize) -> Self {
         let (dec_tx, dec_rx) = channel();
+        let data_version = game.data_version();
         let files = Arc::new(Mutex::new(FileCache::default()));
         // A few workers share one queue.
         let requests = Arc::new(Requests::default());
@@ -206,6 +209,7 @@ impl ModelCache {
             kept_files,
             trim: false,
             uploaded_last_frame: 0,
+            data_version,
         }
     }
 
@@ -224,7 +228,16 @@ impl ModelCache {
             e.last_used = now;
             return e.slot.clone();
         }
-        let slot = match rf_world::model_files(&self.game.data, archetype) {
+        let version = self.game.data_version();
+        if version != self.data_version {
+            // Other game data (the project's files changed): every model again.
+            self.data_version = version;
+            self.models.clear();
+            self.textures.clear();
+            *self.files.lock().unwrap() = FileCache::default();
+            self.requests.queue.lock().unwrap().jobs.clear();
+        }
+        let slot = match rf_world::model_files(&self.game.data(), archetype) {
             Some(mf) => {
                 self.requests.queue.lock().unwrap().jobs.push_back((archetype, mf));
                 self.requests.added.notify_one();
