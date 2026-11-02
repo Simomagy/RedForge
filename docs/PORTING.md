@@ -1,9 +1,10 @@
 # Porting a format from the C# RedForge
 
 The Rust port reads, writes and converts the same game files as the C# RedForge
-(`../RedForge-Source`, frozen as the reference). "Done" for a format means the
-Rust and the C# produce **identical XML** from the same game files, and a file the
-Rust writes from XML is read by the C# exactly like one the C# writes itself.
+(`../RedForge-Source`, frozen as the reference). ""Done" for a format means that on a
+varied sample of game files the Rust and the C# produce **identical XML**, and a
+file the Rust writes from XML is read by the C# exactly like one the C# writes
+itself.
 
 ## The reference: `rf-oracle`
 
@@ -101,9 +102,12 @@ named after the file). These are compared byte for byte too.
 1. Port the structs with RSC8 read and write, keeping the C# field order.
 2. Port `Read`/`Write(MetaNodeReader/Writer)` into `from_xml`/`to_xml`, keeping the
    C# conditions ("written only if non-zero" and so on) exactly.
-3. `rf compare <ext> --limit 300 --write`. Repeat with other `--filter`s and bigger
-   limits until there are 0 differences and 0 Rust errors. When the C# itself
-   fails on a file, that's fine; note it.
+3. While fixing, run small targeted compares (`--limit 30`, `--filter`). To
+   finish, run one `rf compare <ext> --limit 100 --write` over varied files.
+   Fix what shows up if it's quick. Rare edge cases that would take long go in
+   the module doc as known issues instead: perfection isn't the goal, and bugs
+   get fixed as they come up. When the C# itself fails on a file, that's fine;
+   note it.
 4. Add a test (unit or under `tests/`, skipped without `REDFORGE_GAME_DIR`).
 5. `cargo clippy --all-targets` clean, `cargo fmt`.
 6. Only touch your format's files. If shared code (`xml/`, `rsc8/`, `hash.rs`)
