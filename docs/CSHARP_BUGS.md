@@ -17,6 +17,10 @@ differently from the C#'s.
 | yfd | An empty `<Entries />` is written as a null pointer. Two filters whose names hash the same make the write fail. | Empty entries disappear after a round trip. |
 | ybn | Every triangle area is `float.Epsilon`: the first vertex is used three times, giving NaN. | Areas in written files are wrong. |
 | rbf | Content without a name is written as `<>`. | That XML can't be read back by anyone. |
+| yld | `BridgeSimGfx` writes `UnknownA0` twice and never `Unknown100`. | That array is lost through XML. |
+| yft | Environment cloth drawables lose their skeleton on the first XML round trip, and their meshes' bone indices on the next. | Cloth in fragments degrades through XML. |
+| yft | From XML, physics drawables always get the main skeleton and the composite's children as bounds, whatever the XML says. | `Bounds` in the XML of physics drawables are ignored. |
+| ybn/yft | Collision geometry vertices drift and get reordered on every trip through XML. | Collisions change slightly with each round trip. |
 
 ## Files the C# can't write (the Rust can)
 

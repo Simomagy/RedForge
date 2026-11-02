@@ -4,14 +4,15 @@ A map editor for **RedM** (Red Dead Redemption 2), by Prysma Studio. This is the
 Rust rewrite of the C#/WinUI RedForge, which grew out of CodeX. It runs on Linux
 and Windows.
 
-It is early work. Today the game's archives can be read; the editor itself comes
-in later milestones.
+It is early work. Today the game's archives can be read, and every file format
+RedForge handles can be read, written and converted to and from XML, matching
+the C# RedForge. The editor itself comes in later milestones.
 
 ## Crates
 
 | Crate | What it is |
 |---|---|
-| `rf-formats` | The game's file formats as plain data: RPF8 archives today, RSC8 resources and metadata next. No rendering, no UI. |
+| `rf-formats` | The game's file formats as plain data: RPF8 archives; RSC8 resources (ydr, ydd, yft, ytd, ybn, ycd, yad, yld, yed, ynv, yfd, ypmd, yldb, yvr, ywr); metadata (ymap, ytyp, ymt, PSO, RBF); fxdb; DDS. No rendering, no UI. |
 | `rf-cli` | The `rf` command: list, extract and check game files. |
 
 ## The `rf` command
@@ -28,7 +29,13 @@ target/release/rf extract --loose --filter twi_01_strm -o out   # as RedM loads 
 target/release/rf check --limit 20000      # decrypt + decompress a sample, report failures
 target/release/rf stats
 target/release/rf hash prop_name
+target/release/rf xml out/foo.ydr                  # loose file -> foo.ydr.xml (+ foo/ with the DDS textures)
+target/release/rf from-xml out/foo.ydr.xml         # and back
 ```
+
+`rf compare <ext>` checks the port against the C# RedForge on game files (see
+[docs/PORTING.md](docs/PORTING.md)). [docs/CSHARP_BUGS.md](docs/CSHARP_BUGS.md)
+lists the C# bugs the port keeps for compatibility.
 
 Paths are `/`-separated and start from the game folder, like
 `levels_3.rpf/levels/rdr3/interiors/van_farmhouse01_int.rpf/van_03_monster.ydr`.
