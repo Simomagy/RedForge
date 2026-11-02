@@ -3674,6 +3674,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rf-world"
+version = "0.1.0"
+dependencies = [
+ "rf-formats",
+ "rf-game",
+]
+
+[[package]]
 name = "rfd"
 version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
