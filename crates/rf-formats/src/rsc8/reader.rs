@@ -130,6 +130,19 @@ impl<'a> Rsc8Reader<'a> {
         self.follow(ptr, |r| (0..count).map(|_| f(r)).collect())
     }
 
+    /// `len` bytes at `ptr`, with zeros for any past the end of the data, as the
+    /// C#'s `BufferUtil.ReadArray` copies what there is.
+    pub fn bytes_at_padded(&self, ptr: u64, len: usize) -> Result<Vec<u8>> {
+        let off = self.offset_of(ptr)?;
+        if off > self.data.len() {
+            bail!("read of {len} bytes at 0x{ptr:X} is past the end of the data");
+        }
+        let mut v = vec![0; len];
+        let n = (self.data.len() - off).min(len);
+        v[..n].copy_from_slice(&self.data[off..off + n]);
+        Ok(v)
+    }
+
     /// A NUL-terminated string at `ptr`.
     pub fn string_at(&self, ptr: u64) -> Result<Option<String>> {
         if ptr == 0 {

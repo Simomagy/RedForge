@@ -8,6 +8,7 @@
 
 pub mod dat;
 pub mod databag;
+pub mod dds;
 pub mod fxdb;
 pub mod meta;
 pub mod pso;
