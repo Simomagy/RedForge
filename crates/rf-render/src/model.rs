@@ -566,6 +566,9 @@ pub struct GpuModel {
     pub lod_dists: [f32; 4],
     /// Texture names that couldn't be found.
     pub missing_textures: Vec<String>,
+    /// The skeleton's bones at rest (model space) by tag, for what's placed
+    /// on a bone (an archetype's lights).
+    pub bones: Vec<(u16, glam::Mat4)>,
 }
 
 impl GpuModel {
@@ -762,7 +765,21 @@ impl GpuModel {
         if min[0] > max[0] {
             (min, max) = (d.bounding_box_min, d.bounding_box_max);
         }
-        Self { name: name.to_owned(), lods, rigs, min, max, lod_dists: d.lod_dists, missing_textures: resolver.missing }
+        let rest = d.skeleton.as_ref().map(crate::anim::Pose::from_skeleton);
+        let bones = match &rest {
+            Some(p) => bones.iter().filter_map(|b| Some((b.tag, p.bone_transform(b.tag)?))).collect(),
+            None => Vec::new(),
+        };
+        Self {
+            name: name.to_owned(),
+            lods,
+            rigs,
+            min,
+            max,
+            lod_dists: d.lod_dists,
+            missing_textures: resolver.missing,
+            bones,
+        }
     }
 }
 

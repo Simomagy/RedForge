@@ -478,6 +478,7 @@ pub(crate) mod tests {
             time_flags: 0,
             ytyp: FileRef { archive: 0, entry: 0 },
             index: 0,
+            lights: None,
         }
     }
 

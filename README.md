@@ -20,11 +20,13 @@ It is early work. Today:
   objects of a ymap or interior;
 - the Blender add-on (`blender/redforge_bridge`) edits the selection's models
   in Blender and sends them back;
-- the map is lit by the game's timecycle for the hour and weather;
+- the renderer is deferred as the C# RedForge's: cascaded sun shadows, SSAO,
+  the sky's atmosphere and environment lighting, the map's lights, eye
+  adaptation, bloom, lens flares and RDR2's tone curve, all from the game's
+  timecycle for the hour and weather;
 - clip dictionaries play on peds and animals; any file shows as hex.
 
-Graphics parity with the C# (deferred lighting, shadows, atmosphere) and
-RDR2-faithful shaders come in the next milestones.
+RDR2-faithful shaders come in the next milestone.
 
 ## Running it
 
@@ -36,7 +38,9 @@ It asks for the game folder the first time (or takes `REDFORGE_GAME_DIR`), and
 keeps it in `RedForge.Settings.ini` in the user's config folder.
 
 In the map: drag with the mouse to look around, WASD to move, R/F for up/down,
-Shift to go faster, the wheel to change speed. "Go to…" jumps to a town.
+Shift to go faster, the wheel to change speed. "Go to…" jumps to a town. The
+toolbar sets the hour and weather; the exposure (in EV) adds to the one the
+image adapts to, as the C#'s `Render.HDR.Exposure`.
 
 Editing (the keys are the C# RedForge's):
 
@@ -121,11 +125,11 @@ the map's hour.
 | Crate | What it is |
 |---|---|
 | `rf-formats` | The game's file formats as plain data: RPF8 archives; RSC8 resources (ydr, ydd, yft, ytd, ybn, ycd, yad, yld, yed, ynv, yfd, ypmd, yldb, yvr, ywr); metadata (ymap, ytyp, ymt, PSO, RBF); fxdb; DDS. No rendering, no UI. |
-| `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes, texture dictionary relationships (GTXD, HD bindings), peds put together from their metapeds, the timecycle; a project's files on top. |
+| `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes and their lights, texture dictionary relationships (GTXD, HD bindings), peds put together from their metapeds, the timecycle; a project's files on top. |
 | `rf-world` | The world: map nodes, ymaps and their entities, the LOD tree, interiors, cull boxes and map states, streamed around a camera. |
 | `rf-editor` | The editor: projects, the ymaps and ytyps being edited, the selection, undo and redo, LOD-safe deletes, saving, the RedM export. No UI. |
 | `rf-bridge` | The Blender add-on's link: its protocol (the C#'s) over TCP, the models to and from Sollumz XML. |
-| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain); skinned models posed by clips. |
+| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain, emission); skinned models posed by clips; deferred lighting with cascaded shadows, SSAO, point/spot/capsule lights, the sky's atmosphere and environment maps, and the HDR post-processing. |
 | `rf-app` | The `redforge` app: egui, with Game Files, the model, animation, texture, XML and hex viewers, the map, Project, Hierarchy, Properties and Objects. |
 | `rf-cli` | The `rf` command: list, extract and check game files. |
 

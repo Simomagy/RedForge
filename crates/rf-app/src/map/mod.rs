@@ -15,8 +15,8 @@ use rf_formats::formats::meta::Meta;
 use rf_formats::rpf8::FileRef;
 use rf_render::sky::STAR_COLOUR;
 use rf_render::{
-    CASCADES, Cascades, DrawBatch, FlyCamera, GpuModel, Instance, RenderStats, RenderTargets, Scene, Sky, SkyLights,
-    ViewSettings,
+    CASCADES, Cascades, DrawBatch, FlyCamera, GpuModel, Instance, Light, LightKind, RenderStats, RenderTargets, Scene,
+    Sky, SkyLights, ViewSettings,
 };
 use rf_world::{EntityId, VisibleEntity};
 
@@ -32,6 +32,47 @@ enum Source {
     Ymap(Vec<VisibleEntity>),
 }
 
+/// The C#'s `RDR2Light.LuxScale`: what the game's light units are in the
+/// renderer's (the sun keeps its own brightness).
+const LUX_SCALE: f32 = 0.01;
+
+/// An entity's light in the world, if it's on at the hour and in view: placed
+/// on its bone at rest, then by the entity (the C#'s `GetAnimatedBasis`).
+fn map_light(
+    l: &rf_game::lights::LightEffect,
+    t: &Mat4,
+    model: &GpuModel,
+    hour: u32,
+    frustum: &rf_render::Frustum,
+) -> Option<Light> {
+    if !l.active_at(hour) || l.range <= 0.0 {
+        return None;
+    }
+    let bone = (l.bone_tag != 0).then(|| model.bones.iter().find(|b| b.0 == l.bone_tag).map(|b| b.1)).flatten();
+    let m = *t * bone.unwrap_or(Mat4::IDENTITY);
+    let position = m.transform_point3(Vec3::from(l.position));
+    let half_length = l.extents[1];
+    if !frustum.sphere_visible(position, l.range + half_length) {
+        return None;
+    }
+    use rf_game::lights::LightKind as K;
+    Some(Light {
+        kind: match l.kind {
+            K::Point => LightKind::Point,
+            K::Spot => LightKind::Spot,
+            K::Capsule => LightKind::Capsule,
+        },
+        position,
+        direction: m.transform_vector3(Vec3::from(l.direction)).normalize_or(Vec3::NEG_Z),
+        colour: Vec3::from(l.colour) * LUX_SCALE,
+        range: l.range,
+        falloff_exponent: l.falloff_exponent,
+        cone_inner: l.cone_inner,
+        cone_outer: l.cone_outer,
+        half_length,
+    })
+}
+
 pub struct MapView {
     pub title: String,
     pub path: String,
@@ -45,6 +86,8 @@ pub struct MapView {
     timecycle: Option<rf_game::timecycle::TimeCycle>,
     /// The user's exposure, before the time of day's, in EV.
     exposure: f32,
+    /// How many of the map's lights the last frame drew.
+    lights_drawn: usize,
     /// Whether scripted ymaps (lockdowns, gang camps...) show, as in the C#.
     scripted: bool,
     /// Metres per second.
@@ -154,6 +197,7 @@ impl MapView {
             hour: std::env::var("REDFORGE_HOUR").ok().and_then(|h| h.parse().ok()).unwrap_or(12.0),
             timecycle: None,
             exposure: 0.0,
+            lights_drawn: 0,
             scripted: true,
             speed: 30.0,
             targets: None,
@@ -452,9 +496,15 @@ impl MapView {
         let mut groups: Groups = HashMap::new();
         let mut casters: [Groups; CASCADES] = Default::default();
         let mut drawn = Vec::new();
+        let mut lights = Vec::new();
+        let data = self.game.data();
+        let hour = self.hour as u32 % 24;
         for e in &visible {
             let Some(model) = self.models.get(e.archetype) else { continue };
             let t = Mat4::from_cols_array(&e.transform);
+            if let Some(effects) = data.archetypes.get(&e.archetype).and_then(|a| a.lights.as_ref()) {
+                lights.extend(effects.iter().filter_map(|l| map_light(l, &t, &model, hour, &frustum)));
+            }
             let (min, max) = (Vec3::from(model.min), Vec3::from(model.max));
             let centre = t.transform_point3((min + max) * 0.5);
             let scale = t.x_axis.truncate().length().max(t.z_axis.truncate().length());
@@ -494,7 +544,13 @@ impl MapView {
         }
         let batches = to_batches(&ranges_seen);
         let cast: [Vec<DrawBatch>; CASCADES] = std::array::from_fn(|i| to_batches(&ranges_cast[i]));
-        let scene = Scene { instances: &instances, batches: &batches, shadows: cascades.as_ref().map(|c| (c, &cast)) };
+        let scene = Scene {
+            instances: &instances,
+            batches: &batches,
+            shadows: cascades.as_ref().map(|c| (c, &cast)),
+            lights: &lights,
+        };
+        self.lights_drawn = lights.len();
         self.stats = gpu.renderer.render_scene(&gpu.ctx, targets, &camera, &self.view, &scene);
         gpu.show_texture(&mut self.texture_id, &targets.display_view);
         if let Some(id) = self.texture_id {
@@ -520,14 +576,15 @@ impl MapView {
         let (ready, loading, textures) = self.models.stats();
         let p = self.camera.position;
         let mut text = format!(
-            "{:.0} {:.0} {:.0}   {:.1} ms\n{} entities, {} drawn in {} draw calls\nmodels {ready} (+{loading} loading), textures {textures}",
+            "{:.0} {:.0} {:.0}   {:.1} ms\n{} entities, {} drawn in {} draw calls, {} lights\nmodels {ready} (+{loading} loading), textures {textures}",
             p.x,
             p.y,
             p.z,
             self.frame_ms,
             visible.len(),
             self.stats.instances,
-            self.stats.draw_calls
+            self.stats.draw_calls,
+            self.lights_drawn
         );
         if let Some(ed) = editor.as_deref() {
             let s = ed.world.stats();

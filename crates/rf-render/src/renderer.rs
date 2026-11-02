@@ -241,6 +241,66 @@ pub struct GpuMaterial {
     pub textures: Vec<(&'static str, Arc<GpuTexture>)>,
 }
 
+/// How a [`Light`] shines.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LightKind {
+    #[default]
+    Point,
+    /// In a cone around its direction.
+    Spot,
+    /// From a segment along its direction.
+    Capsule,
+}
+
+/// A light of the map, in the world.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Light {
+    pub kind: LightKind,
+    pub position: Vec3,
+    pub direction: Vec3,
+    pub colour: Vec3,
+    /// How far it reaches, and how sharply it fades there.
+    pub range: f32,
+    pub falloff_exponent: f32,
+    /// A spot light's cone: half angles, in radians.
+    pub cone_inner: f32,
+    pub cone_outer: f32,
+    /// Half a capsule's length.
+    pub half_length: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct LightUniform {
+    position: [f32; 4],
+    colour: [f32; 4],
+    direction: [f32; 4],
+    shape: [f32; 4],
+}
+
+impl From<&Light> for LightUniform {
+    fn from(l: &Light) -> Self {
+        let kind = match l.kind {
+            LightKind::Point => 0.0,
+            LightKind::Spot => 1.0,
+            LightKind::Capsule => 2.0,
+        };
+        let half_length = if l.kind == LightKind::Capsule { l.half_length } else { 0.0 };
+        Self {
+            position: l.position.extend(l.range).to_array(),
+            colour: l.colour.extend(l.falloff_exponent).to_array(),
+            direction: l.direction.normalize_or(Vec3::NEG_Z).extend(kind).to_array(),
+            shape: [l.cone_inner, l.cone_outer, half_length, 0.0],
+        }
+    }
+}
+
+/// The lights' storage buffer, kept between frames and grown as needed.
+struct LightBuffer {
+    buffer: wgpu::Buffer,
+    group: wgpu::BindGroup,
+}
+
 /// One model's LOD, drawn with a range of the frame's instance transforms.
 pub struct DrawBatch<'a> {
     pub model: &'a GpuModel,
@@ -257,6 +317,8 @@ pub struct Scene<'a> {
     /// The cascades the casters were picked for ([`Cascades::casts`]), and
     /// each one's casters.
     pub shadows: Option<(&'a Cascades, &'a [Vec<DrawBatch<'a>>; CASCADES])>,
+    /// The lights in view.
+    pub lights: &'a [Light],
 }
 
 /// What a frame drew.
@@ -299,6 +361,8 @@ enum Pass {
 pub struct Renderer {
     instance_buffer: std::sync::Mutex<Option<wgpu::Buffer>>,
     bone_buffer: std::sync::Mutex<Option<BoneBuffer>>,
+    light_buffer: std::sync::Mutex<Option<LightBuffer>>,
+    lights_layout: wgpu::BindGroupLayout,
     bones_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     terrain_layout: wgpu::BindGroupLayout,
@@ -344,6 +408,7 @@ struct Pipelines {
     ssao_blur: wgpu::RenderPipeline,
     lighting: wgpu::RenderPipeline,
     background: wgpu::RenderPipeline,
+    lights: wgpu::RenderPipeline,
 }
 
 fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -478,6 +543,19 @@ impl Renderer {
             }],
         });
         let view_layouts = ViewLayouts::new(device);
+        let lights_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("lights"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(size_of::<LightUniform>() as u64),
+                },
+                count: None,
+            }],
+        });
 
         let uniform = |label, size| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -577,6 +655,10 @@ impl Renderer {
         let deferred_shader =
             module("deferred.wgsl", [common, lighting, include_str!("shaders/deferred.wgsl")].concat());
         let ssao_shader = module("ssao.wgsl", [common, include_str!("shaders/ssao.wgsl")].concat());
+        let lights_shader = module(
+            "lights.wgsl",
+            [common, lighting, include_str!("shaders/deferred.wgsl"), include_str!("shaders/lights.wgsl")].concat(),
+        );
 
         let pipeline_layout = |label, groups: &[Option<&wgpu::BindGroupLayout>]| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -701,6 +783,40 @@ impl Renderer {
         let lighting_pl =
             pipeline_layout("lighting", &[Some(&frame_layout), Some(&view_layouts.lighting), None, Some(env_layout)]);
         let background_pl = pipeline_layout("background", &[Some(&frame_layout), Some(&view_layouts.background)]);
+        let lights_pl =
+            pipeline_layout("lights", &[Some(&frame_layout), Some(&view_layouts.lighting), Some(&lights_layout)]);
+        let add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        // The inside of each light's box: it covers the light's pixels with the
+        // eye in it too.
+        let lights = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("lights"),
+            layout: Some(&lights_pl),
+            vertex: wgpu::VertexState {
+                module: &lights_shader,
+                entry_point: Some("vs_light"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState { cull_mode: Some(wgpu::Face::Front), ..Default::default() },
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &lights_shader,
+                entry_point: Some("fs_light"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: HDR_FORMAT,
+                    blend: Some(wgpu::BlendState { color: add, alpha: add }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let ssao_pl = pipeline_layout("ssao", &[Some(&frame_layout), Some(&view_layouts.ssao)]);
         let blur_pl = pipeline_layout("ssao blur", &[None, Some(&view_layouts.blur)]);
         let pipelines = Pipelines {
@@ -768,6 +884,7 @@ impl Renderer {
             ssao_blur: fullscreen("ssao blur", &blur_pl, &ssao_shader, "fs_blur", SSAO_FORMAT),
             lighting: fullscreen("lighting", &lighting_pl, &deferred_shader, "fs_lighting", HDR_FORMAT),
             background: fullscreen("background", &background_pl, &deferred_shader, "fs_background", HDR_FORMAT),
+            lights,
         };
 
         let white = Arc::new(GpuTexture::solid(ctx, "white", [255, 255, 255, 255]));
@@ -776,6 +893,8 @@ impl Renderer {
         let mut r = Self {
             instance_buffer: Default::default(),
             bone_buffer: Default::default(),
+            light_buffer: Default::default(),
+            lights_layout,
             bones_layout,
             material_layout,
             terrain_layout,
@@ -990,7 +1109,7 @@ impl Renderer {
         let cascades = Cascades::new(camera, settings.sun_dir);
         let casters = std::array::from_fn(|_| Vec::new());
         let shadows = settings.shadows.then_some((&cascades, &casters));
-        self.draw_scene(ctx, targets, camera, settings, &Scene { instances, batches, shadows }, true)
+        self.draw_scene(ctx, targets, camera, settings, &Scene { instances, batches, shadows, lights: &[] }, true)
     }
 
     /// Draws a scene: its batches as [`Renderer::render`] does, and its own
@@ -1018,7 +1137,7 @@ impl Renderer {
     ) -> RenderStats {
         let mut stats = RenderStats { instances: scene.instances.len(), ..Default::default() };
         let cascades = scene.shadows.filter(|_| settings.shadows).map(|(c, _)| c);
-        self.frame(ctx, targets, camera, settings, scene.instances, cascades, &mut |rp, pass| {
+        self.frame(ctx, targets, camera, settings, scene.instances, cascades, scene.lights, &mut |rp, pass| {
             let batches = match (pass, scene.shadows) {
                 (Pass::Shadow(i), Some((_, casters))) if !all_cast => &casters[i][..],
                 _ => scene.batches,
@@ -1094,7 +1213,7 @@ impl Renderer {
 
         let mut stats = RenderStats { instances: instances.len(), ..Default::default() };
         let cascades = settings.shadows.then(|| Cascades::new(camera, settings.sun_dir));
-        self.frame(ctx, targets, camera, settings, &instances, cascades.as_ref(), &mut |rp, pass| {
+        self.frame(ctx, targets, camera, settings, &instances, cascades.as_ref(), &[], &mut |rp, pass| {
             for ((m, insts), &first) in models.iter().zip(&draw_instances).zip(&rig_slots) {
                 for (draw, &inst) in m.model.lods[m.lod.min(3)].iter().zip(insts) {
                     let skinned = draw.rig.zip(draw.mesh.skin.as_ref()).zip(bone_group.as_ref());
@@ -1166,6 +1285,31 @@ impl Renderer {
             (Pass::Decal, ..) => &p.decal,
             _ => &p.opaque,
         })
+    }
+
+    /// Writes the lights into their buffer (grown as needed) and gives its
+    /// bind group.
+    fn upload_lights(&self, ctx: &GpuContext, lights: &[Light]) -> wgpu::BindGroup {
+        let data: Vec<LightUniform> = lights.iter().map(LightUniform::from).collect();
+        let bytes: &[u8] = bytemuck::cast_slice(&data);
+        let mut slot = self.light_buffer.lock().unwrap();
+        if slot.as_ref().is_none_or(|b| b.buffer.size() < bytes.len() as u64) {
+            let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("lights"),
+                size: (bytes.len() as u64).next_power_of_two().max(16 * 1024),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("lights"),
+                layout: &self.lights_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+            });
+            *slot = Some(LightBuffer { buffer, group });
+        }
+        let b = slot.as_ref().unwrap();
+        ctx.queue.write_buffer(&b.buffer, 0, bytes);
+        b.group.clone()
     }
 
     /// Writes the bone matrices into the bone buffer (grown as needed) and
@@ -1250,6 +1394,7 @@ impl Renderer {
         settings: &ViewSettings,
         instances: &[Instance],
         cascades: Option<&Cascades>,
+        lights: &[Light],
         draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, Pass),
     ) {
         let frame = self.frame_uniform(targets, camera, settings, cascades);
@@ -1346,10 +1491,24 @@ impl Renderer {
             models_pass(&mut rp, draw, Pass::Opaque);
             models_pass(&mut rp, draw, Pass::Decal);
         }
-        let mut fullscreen = |label, view, pipeline: &wgpu::RenderPipeline, groups: &[(u32, &wgpu::BindGroup)]| {
+        fn fullscreen(
+            encoder: &mut wgpu::CommandEncoder,
+            label: &str,
+            view: &wgpu::TextureView,
+            pipeline: &wgpu::RenderPipeline,
+            groups: &[(u32, &wgpu::BindGroup)],
+        ) {
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
-                color_attachments: &[colour(view, clear)],
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
                 ..Default::default()
             });
             rp.set_pipeline(pipeline);
@@ -1357,21 +1516,43 @@ impl Renderer {
                 rp.set_bind_group(*i, *g, &[]);
             }
             rp.draw(0..3, 0..1);
-        };
+        }
         let p = &self.pipelines;
         if settings.ssao {
-            fullscreen("ssao", &targets.ssao_raw, &p.ssao, &[(0, &self.frame_group), (1, &targets.ssao_group)]);
-            fullscreen("ssao blur", &targets.ssao, &p.ssao_blur, &[(1, &targets.blur_group)]);
+            fullscreen(
+                &mut encoder,
+                "ssao",
+                &targets.ssao_raw,
+                &p.ssao,
+                &[(0, &self.frame_group), (1, &targets.ssao_group)],
+            );
+            fullscreen(&mut encoder, "ssao blur", &targets.ssao, &p.ssao_blur, &[(1, &targets.blur_group)]);
         }
         fullscreen(
+            &mut encoder,
             "lighting",
             &targets.lit,
             &p.lighting,
             &[(0, &self.frame_group), (1, &targets.lighting_group), (3, sky.env_group())],
         );
+        let light_group =
+            (settings.debug == DebugView::Lit && !lights.is_empty()).then(|| self.upload_lights(ctx, lights));
+        if let Some(group) = &light_group {
+            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("lights"),
+                color_attachments: &[colour(&targets.lit, wgpu::LoadOp::Load)],
+                ..Default::default()
+            });
+            rp.set_pipeline(&p.lights);
+            rp.set_bind_group(0, &self.frame_group, &[]);
+            rp.set_bind_group(1, &targets.lighting_group, &[]);
+            rp.set_bind_group(2, group, &[]);
+            rp.draw(0..36, 0..lights.len() as u32);
+        }
         match &settings.sky {
             Some(lights) => sky.draw(ctx, &mut encoder, &targets.sky, &targets.hdr, camera, lights),
             None => fullscreen(
+                &mut encoder,
                 "background",
                 &targets.hdr,
                 &p.background,

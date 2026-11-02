@@ -121,3 +121,18 @@ fn matches_the_csharp_startup_cache() {
     }
     assert!(c.differences.is_empty(), "{:#?}", c.differences);
 }
+
+#[test]
+fn reads_archetype_lights() {
+    let Some(g) = game() else { return };
+    let with: Vec<_> = g.gd.archetypes.values().filter_map(|a| Some((a.name, a.lights.as_ref()?))).collect();
+    let lights: Vec<_> = with.iter().flat_map(|(_, l)| l.iter()).collect();
+    let boned = lights.iter().filter(|l| l.bone_tag != 0).count();
+    let kinds =
+        [rf_game::lights::LightKind::Point, rf_game::lights::LightKind::Spot, rf_game::lights::LightKind::Capsule]
+            .map(|k| lights.iter().filter(|l| l.kind == k).count());
+    eprintln!("{} archetypes with {} lights, {boned} on bones, kinds {kinds:?}", with.len(), lights.len());
+    assert!(with.len() > 800 && lights.len() > 3000, "{} archetypes with lights", with.len());
+    assert!(kinds.iter().all(|&k| k > 100) && boned > 100);
+    assert!(lights.iter().all(|l| l.range >= 0.0 && l.cone_inner <= l.cone_outer));
+}

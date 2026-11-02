@@ -55,6 +55,7 @@ pub mod csharp;
 mod device;
 mod files;
 mod init;
+pub mod lights;
 mod manifest;
 pub mod peds;
 pub mod timecycle;
@@ -349,6 +350,7 @@ mod tests {
                 time_flags: 0,
                 ytyp: f(0),
                 index: 0,
+                lights: None,
             },
         );
         gd.gtxd_hierarchy.extend([(h("child"), h("parent")), (h("parent"), h("grandparent"))]);

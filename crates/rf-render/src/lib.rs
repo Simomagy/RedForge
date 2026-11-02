@@ -33,8 +33,8 @@ pub use model::{
 pub use post::{Post, PostSettings, PostTargets, Tonemap};
 pub use preview::{PreviewMode, PreviewTarget, TexturePreview};
 pub use renderer::{
-    DebugView, DrawBatch, GpuMaterial, Instance, MaterialKind, Pick, PickRequest, PosedModel, RenderStats, Renderer,
-    Scene, ViewSettings,
+    DebugView, DrawBatch, GpuMaterial, Instance, Light, LightKind, MaterialKind, Pick, PickRequest, PosedModel,
+    RenderStats, Renderer, Scene, ViewSettings,
 };
 pub use shadows::{CASCADES, Cascade, Cascades};
 pub use sky::{Sky, SkyLights, SkyTargets};

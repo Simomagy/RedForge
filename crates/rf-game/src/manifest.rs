@@ -7,11 +7,14 @@
 //! reads from them. [`crate::GameData::archetype_bag`] gives an archetype's whole
 //! bag when needed.
 
+use std::sync::Arc;
+
 use rf_formats::formats::databag::{DataBag, Schema};
 use rf_formats::hash::HashIndex;
 use rf_formats::rpf8::FileRef;
 
 use crate::files::{Doc, bags, string, string_hash};
+use crate::lights::{LightEffect, archetype_lights};
 
 /// An archetype's `assetType` (`RDR2ArchetypeAssetType`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -52,6 +55,8 @@ pub struct Archetype {
     /// The ytyp it's from, and its index in the ytyp's `archetypes`.
     pub ytyp: FileRef,
     pub index: u32,
+    /// Its light effects; `None` without.
+    pub lights: Option<Arc<[LightEffect]>>,
 }
 
 impl Archetype {
@@ -81,6 +86,7 @@ impl Archetype {
             time_flags: b.u32("timeFlags"),
             ytyp,
             index,
+            lights: Some(archetype_lights(b)).filter(|l| !l.is_empty()).map(Arc::from),
         }
     }
 }
