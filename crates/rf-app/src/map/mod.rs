@@ -11,7 +11,7 @@ use eframe::egui::{self, Key, Sense, Vec2};
 use glam::{Mat4, Quat, Vec3};
 use rf_formats::formats::meta::Meta;
 use rf_formats::rpf8::FileRef;
-use rf_render::{DrawBatch, FlyCamera, GpuModel, RenderStats, RenderTargets, ViewSettings};
+use rf_render::{DrawBatch, FlyCamera, GpuModel, Instance, RenderStats, RenderTargets, ViewSettings};
 use rf_world::{EntityId, VisibleEntity, World};
 
 use crate::game::Game;
@@ -222,7 +222,7 @@ impl MapView {
         let frustum = camera.frustum();
 
         // Group the entities by model and LOD; each group is one batch of instances.
-        let mut groups: HashMap<(usize, usize), (Arc<GpuModel>, Vec<Mat4>)> = HashMap::new();
+        let mut groups: HashMap<(usize, usize), (Arc<GpuModel>, Vec<Instance>)> = HashMap::new();
         for e in &visible {
             let Some(model) = self.models.get(e.archetype) else { continue };
             let t = Mat4::from_cols_array(&e.transform);
@@ -236,7 +236,7 @@ impl MapView {
             let dist = centre.distance(camera.eye) - radius;
             let lod = model.lod_for_distance(dist.max(0.0));
             let key = (Arc::as_ptr(&model) as usize, lod);
-            groups.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(t);
+            groups.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint));
         }
         let mut instances = Vec::new();
         let mut ranges = Vec::new();

@@ -9,7 +9,7 @@ use wgpu::util::DeviceExt;
 use crate::GpuContext;
 use crate::camera::{CameraView, OrbitCamera};
 use crate::mesh::Vertex;
-use crate::model::{AlphaMode, GpuModel, MaterialDesc};
+use crate::model::{AlphaMode, DecalMode, GpuModel, MaterialDesc, Slot};
 use crate::texture::GpuTexture;
 
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -34,6 +34,25 @@ struct FrameUniform {
 struct MaterialUniform {
     tint: [f32; 4],
     params: [f32; 4],
+    decal_masks: [f32; 4],
+    modes: [u32; 4],
+}
+
+/// One drawn instance of a model: its transform and the entity's values the
+/// shaders use.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct Instance {
+    pub transform: [[f32; 4]; 4],
+    /// The row of the tint palette.
+    pub tint: f32,
+    pub _pad: [f32; 3],
+}
+
+impl Instance {
+    pub fn new(transform: Mat4, tint: u32) -> Self {
+        Self { transform: transform.to_cols_array_2d(), tint: tint as f32, _pad: [0.0; 3] }
+    }
 }
 
 #[repr(C)]
@@ -86,8 +105,8 @@ impl Default for ViewSettings {
 pub struct GpuMaterial {
     pub name: String,
     pub bind_group: wgpu::BindGroup,
-    /// For showing what a material uses.
-    pub textures: [Option<Arc<GpuTexture>>; 3],
+    /// For showing what a material uses, by [`Slot`].
+    pub textures: [Option<Arc<GpuTexture>>; 7],
 }
 
 /// The textures a view renders into, resized with it.
@@ -126,6 +145,7 @@ pub struct Renderer {
     tonemap_buffer: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
+    point_sampler: wgpu::Sampler,
     pipelines: Pipelines,
     tonemap: wgpu::RenderPipeline,
     white: Arc<GpuTexture>,
@@ -166,11 +186,25 @@ fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-/// The instance transforms, one per draw, as a vertex buffer.
+/// The [`Instance`]s, one per draw, as a vertex buffer.
 fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
-    const ATTRS: [wgpu::VertexAttribute; 4] =
-        wgpu::vertex_attr_array![7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4];
-    wgpu::VertexBufferLayout { array_stride: 64, step_mode: wgpu::VertexStepMode::Instance, attributes: &ATTRS }
+    const ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4
+    ];
+    wgpu::VertexBufferLayout {
+        array_stride: size_of::<Instance>() as u64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &ATTRS,
+    }
+}
+
+fn sampler_entry(binding: u32, ty: wgpu::SamplerBindingType) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(ty),
+        count: None,
+    }
 }
 
 impl Renderer {
@@ -187,12 +221,12 @@ impl Renderer {
                 texture_entry(1, true),
                 texture_entry(2, true),
                 texture_entry(3, true),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
+                sampler_entry(4, wgpu::SamplerBindingType::Filtering),
+                texture_entry(5, true),
+                texture_entry(6, true),
+                texture_entry(7, true),
+                texture_entry(8, true),
+                sampler_entry(9, wgpu::SamplerBindingType::Filtering),
             ],
         });
         let tonemap_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -225,6 +259,12 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             anisotropy_clamp: 16,
+            ..Default::default()
+        });
+        let point_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("point"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
 
@@ -324,6 +364,7 @@ impl Renderer {
             tonemap_buffer,
             frame_group,
             sampler,
+            point_sampler,
             pipelines,
             tonemap,
             white,
@@ -331,13 +372,10 @@ impl Renderer {
             default_material: Arc::new(placeholder_material(ctx)),
         };
         let grey = Arc::new(GpuTexture::solid(ctx, "grey", [160, 160, 160, 255]));
-        r.default_material = Arc::new(r.create_material(
-            ctx,
-            &MaterialDesc { bumpiness: 1.0, ..Default::default() },
-            Some(grey),
-            None,
-            None,
-        ));
+        let mut textures: [Option<Arc<GpuTexture>>; 7] = Default::default();
+        textures[Slot::Diffuse as usize] = Some(grey);
+        r.default_material =
+            Arc::new(r.create_material(ctx, &MaterialDesc { bumpiness: 1.0, ..Default::default() }, textures));
         r
     }
 
@@ -349,22 +387,32 @@ impl Renderer {
         &self,
         ctx: &GpuContext,
         desc: &MaterialDesc,
-        albedo: Option<Arc<GpuTexture>>,
-        normal: Option<Arc<GpuTexture>>,
-        params: Option<Arc<GpuTexture>>,
+        textures: [Option<Arc<GpuTexture>>; 7],
     ) -> GpuMaterial {
         let cutoff = match desc.alpha {
             AlphaMode::Cutout => 0.5,
             AlphaMode::Opaque => 0.0,
             AlphaMode::Blend | AlphaMode::Decal => 0.01,
         };
+        let has = |slot: Slot| textures[slot as usize].is_some();
         let u = MaterialUniform {
             tint: [1.0; 4],
             params: [
                 desc.bumpiness,
                 cutoff,
-                if normal.is_some() { 1.0 } else { 0.0 },
-                if params.is_some() { 1.0 } else { 0.0 },
+                if has(Slot::Normal) { 1.0 } else { 0.0 },
+                if has(Slot::Material) { 1.0 } else { 0.0 },
+            ],
+            decal_masks: desc.decal_masks,
+            modes: [
+                match desc.decal {
+                    DecalMode::None => 0,
+                    DecalMode::Decal => 1,
+                    DecalMode::Dirt => 2,
+                },
+                has(Slot::TintPalette) as u32,
+                desc.two_layer.is_some() as u32,
+                desc.two_layer.unwrap_or(0) as u32,
             ],
         };
         let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -372,21 +420,35 @@ impl Renderer {
             contents: bytemuck::bytes_of(&u),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let a = albedo.as_deref().unwrap_or(&self.white);
-        let n = normal.as_deref().unwrap_or(&self.flat_normal);
-        let p = params.as_deref().unwrap_or(&self.white);
+        let get = |slot: Slot| textures[slot as usize].as_deref();
+        let a = get(Slot::Diffuse).unwrap_or(&self.white);
+        let n = get(Slot::Normal).unwrap_or(&self.flat_normal);
+        let p = get(Slot::Material).unwrap_or(&self.white);
+        // A missing second layer shows the first.
+        let a2 = get(Slot::Diffuse2).unwrap_or(a);
+        let n2 = get(Slot::Normal2).unwrap_or(n);
+        let p2 = get(Slot::Material2).unwrap_or(p);
+        let tint = get(Slot::TintPalette).unwrap_or(&self.white);
+        fn view(t: &GpuTexture) -> wgpu::BindingResource<'_> {
+            wgpu::BindingResource::TextureView(&t.view_2d)
+        }
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(&desc.shader_name),
             layout: &self.material_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&a.view_2d) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&n.view_2d) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&p.view_2d) },
+                wgpu::BindGroupEntry { binding: 1, resource: view(a) },
+                wgpu::BindGroupEntry { binding: 2, resource: view(n) },
+                wgpu::BindGroupEntry { binding: 3, resource: view(p) },
                 wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: view(a2) },
+                wgpu::BindGroupEntry { binding: 6, resource: view(n2) },
+                wgpu::BindGroupEntry { binding: 7, resource: view(p2) },
+                wgpu::BindGroupEntry { binding: 8, resource: view(tint) },
+                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(&self.point_sampler) },
             ],
         });
-        GpuMaterial { name: desc.shader_name.clone(), bind_group, textures: [albedo, normal, params] }
+        GpuMaterial { name: desc.shader_name.clone(), bind_group, textures }
     }
 
     pub fn create_targets(&self, ctx: &GpuContext, width: u32, height: u32) -> RenderTargets {
@@ -437,11 +499,12 @@ impl Renderer {
         let view = camera.camera_view(targets.width as f32 / targets.height as f32);
         let lod = settings.lod.min(3);
         let lod = if model.lods[lod].is_empty() { model.highest_lod() } else { lod };
-        self.render(ctx, targets, &view, settings, &[Mat4::IDENTITY], &[DrawBatch { model, lod, instances: 0..1 }]);
+        let instance = Instance::new(Mat4::IDENTITY, 0);
+        self.render(ctx, targets, &view, settings, &[instance], &[DrawBatch { model, lod, instances: 0..1 }]);
     }
 
     /// Draws batches of model instances into `targets.output`: `instances`
-    /// holds every transform, and each batch draws one model's LOD with a
+    /// holds every instance, and each batch draws one model's LOD with a
     /// range of them.
     pub fn render(
         &self,
@@ -449,7 +512,7 @@ impl Renderer {
         targets: &RenderTargets,
         camera: &CameraView,
         settings: &ViewSettings,
-        instances: &[Mat4],
+        instances: &[Instance],
         batches: &[DrawBatch],
     ) -> RenderStats {
         let view_proj = camera.projection * camera.view;
@@ -469,7 +532,7 @@ impl Renderer {
         let tm = TonemapUniform { values: [settings.exposure, 11.2, passthrough, 0.0] };
         ctx.queue.write_buffer(&self.tonemap_buffer, 0, bytemuck::bytes_of(&tm));
 
-        // The transforms go in one buffer, kept between frames and grown as needed.
+        // The instances go in one buffer, kept between frames and grown as needed.
         let instance_buffer = (!instances.is_empty()).then(|| {
             let mut slot = self.instance_buffer.lock().unwrap();
             let bytes: &[u8] = bytemuck::cast_slice(instances);
@@ -598,5 +661,5 @@ fn placeholder_material(ctx: &GpuContext) -> GpuMaterial {
     let layout = ctx.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
     let bind_group =
         ctx.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[] });
-    GpuMaterial { name: String::new(), bind_group, textures: [None, None, None] }
+    GpuMaterial { name: String::new(), bind_group, textures: Default::default() }
 }

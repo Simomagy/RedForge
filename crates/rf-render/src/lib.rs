@@ -18,10 +18,10 @@ pub mod texture;
 
 pub use camera::{CameraView, FlyCamera, Frustum, OrbitCamera};
 pub use context::{GpuContext, wanted_features};
-pub use model::{AlphaMode, GpuModel, MaterialDesc, NoTextures, TextureSource};
+pub use model::{AlphaMode, DecalMode, GpuModel, MaterialDesc, NoTextures, Slot, TextureSource};
 pub use preview::{PreviewMode, PreviewTarget, TexturePreview};
 pub use renderer::{
-    DebugView, DrawBatch, GpuMaterial, OUTPUT_FORMAT, RenderStats, RenderTargets, Renderer, ViewSettings,
+    DebugView, DrawBatch, GpuMaterial, Instance, OUTPUT_FORMAT, RenderStats, RenderTargets, Renderer, ViewSettings,
 };
 pub use texture::{GpuTexture, TextureKind};
 

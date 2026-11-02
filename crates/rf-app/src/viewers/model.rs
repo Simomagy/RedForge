@@ -191,9 +191,10 @@ impl Ready {
                 for (i, d) in lod.iter().enumerate() {
                     ui.collapsing(format!("{i}: {}", d.material.name), |ui| {
                         ui.label(format!("{:?}", d.alpha));
-                        for (slot, t) in ["Diffuse", "Normal", "Material"].iter().zip(&d.material.textures) {
-                            let name = t.as_ref().map(|t| t.name.as_str()).unwrap_or("—");
-                            ui.label(format!("{slot}: {name}"));
+                        for (slot, t) in rf_render::Slot::ALL.iter().zip(&d.material.textures) {
+                            if let Some(t) = t {
+                                ui.label(format!("{}: {}", slot.label(), t.name));
+                            }
                         }
                     });
                 }
