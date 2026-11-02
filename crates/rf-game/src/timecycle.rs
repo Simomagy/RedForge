@@ -38,6 +38,7 @@ pub const WEATHERS: [&str; 22] = [
 /// rises at 7 and sets at 19, slowly around both. Unwrapped, so it keeps going
 /// round through the night.
 const HOURS: [f32; 13] = [0.0, 4.0, 5.0, 6.0, 7.0, 9.0, 12.0, 16.0, 18.0, 19.0, 20.0, 21.0, 22.0];
+#[allow(clippy::approx_constant)] // 3.14 is time.xml's value, not pi
 const SUN_ANGLES: [f32; 13] = [-1.57, -0.45, -0.22, -0.04, 0.00, 0.30, 1.57, 2.57, 3.09, 3.14, 3.19, 3.51, 3.86];
 
 /// `RDR2Light.LuxScale`: the timecycle's light values to the engine's.
