@@ -19,7 +19,8 @@ struct Material {
     // z: two layers, w: the channel of colour1 that blends them
     modes: vec4<u32>,
     // x: normal map (0 tangent-space XY, 1 the normal in RGB),
-    // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R),
+    // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R,
+    // 3 skin softness R + roughness G),
     // z: flags (1 glows only at some hours, 2 additive)
     config: vec4<u32>,
     // x: emission (0-1), y: translucency, z, w: the hours the glow is on and off
@@ -216,11 +217,16 @@ fn fragment(i: VertexOut, front: bool) -> Fragment {
     // Without a material map: rough and not metal (the C#'s MeshSmoothness 0).
     var metal = 0.0;
     var smoothness = 0.0;
+    var translucency = material.extra.y;
     if material.params.w > 0.5 {
         let p = mix(textureSample(t_params, s_wrap, i.uv0), textureSample(t_params2, s_wrap, i.uv0), layer);
         switch material.config.y {
             case 1u: { smoothness = p.g; }
             case 2u: { smoothness = 1.0 - p.r; }
+            case 3u: {
+                smoothness = 1.0 - p.g;
+                translucency = p.r * SKIN_SOFTNESS;
+            }
             default: {
                 metal = p.r;
                 smoothness = 1.0 - p.g;
@@ -240,9 +246,12 @@ fn fragment(i: VertexOut, front: bool) -> Fragment {
         }
         emissive = 0.0;
     }
-    let s = Surface(albedo_s.rgb, n, saturate(smoothness), metal, 1.0, material.extra.y, emissive);
+    let s = Surface(albedo_s.rgb, n, saturate(smoothness), metal, 1.0, translucency, emissive);
     return Fragment(s, alphas, albedo_s.a);
 }
+
+// How much light goes under the softest skin.
+const SKIN_SOFTNESS: f32 = 0.6;
 
 // Whether the hour is in the material's on and off hours (wrapping at midnight).
 fn glows_now() -> bool {

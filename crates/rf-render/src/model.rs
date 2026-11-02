@@ -139,6 +139,9 @@ pub enum MaterialMap {
     Smoothness,
     /// Roughness in red (terrain SLODs).
     Roughness,
+    /// Peds' and horses': how soft the skin is in red (not metalness), roughness
+    /// in green.
+    Skin,
 }
 
 /// The constants of the terrain shaders ("terrain_uber_4lyr"...), as the C#
@@ -253,6 +256,41 @@ mod names {
     pub const BUMPINESS: u32 = 0xf6712b81;
     pub const INTENSITY: u32 = 0xefcd993d;
     pub const EMISSIVE_MULTIPLIER: u32 = 0x5eebed48;
+    /// The ped and horse shaders: their material map's red is how soft the
+    /// skin is (light goes under it), not metalness.
+    pub const PED: &[u32] = &[
+        0xf1345b4c, // horse_standard
+        0xc79636f2, // horse_standard_bumpoffset
+        0x58e0d408, // horse_standard_hair
+        0x34d90761, // ped
+        0x32d1b727, // ped_hair
+        0x934fa33f, // ped_hair_cutout_alpha
+        0x9511d94b, // ped_hair_cutout_alpha_cloth
+        0x4221fa89, // ped_hair_spiked
+        0xb92431b7, // ped_skin
+        0x86acf99a, // ped_slod_tint
+        0x7574b09b, // ped_standard
+        0x1f747353, // ped_standard_alpha
+        0x7dd2a845, // ped_standard_cloth
+        0xe5acf189, // ped_standard_cloth_wrinkle
+        0xa9dfb1e7, // ped_standard_cutout
+        0x89a1cf72, // ped_standard_eye
+        0xf74149b5, // ped_standard_eye_cap
+        0x0b220a0d, // ped_standard_eye_cap_decal
+        0x801d25b1, // ped_standard_eye_emissive
+        0x1280e07f, // ped_standard_eye_retroreflect
+        0x92ca7852, // ped_standard_fur
+        0xfe562866, // ped_standard_hair
+        0x0a156515, // ped_standard_hair_alpha
+        0xc499b7a7, // ped_standard_hair_cloth
+        0xcc5d1333, // ped_standard_hair_lod
+        0x2a6e3cff, // ped_standard_hair_normal
+        0x05e14454, // ped_standard_hat
+        0x210fbc6a, // ped_standard_skin
+        0x5ab0b830, // ped_standard_skin_tattoo_bake
+        0x7b10334d, // ped_standard_skin_tint
+        0x15c42150, // ped_standard_wrinkle
+    ];
     pub const ON_OFF_TIMES: u32 = 0x26fba7b2;
     pub const NIGHT_ONLY: u32 = 0xc0b0dda1;
 
@@ -568,6 +606,9 @@ impl<'a> MaterialDesc<'a> {
         d.additive = names::ADDITIVE.contains(&name);
         if names::FOLIAGE.contains(&name) {
             d.translucency = FOLIAGE_TRANSLUCENCY;
+        }
+        if names::PED.contains(&name) {
+            d.material_map = MaterialMap::Skin;
         }
         if names::TERRAIN_LOD.contains(&name) {
             (d.normal_map, d.material_map) = (NormalMap::Direct, MaterialMap::Smoothness);

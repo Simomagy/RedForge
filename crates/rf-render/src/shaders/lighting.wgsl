@@ -58,7 +58,14 @@ fn direct_light(s: Surface, v: vec3<f32>, l: vec3<f32>, c: vec3<f32>) -> vec3<f3
     let kd = (1.0 - f) * (1.0 - s.metal);
     let nl = max(dot(n, l), 0.0);
     let specular = min(ndf * g * f / (4.0 * max(dot(n, v), 0.0) * nl + 0.0001), vec3<f32>(10.0));
-    return (kd * s.albedo / PI + specular) * c * nl + translucent_light(s, l, c);
+    return kd * s.albedo / PI * c * soft_nl(s, l) + specular * c * nl + translucent_light(s, l, c);
+}
+
+// N·L for the diffuse light: softer surfaces (skin, leaves) take some light
+// past where they turn away from it, as light goes under them.
+fn soft_nl(s: Surface, l: vec3<f32>) -> f32 {
+    let w = s.translucency * 0.5;
+    return saturate((dot(s.normal, l) + w) / (1.0 + w));
 }
 
 // Light from behind coming through (leaves, grass).
@@ -84,7 +91,7 @@ fn direct_parts(s: Surface, v: vec3<f32>, l: vec3<f32>, c: vec3<f32>) -> LightPa
     let ndf = distribution_ggx(n, h, roughness);
     let g = geometry_smith(n, v, l, roughness);
     let specular = min(ndf * g * f / (4.0 * max(dot(n, v), 0.0) * nl + 0.0001), vec3<f32>(10.0));
-    return LightParts(kd * s.albedo / PI * c * nl + translucent_light(s, l, c), specular * c * nl);
+    return LightParts(kd * s.albedo / PI * c * soft_nl(s, l) + translucent_light(s, l, c), specular * c * nl);
 }
 
 // How much of a cascade's map at `uvz` sees the light: 3x3 samples.

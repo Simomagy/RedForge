@@ -1041,6 +1041,7 @@ impl Renderer {
                     MaterialMap::MetalRoughness => 0,
                     MaterialMap::Smoothness => 1,
                     MaterialMap::Roughness => 2,
+                    MaterialMap::Skin => 3,
                 },
                 desc.emissive_hours.is_some() as u32 | (desc.additive as u32) << 1,
                 0,
