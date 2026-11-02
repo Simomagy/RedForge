@@ -65,13 +65,13 @@ fn run_oracle(oracle: &Path, mode: &str, pairs: &[(PathBuf, PathBuf)]) -> Result
         .stdout(Stdio::piped())
         .spawn()
         .with_context(|| format!("starting {}", oracle.display()))?;
-    {
-        let mut stdin = child.stdin.take().unwrap();
-        for (i, o) in pairs {
-            writeln!(stdin, "{}\t{}", i.display(), o.display())?;
-        }
-    }
+    // Feed the input from another thread while the output is read here: with
+    // many files both pipes fill up, and writing everything first deadlocks.
+    let mut stdin = child.stdin.take().unwrap();
+    let input: String = pairs.iter().map(|(i, o)| format!("{}\t{}\n", i.display(), o.display())).collect();
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
     let out = child.wait_with_output()?;
+    writer.join().map_err(|_| anyhow::anyhow!("writing to the oracle panicked"))??;
     let mut failed = BTreeMap::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         if let Some(rest) = line.strip_prefix("FAIL ")
