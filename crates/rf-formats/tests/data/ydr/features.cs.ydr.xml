@@ -1,0 +1,275 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RDR2Drawable version="1">
+ <Name>features.#dr</Name>
+ <BoundingSphereCenter x="0.5" y="0" z="1" />
+ <BoundingSphereRadius value="2.5" />
+ <BoundingBoxMin x="-1" y="-1" z="0" />
+ <BoundingBoxMax x="2" y="1" z="2" />
+ <LodDistHigh value="50" />
+ <LodDistMed value="150" />
+ <FlagsHigh value="8" />
+ <FlagsMed value="1" />
+ <ShaderGroup>
+  <Shaders>
+   <Item>
+    <Name>cable</Name>
+    <DrawBucket value="3" />
+    <DrawBucketFlag value="True" />
+    <Unknown_3E value="243" />
+    <Parameters>
+     <BufferSizes>96 16</BufferSizes>
+     <Items>
+      <Item type="Texture" name="diffusetex" index="0" texture="some_external_texture" />
+      <Item type="Texture" name="bumptex" index="1" texture="another_one" flags="402685954" />
+      <Item type="Texture" name="YhWldEA_0x8DC1631C" index="2" />
+      <Item type="Unknown" name="kJwvVQA_0x2E408A75" index="0" />
+      <Item type="Sampler" name="diffusesampler" index="0" sampler="3" />
+      <Item type="Sampler" name="bumpsampler" index="1" sampler="7" />
+      <Item type="CBuffer" name="bumpiness" buffer="0" offset="0" length="4" x="1.5" />
+      <Item type="CBuffer" name="aajwbYA_0xD1A842ED" buffer="0" offset="4" length="8" x="2" y="-3" />
+      <Item type="CBuffer" name="rNQHALA_0xEB4744C3" buffer="0" offset="16" length="12" x="0.25" y="0.5" z="0.75" />
+      <Item type="CBuffer" name="matrix" buffer="0" offset="32" length="64">
+       <Array>
+        <Item x="1" y="0" z="0" w="0" />
+        <Item x="0" y="1" z="0" w="0" />
+        <Item x="0" y="0" z="1" w="0" />
+        <Item x="0.5" y="0.25" z="-1" w="1" />
+       </Array>
+      </Item>
+      <Item type="CBuffer" name="SrXAUCA_0xC06BF5A4" buffer="1" offset="0" length="16" x="1" y="2" z="3" w="4" />
+     </Items>
+    </Parameters>
+   </Item>
+   <Item>
+    <Name>default</Name>
+    <DrawBucket value="0" />
+    <Parameters>
+     <BufferSizes>16</BufferSizes>
+     <Items>
+      <Item type="CBuffer" name="alphascale" buffer="0" offset="0" length="4" x="0.5" />
+     </Items>
+    </Parameters>
+   </Item>
+  </Shaders>
+ </ShaderGroup>
+ <Skeleton>
+  <Unknown_24 value="16777216" />
+  <Unknown_50>ZJqiLBA_0xF982DC26</Unknown_50>
+  <Unknown_54 />
+  <Unknown_58>GwuTOLA_0x7CADC24A</Unknown_58>
+  <Unknown_60 value="257" />
+  <ParentBoneTag value="0" />
+  <Bones>
+   <Item>
+    <Name>root</Name>
+    <Tag value="0" />
+    <Flags>None</Flags>
+    <Index value="0" />
+    <ParentIndex value="-1" />
+    <NextSiblingIndex value="-1" />
+    <LastSiblingIndex value="-1" />
+    <Rotation x="0" y="0" z="0" w="1" />
+    <Position x="0" y="0" z="0" />
+    <Scale x="1" y="1" z="1" />
+   </Item>
+   <Item>
+    <Name>arm</Name>
+    <Tag value="12345" />
+    <Flags>RotX, RotY, RotZ, LimitRotation, Unk5</Flags>
+    <Index value="1" />
+    <ParentIndex value="0" />
+    <NextSiblingIndex value="2" />
+    <LastSiblingIndex value="2" />
+    <Rotation x="0" y="0.70710677" z="0" w="0.70710677" />
+    <Position x="1" y="2" z="3" />
+    <Scale x="1" y="1" z="1" />
+    <TransformUnk x="0" y="0" z="0" w="0" />
+   </Item>
+   <Item>
+    <Name>hand</Name>
+    <Tag value="11" />
+    <Flags>4194304</Flags>
+    <Index value="2" />
+    <ParentIndex value="1" />
+    <NextSiblingIndex value="-1" />
+    <LastSiblingIndex value="-1" />
+    <Rotation x="0.5" y="0.5" z="0.5" w="0.5" />
+    <Position x="0" y="0.5" z="0" />
+    <Scale x="2" y="2" z="2" />
+   </Item>
+  </Bones>
+ </Skeleton>
+ <Joints>
+  <RotationLimits>
+   <Item>
+    <Min x="-1" y="-0.5" z="0" w="0" />
+    <Max x="1" y="0.5" z="0" w="0" />
+    <BoneTag value="12345" />
+    <Unk1 value="7" />
+   </Item>
+   <Item />
+  </RotationLimits>
+ </Joints>
+ <LodHigh>
+  <Models>
+   <Item>
+    <Mask value="253" />
+    <Flags value="1" />
+    <BoneIndex value="1" />
+    <BoundingBoxMin x="-1" y="-1" z="0" />
+    <BoundingBoxMax x="2" y="1" z="2" />
+    <Geometries>
+     <Item>
+      <ShaderID value="0" />
+      <BoundingBoxMin x="-1" y="-1" z="0" />
+      <BoundingBoxMax x="2" y="1" z="2" />
+      <BonesCount value="3" />
+      <Unknown_2E value="25" />
+      <Unknown_30 value="128" />
+      <ISRVUnknown08 value="75116768" />
+      <VSRVUnknown08 value="75116944" />
+      <ColourSemantic value="1" />
+      <Name>cable</Name>
+      <BoneIndex value="1" />
+      <Topology>LineList</Topology>
+      <VertexLayout>
+       <Semantics>PNXWICTTT</Semantics>
+       <Formats>398565724</Formats>
+       <NonInterleaved value="True" />
+      </VertexLayout>
+      <Vertices>
+-1 -1 0	-1 0 0 0	0.5 -0.25 1 -1	255 0 0 0	0 1 2 3	10 20 30 40	0.5 0.25	0.1 0.2	1 2 3 4
+2 1 2	0 1 0 1	0.33325195 0.099975586 -2 1	128 127 0 0	1 1 1 1	255 255 255 255	65504 -0	-7.5 1E-05	-1 -2 -3 -4
+0.5 0 1	0 0 -1 0	0 0 0 0	0 0 255 0	3 2 1 0	0 0 0 0	0.000100016594 1000	0 0	0 0 0 0
+      </Vertices>
+      <Indices>0 1 2 2 1 0</Indices>
+     </Item>
+     <Item>
+      <ShaderID value="1" />
+      <BoundingBoxMax x="1" y="1" z="1" />
+      <Name>default</Name>
+      <BoneIndex value="1" />
+      <VertexLayout>
+       <Semantics>PT</Semantics>
+       <Formats>32</Formats>
+       <NonInterleaved value="True" />
+      </VertexLayout>
+      <Vertices>
+0 0 0	0 0
+1 1 1	1 1
+      </Vertices>
+     </Item>
+    </Geometries>
+   </Item>
+  </Models>
+ </LodHigh>
+ <LodMed>
+  <Models>
+   <Item>
+    <HasSkin value="True" />
+    <BoneMapping>0 1 2</BoneMapping>
+    <BoundingBoxMin x="0" y="0" z="0" />
+    <BoundingBoxMax x="0" y="0" z="0" />
+    <Geometries>
+     <Item>
+      <ShaderID value="7" />
+      <VertexLayout>
+       <Semantics>PC</Semantics>
+       <Formats>35</Formats>
+       <NonInterleaved value="True" />
+      </VertexLayout>
+      <Vertices>
+0 0 0	1 2 3 4
+      </Vertices>
+      <Indices>0 0 0</Indices>
+     </Item>
+    </Geometries>
+   </Item>
+  </Models>
+ </LodMed>
+ <LodLow>
+  <Models>
+   <Item type="null" />
+  </Models>
+ </LodLow>
+ <LodVlow />
+ <ExtraSkeletons>
+  <Item>
+   <Unknown_24 value="0" />
+   <Unknown_50 />
+   <Unknown_54 />
+   <Unknown_58 />
+   <Unknown_60 value="0" />
+   <ParentBoneTag value="12345" />
+   <Bones>
+    <Item>
+     <Name>extra</Name>
+     <Tag value="999" />
+     <Flags>TransX</Flags>
+     <Index value="0" />
+     <ParentIndex value="-1" />
+     <NextSiblingIndex value="-1" />
+     <LastSiblingIndex value="-1" />
+     <Rotation x="0" y="0" z="0" w="1" />
+     <Position x="0" y="0" z="1" />
+     <Scale x="1" y="1" z="1" />
+    </Item>
+   </Bones>
+  </Item>
+ </ExtraSkeletons>
+ <SamplerDictionary>
+  <Samplers>
+   <Item>
+    <Name>YaDeVOA_0xB0775E82</Name>
+    <BoundingBoxMin x="0" y="0" z="0" />
+    <BoundingBoxMax x="0" y="0" z="0" />
+    <Unknown_90 value="1" />
+    <Unknown_91 value="0" />
+    <Unknown_92 value="0" />
+   </Item>
+   <Item>
+    <Name>bnKVcAA_0xDF233BD9</Name>
+    <BoundingBoxMin x="-1" y="-1" z="-1" />
+    <BoundingBoxMax x="1" y="1" z="1" />
+    <Unknown_90 value="0" />
+    <Unknown_91 value="1" />
+    <Unknown_92 value="1" />
+    <TrianglesData>
+     <Item>
+      <Point1 x="0" y="0" z="0" w="0.3333333" />
+      <Point2 x="1" y="0" z="0" w="0.3333333" />
+      <Point3 x="0" y="1" z="0" w="0.3333333" />
+      <LengthSquare x="1" y="1" z="1" w="1" />
+     </Item>
+    </TrianglesData>
+    <FloatsArray1>0.5 1</FloatsArray1>
+    <IntsArray>3 4 5</IntsArray>
+    <Drawable>
+     <Name>sampled</Name>
+     <LodDistHigh value="10" />
+     <LodHigh>
+      <Models>
+       <Item>
+        <BoundingBoxMin x="0" y="0" z="0" />
+        <BoundingBoxMax x="0" y="0" z="0" />
+        <Geometries>
+         <Item>
+          <ShaderID value="0" />
+          <VertexLayout>
+           <Semantics>P</Semantics>
+           <Formats>3</Formats>
+           <NonInterleaved value="True" />
+          </VertexLayout>
+          <Vertices>
+1 2 3
+          </Vertices>
+         </Item>
+        </Geometries>
+       </Item>
+      </Models>
+     </LodHigh>
+    </Drawable>
+   </Item>
+  </Samplers>
+ </SamplerDictionary>
+</RDR2Drawable>
