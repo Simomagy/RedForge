@@ -52,7 +52,7 @@ pub fn is_game_file(path: &Path) -> bool {
     extension(path).starts_with('y')
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Project {
     /// The `.rfproj`; `None` until it's saved.
     pub file: Option<PathBuf>,
@@ -101,10 +101,24 @@ fn absolute(dir: &Path, path: &str) -> PathBuf {
     out
 }
 
+impl Default for Project {
+    fn default() -> Self {
+        Self {
+            file: None,
+            game: "RDR2".into(),
+            folders: Vec::new(),
+            files: Vec::new(),
+            excluded: BTreeSet::new(),
+            export: BTreeMap::new(),
+            saved_json: None,
+        }
+    }
+}
+
 impl Project {
     /// A new project, not saved yet.
     pub fn new() -> Self {
-        Self { game: "RDR2".into(), ..Default::default() }
+        Self::default()
     }
 
     pub fn load(file: &Path) -> Result<Self, String> {

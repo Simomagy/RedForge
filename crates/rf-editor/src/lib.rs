@@ -415,7 +415,7 @@ impl Editor {
     /// Makes a new project, saved to `file` (an `.rfproj`); what's edited now
     /// stays in it.
     pub fn new_project(&mut self, file: &Path) -> Result<(), String> {
-        let mut p = self.project.take().unwrap_or_else(Project::new);
+        let mut p = self.project.take().unwrap_or_default();
         p.file = None;
         let saved = p.save(Some(file));
         self.project = Some(p);
