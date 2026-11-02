@@ -7,7 +7,7 @@ use rf_formats::formats::XmlContext;
 use rf_formats::formats::ydr::{self, DrawableBase};
 use rf_formats::formats::yft;
 use rf_formats::formats::ytd::TextureDictionary;
-use rf_formats::hash::HashIndex;
+use rf_formats::hash::{HashIndex, joaat};
 use rf_formats::rpf8::{FileRef, Rpf8FileSystem};
 use rf_formats::rsc8::read_resource;
 
@@ -19,6 +19,9 @@ use crate::texture::GpuTexture;
 pub struct ModelFile {
     pub path: String,
     pub drawables: Vec<(String, DrawableBase)>,
+    /// The name hash of each drawable: a ydd's stored hashes (whose names may
+    /// be unknown), the file name's for a ydr or yft.
+    pub name_hashes: Vec<u32>,
 }
 
 /// Index of the game's files by name, for finding related files.
@@ -56,8 +59,13 @@ pub fn read_model(path: &str, loose: &[u8], hashes: &HashIndex) -> rf_formats::R
     let cx = XmlContext { hashes, folder: None };
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
     let mut drawables = Vec::new();
+    let mut name_hashes = Vec::new();
+    let file_hash = joaat(&stem(path).to_lowercase());
     match ext.as_str() {
-        "ydr" => drawables.push((stem(path).to_owned(), ydr::read(loose, &cx)?.base)),
+        "ydr" => {
+            drawables.push((stem(path).to_owned(), ydr::read(loose, &cx)?.base));
+            name_hashes.push(file_hash);
+        }
         "ydd" => {
             let dict = ydr::read_dictionary(loose, &cx)?;
             let hashes_list = dict.hashes.clone().unwrap_or_default();
@@ -66,6 +74,7 @@ pub fn read_model(path: &str, loose: &[u8], hashes: &HashIndex) -> rf_formats::R
                     let name =
                         hashes_list.get(i).map(|h| hashes.name(*h)).unwrap_or_else(|| format!("{}[{i}]", stem(path)));
                     drawables.push((name, d.base));
+                    name_hashes.push(hashes_list.get(i).copied().unwrap_or(0));
                 }
             }
         }
@@ -77,11 +86,12 @@ pub fn read_model(path: &str, loose: &[u8], hashes: &HashIndex) -> rf_formats::R
             for (i, d) in frag.drawables().enumerate() {
                 let label = if i == 0 { name.to_owned() } else { format!("{name} [{i}]") };
                 drawables.push((label, d.base.clone()));
+                name_hashes.push(file_hash);
             }
         }
         _ => return Err(rf_formats::Error::Unsupported(format!("{path}: not a model file"))),
     }
-    Ok(ModelFile { path: path.to_owned(), drawables })
+    Ok(ModelFile { path: path.to_owned(), drawables, name_hashes })
 }
 
 /// Reads a texture dictionary from loose-file bytes.

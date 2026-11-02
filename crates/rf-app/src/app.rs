@@ -40,11 +40,31 @@ pub enum Tab {
 
 /// For testing without anyone at the screen: opens a file, takes a screenshot
 /// of the window and quits (`REDFORGE_OPEN=<path> REDFORGE_SCREENSHOT=<png>`).
+///
+/// `REDFORGE_OPEN` can also be `world`, `world:<place>` or
+/// `world:x,y,z[,yaw,pitch]` for the world map, and
+/// `REDFORGE_SCREENSHOT_DELAY` sets the seconds to wait (6 by default).
 struct AutoShot {
     open: String,
     out: PathBuf,
+    delay: f32,
     opened: Option<Instant>,
     requested: bool,
+}
+
+/// The world map at an `AutoShot` target (`world:<place>` or `world:x,y,z[,yaw,pitch]`).
+fn world_view(game: &Arc<Game>, gpu: &Gpu, target: &str) -> Option<MapView> {
+    let mut v = MapView::world(game, gpu);
+    let Some(at) = target.strip_prefix(':') else { return target.is_empty().then_some(v) };
+    let numbers: Vec<f32> = at.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+    if numbers.len() >= 3 {
+        let (yaw, pitch) = (numbers.get(3).copied().unwrap_or(0.0), numbers.get(4).copied().unwrap_or(-0.3));
+        v.set_camera(glam::Vec3::new(numbers[0], numbers[1], numbers[2]), yaw, pitch);
+        return Some(v);
+    }
+    let (_, p) = v.places().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(at))?;
+    v.view_place(p.into());
+    Some(v)
 }
 
 pub struct RedForgeApp {
@@ -73,7 +93,13 @@ impl RedForgeApp {
         let settings = Settings::load();
         let folder = std::env::var("REDFORGE_GAME_DIR").ok().or_else(|| settings.get(GAME_FOLDER).map(str::to_owned));
         let auto = match (std::env::var("REDFORGE_OPEN"), std::env::var("REDFORGE_SCREENSHOT")) {
-            (Ok(open), Ok(out)) => Some(AutoShot { open, out: out.into(), opened: None, requested: false }),
+            (Ok(open), Ok(out)) => Some(AutoShot {
+                open,
+                out: out.into(),
+                delay: std::env::var("REDFORGE_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(6.0),
+                opened: None,
+                requested: false,
+            }),
             _ => None,
         };
         let mut app = Self {
@@ -124,6 +150,10 @@ impl RedForgeApp {
                 }
             }
         };
+        self.show_tab(tab);
+    }
+
+    fn show_tab(&mut self, tab: Tab) {
         // Replace the welcome page with the first document.
         if let Some(path) = self.dock.find_tab_from(|t| matches!(t, Tab::Welcome)) {
             self.dock.remove_tab(path);
@@ -174,6 +204,16 @@ impl RedForgeApp {
         match a.opened {
             None => {
                 a.opened = Some(Instant::now());
+                if let Some(target) = a.open.strip_prefix("world") {
+                    match world_view(game, &self.gpu, target) {
+                        Some(v) => self.show_tab(Tab::Map(Box::new(v))),
+                        None => {
+                            log::error!("no place {target}");
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
+                    return;
+                }
                 match game.fs.find(&a.open) {
                     Some(f) => self.open(ctx, game, BrowserAction::Open(f)),
                     None => {
@@ -182,7 +222,7 @@ impl RedForgeApp {
                     }
                 }
             }
-            Some(t) if !a.requested && t.elapsed().as_secs_f32() > 6.0 => {
+            Some(t) if !a.requested && t.elapsed().as_secs_f32() > a.delay => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
                 a.requested = true;
             }
@@ -295,8 +335,7 @@ impl eframe::App for RedForgeApp {
                     let g = g.clone();
                     ui.menu_button("View", |ui| {
                         if ui.button("World map").clicked() {
-                            let tab = Tab::Map(Box::new(MapView::world(&g, &self.gpu)));
-                            self.dock.push_to_focused_leaf(tab);
+                            self.show_tab(Tab::Map(Box::new(MapView::world(&g, &self.gpu))));
                             ui.close();
                         }
                     });

@@ -18,7 +18,8 @@ struct Material {
     // z: two layers, w: the channel of colour1 that blends them
     modes: vec4<u32>,
     // x: normal map (0 tangent-space XY, 1 the normal in RGB),
-    // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R)
+    // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R),
+    // z: water (glossy)
     config: vec4<u32>,
 };
 
@@ -141,6 +142,9 @@ fn shade(i: VertexOut, front: bool) -> vec4<f32> {
             }
         }
         roughness = clamp(roughness, 0.04, 1.0);
+    }
+    if material.config.z == 1u {
+        roughness = 0.1;
     }
 
     return lit(i.world, albedo_s, n, metal, roughness, i.colour0);

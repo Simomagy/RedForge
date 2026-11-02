@@ -1,7 +1,6 @@
 //! The map: the streamed world (or one ymap's entities) with a free camera.
 
 pub mod models;
-mod resolve;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -86,12 +85,32 @@ impl MapView {
     pub fn world(game: &Arc<Game>, gpu: &Gpu) -> Self {
         let world = World::new(game.fs.clone(), game.hashes.clone(), game.data.clone());
         let mut v = Self::new(game, gpu, Source::World(Box::new(world)), "World".into(), String::new());
-        if let Source::World(w) = &v.source
-            && let Some((_, p)) = w.places().into_iter().next()
-        {
-            v.camera.position = p.into();
+        if let Some((_, p)) = v.places().into_iter().next() {
+            v.view_place(p.into());
         }
         v
+    }
+
+    /// The world's named places (none for a single ymap).
+    pub fn places(&self) -> Vec<(String, [f32; 3])> {
+        match &self.source {
+            Source::World(w) => w.places(),
+            Source::Ymap(_) => Vec::new(),
+        }
+    }
+
+    /// Looks at a place from the south, a little above it.
+    pub fn view_place(&mut self, place: Vec3) {
+        self.camera.position = place + Vec3::new(0.0, -90.0, 30.0);
+        self.camera.yaw = 0.0;
+        self.camera.pitch = -0.3;
+    }
+
+    /// Puts the camera at a position, looking along `yaw` and `pitch` (radians).
+    pub fn set_camera(&mut self, position: Vec3, yaw: f32, pitch: f32) {
+        self.camera.position = position;
+        self.camera.yaw = yaw;
+        self.camera.pitch = pitch;
     }
 
     pub fn ymap(game: &Arc<Game>, gpu: &Gpu, file: FileRef) -> anyhow::Result<Self> {
@@ -180,12 +199,12 @@ impl MapView {
 
         egui::Panel::top(egui::Id::new(("map-bar", &self.path))).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if let Source::World(w) = &self.source {
-                    let places = w.places();
+                if let Source::World(_) = &self.source {
+                    let places = self.places();
                     egui::ComboBox::from_id_salt(("places", &self.path)).selected_text("Go to…").show_ui(ui, |ui| {
                         for (name, p) in &places {
                             if ui.button(name).clicked() {
-                                self.camera.position = Vec3::from(*p);
+                                self.view_place(Vec3::from(*p));
                             }
                         }
                     });
@@ -284,13 +303,12 @@ impl MapView {
                 s.nodes_loaded, s.nodes_loading, s.nodes
             ));
         }
-        ui.painter().text(
-            rect.left_top() + Vec2::new(8.0, 8.0),
-            egui::Align2::LEFT_TOP,
-            text,
-            egui::FontId::monospace(12.0),
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220),
-        );
+        let painter = ui.painter();
+        let galley = painter.layout_no_wrap(text, egui::FontId::monospace(12.0), egui::Color32::from_gray(235));
+        let at = rect.left_top() + Vec2::new(8.0, 8.0);
+        let backing = egui::Rect::from_min_size(at, galley.size()).expand(4.0);
+        painter.rect_filled(backing, 3.0, egui::Color32::from_black_alpha(150));
+        painter.galley(at, galley, egui::Color32::WHITE);
         let _ = &self.game;
     }
 }

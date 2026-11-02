@@ -8,9 +8,11 @@ It is early work. Today:
 
 - every file format RedForge handles can be read, written and converted to and
   from XML, matching the C# RedForge;
-- the app opens the game, browses its files and shows models, textures and XML.
+- the app opens the game, browses its files and shows models, textures and XML;
+- the world map streams the game's map around a free camera (View → World map),
+  with its LODs, interiors, terrain and time of day; a ymap opens on its own.
 
-The map and the editor come in later milestones.
+The editor comes in later milestones.
 
 ## Running it
 
@@ -21,14 +23,29 @@ cargo run --release -p rf-app
 It asks for the game folder the first time (or takes `REDFORGE_GAME_DIR`), and
 keeps it in `RedForge.Settings.ini` in the user's config folder.
 
+In the map: drag with a mouse button to look around, WASD to move, Q/E for
+down/up, Shift to go faster, the wheel to change speed. "Go to…" jumps to a town.
+
+For checking the app without a screen, it can open something, take a screenshot
+of its window and quit:
+
+```sh
+REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT_DELAY=25 \
+    target/release/redforge
+```
+
+`REDFORGE_OPEN` is a game path (a model, texture or ymap), `world`,
+`world:<place>` or `world:x,y,z[,yaw,pitch]`.
+
 ## Crates
 
 | Crate | What it is |
 |---|---|
 | `rf-formats` | The game's file formats as plain data: RPF8 archives; RSC8 resources (ydr, ydd, yft, ytd, ybn, ycd, yad, yld, yed, ynv, yfd, ypmd, yldb, yvr, ywr); metadata (ymap, ytyp, ymt, PSO, RBF); fxdb; DDS. No rendering, no UI. |
 | `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes, texture dictionary relationships (GTXD, HD bindings). |
-| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials. |
-| `rf-app` | The `redforge` app: egui, with Game Files, model, texture and XML viewers. |
+| `rf-world` | The world: map nodes, ymaps and their entities, the LOD tree, interiors, cull boxes and map states, streamed around a camera. |
+| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain). |
+| `rf-app` | The `redforge` app: egui, with Game Files, the model, texture and XML viewers, and the map. |
 | `rf-cli` | The `rf` command: list, extract and check game files. |
 
 ## The `rf` command

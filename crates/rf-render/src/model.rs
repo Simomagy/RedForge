@@ -8,7 +8,7 @@ use rf_formats::hash::joaat;
 
 use crate::GpuContext;
 use crate::mesh::GpuMesh;
-use crate::renderer::{GpuMaterial, Renderer};
+use crate::renderer::{GpuMaterial, MaterialKind, Renderer};
 use crate::texture::GpuTexture;
 
 /// How a draw blends, from the shader's draw bucket.
@@ -102,6 +102,8 @@ pub struct MaterialDesc<'a> {
     pub two_layer: Option<u8>,
     pub normal_map: NormalMap,
     pub material_map: MaterialMap,
+    /// Water, drawn as a flat glossy colour until there's a water shader.
+    pub water: bool,
 }
 
 /// What a normal map holds.
@@ -310,6 +312,27 @@ mod names {
         0x31873a26, // terrain_lod_2lyr_grass_wetness
     ];
     pub const TERRAIN_SLOD: u32 = 0x3614acb6; // terrain_slod
+
+    pub const WATER: &[u32] = &[
+        0x07569ca0, // water_fountain
+        0x38b8a4bb, // water_river
+        0x27a48605, // water_bucket
+        0xb4714d47, // water_river_highlod
+        0x8c9f00e0, // water_river_cave_highlod
+        0x489b68b7, // water_poolenv
+        0xdb72e78f, // water_riverlod
+        0x8b6aa6a4, // water_river_slod3
+        0xa6765cbb, // water_river_slod2
+        0x942fb82e, // water_river_slod1
+        0xc4e3ff8f, // water_riverwithfoam
+        0x414956f0, // water_riverwithfoam_highlod
+        0x54376245, // water_riverwithpollenlayer_highlod
+        0x274a9836, // water_river_oilfilm_highlod
+        0x3d79b35e, // water_waterfall_highlod
+        0xdb1550f6, // water_river_alpha_highlod
+        0xa956b9cc, // water_river_alpha
+        0x5013be81, // water_bath
+    ];
 }
 
 /// Textures the C# RedForge doesn't map onto its default shader.
@@ -435,6 +458,10 @@ impl<'a> MaterialDesc<'a> {
             d.decal_masks = [0.0, 1.0, 0.0, 0.0];
         } else if name == names::DECAL_DIRT {
             d.decal = DecalMode::Dirt;
+        }
+        if names::WATER.contains(&name) || shader.draw_bucket & 0x7F == 6 {
+            d.water = true;
+            d.textures = [None; 7];
         }
         if names::TERRAIN_LOD.contains(&name) {
             (d.normal_map, d.material_map) = (NormalMap::Direct, MaterialMap::Smoothness);
@@ -583,7 +610,8 @@ impl GpuModel {
             source,
             missing: Vec::new(),
         };
-        let mut materials: Vec<Option<Arc<GpuMaterial>>> = vec![None; shaders.len()];
+        // Per shader: its material, or `None` for helper geometry not drawn.
+        let mut materials: Vec<Option<Option<Arc<GpuMaterial>>>> = vec![None; shaders.len()];
         let mut lods: [Vec<GpuDraw>; 4] = Default::default();
         let mut min = [f32::MAX; 3];
         let mut max = [f32::MIN; 3];
@@ -593,8 +621,6 @@ impl GpuModel {
                 for g in model.geometries.iter().flatten().flatten() {
                     let si = g.shader_id as usize;
                     let shader = shaders.get(si).and_then(Option::as_ref);
-                    let terrain = shader.is_some_and(|s| names::TERRAIN.contains(&s.name_hash));
-                    let Some(mesh) = GpuMesh::upload(ctx, g, terrain) else { continue };
                     let (material, alpha) = match shader {
                         Some(s) => {
                             if materials[si].is_none() {
@@ -602,20 +628,25 @@ impl GpuModel {
                                 let m = match TerrainDesc::from_shader(s, name.clone()) {
                                     Some(t) => {
                                         let textures = t.textures.map(|t| resolver.resolve(t));
-                                        renderer.create_terrain_material(ctx, &t, textures)
+                                        Some(renderer.create_terrain_material(ctx, &t, textures))
                                     }
                                     None => {
                                         let desc = MaterialDesc::from_shader(s, name);
                                         let textures = desc.textures.map(|t| resolver.resolve(t));
-                                        renderer.create_material(ctx, &desc, textures)
+                                        let helper = textures[Slot::Diffuse as usize].is_none()
+                                            && desc.texture(Slot::Diffuse).is_some_and(is_placeholder);
+                                        (!helper).then(|| renderer.create_material(ctx, &desc, textures))
                                     }
                                 };
-                                materials[si] = Some(Arc::new(m));
+                                materials[si] = Some(m.map(Arc::new));
                             }
-                            (materials[si].clone().unwrap(), AlphaMode::from_draw_bucket(s.draw_bucket))
+                            let Some(m) = materials[si].clone().flatten() else { continue };
+                            (m, AlphaMode::from_draw_bucket(s.draw_bucket))
                         }
                         None => (renderer.default_material(), AlphaMode::Opaque),
                     };
+                    let terrain = material.kind == MaterialKind::Terrain;
+                    let Some(mesh) = GpuMesh::upload(ctx, g, terrain) else { continue };
                     for i in 0..3 {
                         min[i] = min[i].min(mesh.min[i]);
                         max[i] = max[i].max(mesh.max[i]);
@@ -629,6 +660,13 @@ impl GpuModel {
         }
         Self { name: name.to_owned(), lods, min, max, lod_dists: d.lod_dists, missing_textures: resolver.missing }
     }
+}
+
+/// RAGE's "no texture" placeholder, which helper geometry (smoke and light
+/// volumes...) has as its diffuse: the game doesn't draw it.
+fn is_placeholder(t: &ShaderTexture) -> bool {
+    matches!(t, ShaderTexture::External(b) if b.data.is_none()
+        && b.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case("givemechecker")))
 }
 
 /// The joaat of a texture name as shader parameters store them (lowercase).

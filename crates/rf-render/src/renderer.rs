@@ -19,6 +19,8 @@ pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// What the final image is: 8-bit sRGB, which egui can show directly.
 pub const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// The colour water is drawn with, in linear RGB.
+const WATER_COLOUR: [f32; 4] = [0.03, 0.07, 0.07, 1.0];
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -460,7 +462,7 @@ impl Renderer {
         };
         let has = |slot: Slot| textures[slot as usize].is_some();
         let u = MaterialUniform {
-            tint: [1.0; 4],
+            tint: if desc.water { WATER_COLOUR } else { [1.0; 4] },
             params: [
                 desc.bumpiness,
                 cutoff,
@@ -488,7 +490,7 @@ impl Renderer {
                     MaterialMap::Smoothness => 1,
                     MaterialMap::Roughness => 2,
                 },
-                0,
+                desc.water as u32,
                 0,
             ],
         };

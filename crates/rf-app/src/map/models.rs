@@ -68,9 +68,7 @@ fn decode(game: &Game, files: &Mutex<FileCache>, archetype: u32, mf: &ModelFiles
                 .map_err(rf_formats::Error::from)
                 .and_then(|data| read_model(&path, &data, &game.hashes));
             let list: Vec<(u32, DrawableBase)> = match parsed {
-                Ok(m) => {
-                    m.drawables.into_iter().map(|(n, d)| (rf_formats::hash::joaat(&n.to_lowercase()), d)).collect()
-                }
+                Ok(m) => m.name_hashes.into_iter().zip(m.drawables).map(|(h, (_, d))| (h, d)).collect(),
                 Err(e) => {
                     log::warn!("{path}: {e}");
                     Vec::new()
@@ -180,7 +178,7 @@ impl ModelCache {
                 _ => None,
             };
         }
-        let slot = match super::resolve::model_files(&self.game.data, archetype) {
+        let slot = match rf_world::model_files(&self.game.data, archetype) {
             Some(mf) => {
                 let _ = self.requests.send((archetype, mf));
                 Slot::Loading
