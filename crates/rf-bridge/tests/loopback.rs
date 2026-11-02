@@ -332,7 +332,8 @@ fn listeners_get_edit_events() {
     let mut a = listen(port);
     // (listening needs nothing from the app: no poll here)
     assert_eq!(bridge.listeners(), 1);
-    assert!(wakes.load(Ordering::SeqCst) > 0, "the count changed");
+    // (the wake can come just after the reply)
+    wait_for("the app is woken: the count changed", || wakes.load(Ordering::SeqCst) > 0);
     let mut b = listen(port);
     assert_eq!(bridge.listeners(), 2);
 
