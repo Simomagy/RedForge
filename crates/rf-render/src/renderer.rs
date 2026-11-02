@@ -1078,6 +1078,11 @@ impl Renderer {
         RenderTargets::new(ctx, &self.view_layouts, &self.ssao_buffer, &self.post, &sky, width, height)
     }
 
+    /// The world sky's moon and stars ([`Sky::set_textures`]).
+    pub fn set_sky_textures(&self, ctx: &GpuContext, moon: Option<&GpuTexture>, stars: Option<&GpuTexture>) {
+        self.world_sky.lock().unwrap().set_textures(ctx, moon, stars);
+    }
+
     /// Draws one model with an orbiting camera (the model viewer).
     pub fn render_model(
         &self,

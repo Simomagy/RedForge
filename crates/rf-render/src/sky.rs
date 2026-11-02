@@ -1,6 +1,7 @@
 //! The sky: the C#'s atmosphere (single scattering in an Earth-like planet's
 //! air, lit by the sun, the moon and the night sky's glow) drawn over the lit
-//! scene, and the image-based lighting made from it.
+//! scene with the sun's disc, the moon and the stars behind it, and the
+//! image-based lighting made from it (the atmosphere alone).
 //!
 //! The planet's ground is the world's z = 0, its centre at
 //! (0, 0, −[`PLANET_RADIUS`]): the camera's planet-space position is the eye
@@ -11,6 +12,7 @@ use glam::{DVec3, Mat4, Vec3, Vec4};
 
 use crate::GpuContext;
 use crate::camera::CameraView;
+use crate::texture::GpuTexture;
 
 /// The planet's radius and the top of its atmosphere, in metres (the C#'s
 /// `CreateEarthScene`).
@@ -204,6 +206,13 @@ pub struct Sky {
     env_group: wgpu::BindGroup,
     /// What the env cube shows: the lights and the eye.
     drawn: Option<(SkyLights, Vec3)>,
+    /// The moon's and the stars' textures, for [`Sky::draw`].
+    textures_layout: wgpu::BindGroupLayout,
+    textures_group: wgpu::BindGroup,
+    textures_sampler: wgpu::Sampler,
+    /// Until there are textures: a plain white moon and no stars.
+    no_moon: GpuTexture,
+    no_stars: GpuTexture,
 }
 
 fn layout_entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
@@ -212,6 +221,25 @@ fn layout_entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEnt
 
 fn texture_type(sample_type: wgpu::TextureSampleType, view_dimension: wgpu::TextureViewDimension) -> wgpu::BindingType {
     wgpu::BindingType::Texture { sample_type, view_dimension, multisampled: false }
+}
+
+/// celestial.wgsl's group: the moon, the stars and their sampler.
+fn textures_group(
+    ctx: &GpuContext,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    moon: &wgpu::TextureView,
+    stars: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("sky textures"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(moon) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(stars) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+        ],
+    })
 }
 
 /// The screen triangle drawn into one target; the instance tells the shader
@@ -248,7 +276,12 @@ impl Sky {
         let atmosphere = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("atmosphere.wgsl"),
             source: wgpu::ShaderSource::Wgsl(
-                concat!(include_str!("shaders/cube.wgsl"), include_str!("shaders/atmosphere.wgsl")).into(),
+                concat!(
+                    include_str!("shaders/cube.wgsl"),
+                    include_str!("shaders/atmosphere.wgsl"),
+                    include_str!("shaders/celestial.wgsl")
+                )
+                .into(),
             ),
         });
         let envmap = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -290,15 +323,24 @@ impl Sky {
             ],
         );
         let env_layout = bind_layout("sky env maps", &ENV_BINDINGS);
+        let filtered = texture_type(wgpu::TextureSampleType::Float { filterable: true }, d2);
+        let textures_layout = bind_layout(
+            "sky textures",
+            &[
+                layout_entry(0, filtered),
+                layout_entry(1, filtered),
+                layout_entry(2, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+            ],
+        );
 
         let pipeline = |label: &str,
                         module: &wgpu::ShaderModule,
-                        layout: Option<&wgpu::BindGroupLayout>,
+                        layouts: &[Option<&wgpu::BindGroupLayout>],
                         entry: &str,
                         format: wgpu::TextureFormat| {
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(label),
-                bind_group_layouts: &[layout],
+                bind_group_layouts: layouts,
                 immediate_size: 0,
             });
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -323,11 +365,12 @@ impl Sky {
                 cache: None,
             })
         };
-        let scene = pipeline("sky scene", &atmosphere, Some(&scene_layout), "fs_scene", HDR_FORMAT);
-        let env_sky = pipeline("sky env cube", &atmosphere, Some(&env_sky_layout), "fs_env", CUBE_FORMAT);
-        let irradiance = pipeline("sky irradiance", &envmap, Some(&convolve_layout), "fs_irradiance", CUBE_FORMAT);
-        let prefilter = pipeline("sky prefilter", &envmap, Some(&convolve_layout), "fs_prefilter", CUBE_FORMAT);
-        let brdf = pipeline("sky BRDF", &envmap, None, "fs_brdf", BRDF_FORMAT);
+        let scene =
+            pipeline("sky scene", &atmosphere, &[Some(&scene_layout), Some(&textures_layout)], "fs_scene", HDR_FORMAT);
+        let env_sky = pipeline("sky env cube", &atmosphere, &[Some(&env_sky_layout)], "fs_env", CUBE_FORMAT);
+        let irradiance = pipeline("sky irradiance", &envmap, &[Some(&convolve_layout)], "fs_irradiance", CUBE_FORMAT);
+        let prefilter = pipeline("sky prefilter", &envmap, &[Some(&convolve_layout)], "fs_prefilter", CUBE_FORMAT);
+        let brdf = pipeline("sky BRDF", &envmap, &[None], "fs_brdf", BRDF_FORMAT);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("sky env"),
@@ -419,6 +462,21 @@ impl Sky {
         face_pass(&mut encoder, &brdf_table, &brdf, None, 0);
         ctx.queue.submit([encoder.finish()]);
 
+        // The Milky Way wraps around the sky.
+        let textures_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sky textures"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let no_moon = GpuTexture::solid(ctx, "sky no moon", [255; 4]);
+        let no_stars = GpuTexture::solid(ctx, "sky no stars", [0; 4]);
+        let textures_group =
+            textures_group(ctx, &textures_layout, &textures_sampler, &no_moon.view_2d, &no_stars.view_2d);
+
         Self {
             scene_layout,
             scene,
@@ -434,7 +492,26 @@ impl Sky {
             env_layout,
             env_group,
             drawn: None,
+            textures_layout,
+            textures_group,
+            textures_sampler,
+            no_moon,
+            no_stars,
         }
+    }
+
+    /// The textures [`Sky::draw`] shows: the moon's disc (rgb, a its mask;
+    /// the game's skydome `moon-new`) and the stars (r the Milky Way as an
+    /// equirectangular strip, a the stars; the skydome's `stars`). Until set,
+    /// or for `None`, a plain white moon and no stars.
+    pub fn set_textures(&mut self, ctx: &GpuContext, moon: Option<&GpuTexture>, stars: Option<&GpuTexture>) {
+        self.textures_group = textures_group(
+            ctx,
+            &self.textures_layout,
+            &self.textures_sampler,
+            &moon.unwrap_or(&self.no_moon).view_2d,
+            &stars.unwrap_or(&self.no_stars).view_2d,
+        );
     }
 
     /// Redraws the env cube (the atmosphere seen from `eye`) and its
@@ -503,7 +580,8 @@ impl Sky {
     /// (Rgba16Float, the size of the view) with lit × transmittance +
     /// inscattered light, the sky where the depth is 0 and aerial
     /// perspective where there's geometry. `lit` should be black where
-    /// nothing is drawn.
+    /// nothing is drawn: there, above the horizon, the sun's disc, the moon
+    /// and (at night) the stars are behind the atmosphere.
     pub fn draw(
         &self,
         ctx: &GpuContext,
@@ -530,6 +608,7 @@ impl Sky {
         });
         pass.set_pipeline(&self.scene);
         pass.set_bind_group(0, &targets.group, &[]);
+        pass.set_bind_group(1, &self.textures_group, &[]);
         pass.draw(0..3, 0..1);
     }
 

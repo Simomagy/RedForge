@@ -2,6 +2,7 @@
 //! ymap's entities, with a free camera.
 
 pub mod models;
+mod sky;
 pub mod tools;
 
 use std::collections::HashMap;
@@ -184,7 +185,8 @@ impl MapView {
         Ok(v)
     }
 
-    fn new(game: &Arc<Game>, _gpu: &Gpu, source: Source, title: String, path: String) -> Self {
+    fn new(game: &Arc<Game>, gpu: &Gpu, source: Source, title: String, path: String) -> Self {
+        sky::load_textures(game, gpu);
         Self {
             title,
             path,
