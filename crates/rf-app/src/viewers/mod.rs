@@ -1,5 +1,6 @@
 //! The document tabs: model, texture and XML viewers.
 
+pub mod hex;
 pub mod model;
 pub mod text;
 pub mod texture;

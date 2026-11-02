@@ -20,6 +20,7 @@ pub struct Browser {
 pub enum BrowserAction {
     Open(FileRef),
     OpenXml(FileRef),
+    OpenHex(FileRef),
 }
 
 fn file_colour(name: &str, ui: &egui::Ui) -> egui::Color32 {
@@ -106,6 +107,10 @@ impl Browser {
             }
             if ui.button("View as XML").clicked() {
                 *action = Some(BrowserAction::OpenXml(f));
+                ui.close();
+            }
+            if ui.button("View as hex").clicked() {
+                *action = Some(BrowserAction::OpenHex(f));
                 ui.close();
             }
             if ui.button("Copy path").clicked() {

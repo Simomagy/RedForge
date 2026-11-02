@@ -19,6 +19,7 @@ use crate::project_pane::ProjectPane;
 use crate::properties::Properties;
 use crate::settings::{GAME_FOLDER, Settings};
 use crate::viewers::Gpu;
+use crate::viewers::hex::HexViewer;
 use crate::viewers::model::ModelViewer;
 use crate::viewers::text::TextViewer;
 use crate::viewers::texture::TextureViewer;
@@ -42,6 +43,7 @@ pub enum Tab {
     Model(Box<ModelViewer>),
     Texture(Box<TextureViewer>),
     Text(Box<TextViewer>),
+    Hex(Box<HexViewer>),
     Map(Box<MapView>),
     /// The selection's properties.
     Properties,
@@ -187,6 +189,7 @@ impl RedForgeApp {
     fn open(&mut self, ctx: &egui::Context, game: &Arc<Game>, action: BrowserAction) {
         let tab = match action {
             BrowserAction::OpenXml(f) => Tab::Text(Box::new(TextViewer::open_xml(ctx, game, f))),
+            BrowserAction::OpenHex(f) => Tab::Hex(Box::new(HexViewer::open(ctx, game, f))),
             BrowserAction::Open(f) => {
                 let path = game.path(f).to_lowercase();
                 let ext = path.rsplit('.').next().unwrap_or("");
@@ -221,8 +224,9 @@ impl RedForgeApp {
 
     /// Shows a document with the others (in place of the welcome page).
     fn show_tab(&mut self, tab: Tab) {
-        let document =
-            |t: &Tab| matches!(t, Tab::Welcome | Tab::Map(_) | Tab::Model(_) | Tab::Texture(_) | Tab::Text(_));
+        let document = |t: &Tab| {
+            matches!(t, Tab::Welcome | Tab::Map(_) | Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_))
+        };
         if let Some(path) = self.dock.find_tab_from(document) {
             self.dock.set_focused_node_and_surface(egui_dock::NodePath { surface: path.surface, node: path.node });
         }
@@ -357,7 +361,12 @@ impl RedForgeApp {
                     }
                     return;
                 }
-                match game.fs.find(&a.open) {
+                let (path, hex) = match a.open.strip_prefix("hex:") {
+                    Some(p) => (p.to_owned(), true),
+                    None => (a.open.clone(), false),
+                };
+                match game.fs.find(&path) {
+                    Some(f) if hex => self.open(ctx, game, BrowserAction::OpenHex(f)),
                     Some(f) => self.open(ctx, game, BrowserAction::Open(f)),
                     None => {
                         log::error!("{} not found", a.open);
@@ -447,6 +456,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Model(v) => format!("🧊 {}", v.title).into(),
             Tab::Texture(v) => format!("🖼 {}", v.title).into(),
             Tab::Text(v) => format!("📄 {}", v.title).into(),
+            Tab::Hex(v) => format!("{} (hex)", v.title).into(),
             Tab::Map(v) => format!("🗺 {}", v.title).into(),
             Tab::Properties => "Properties".into(),
             Tab::Project => "Project".into(),
@@ -462,6 +472,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Model(v) => egui::Id::new(("model", &v.path)),
             Tab::Texture(v) => egui::Id::new(("texture", &v.path)),
             Tab::Text(v) => egui::Id::new(("text", &v.path)),
+            Tab::Hex(v) => egui::Id::new(("hex", &v.path)),
             Tab::Map(v) => egui::Id::new(("map", &v.path)),
             Tab::Properties => egui::Id::new("properties"),
             Tab::Project => egui::Id::new("project"),
@@ -488,6 +499,7 @@ impl TabViewer for Tabs<'_> {
             },
             Tab::Texture(v) => v.ui(ui, self.gpu),
             Tab::Text(v) => v.ui(ui),
+            Tab::Hex(v) => v.ui(ui),
             Tab::Map(v) => v.ui(ui, self.gpu, self.editor.as_deref_mut(), self.tools),
             Tab::Properties => match self.editor.as_deref_mut() {
                 Some(ed) => self.properties.ui(ui, ed, Some(self.tools)),
@@ -762,7 +774,7 @@ impl eframe::App for RedForgeApp {
 
         // Viewers waiting on a background job need frames to notice it finishing.
         let waiting = self.dock.iter_all_tabs().any(|(_, t)| match t {
-            Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Map(_) => true,
+            Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_) | Tab::Map(_) => true,
             // Objects asks for frames itself while its thumbnails load.
             Tab::Welcome | Tab::Properties | Tab::Project | Tab::Hierarchy | Tab::GameFiles | Tab::Objects => false,
         });
