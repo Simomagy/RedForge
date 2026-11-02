@@ -1,7 +1,7 @@
 # Porting a format from the C# RedForge
 
 The Rust port reads, writes and converts the same game files as the C# RedForge
-(`../RedForge-Source`, frozen as the reference). ""Done" for a format means that on a
+(`../RedForge-Source`, frozen as the reference). "Done" for a format means that on a
 varied sample of game files the Rust and the C# produce **identical XML**, and a
 file the Rust writes from XML is read by the C# exactly like one the C# writes
 itself.
