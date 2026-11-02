@@ -49,7 +49,8 @@ pub use geometry::{
     BoundBvhPart, BoundGeometry, BoundPolygon, PolyBox, PolyCapsule, PolySphere, PolyTriangle, PolygonKind,
 };
 pub use material::{
-    BOUND_FLAG_NAMES, BoundMaterial, BoundMaterial1, BoundMaterial2, CompositeFlags, MATERIAL_FLAG_NAMES, material_hash,
+    BOUND_FLAG_NAMES, BoundMaterial, BoundMaterial1, BoundMaterial2, CompositeFlags, MATERIAL_FLAG_NAMES,
+    flags_to_string, material_hash, parse_flags,
 };
 pub use math::{IDENTITY, Mat4, Vec3};
 

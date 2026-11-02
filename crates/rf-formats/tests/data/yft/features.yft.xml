@@ -1,0 +1,380 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RDR2Fragment version="0">
+ <Name>pack:/features</Name>
+ <BoundingSphereCenter x="0.476418" y="-1E-06" z="1.201076" />
+ <BoundingSphereRadius value="1.292112" />
+ <NmAssetID value="255" />
+ <BreakAndDamageFlags value="131072" />
+ <Unknown_84h value="-1" />
+ <Drawable>
+  <FragName>skel</FragName>
+  <FragMatrix>
+   1 0 0 0
+   0 1 0 0
+   0 0 1 0
+   0 0 0 0
+  </FragMatrix>
+  <BoundingSphereCenter x="0.476418" y="-1E-06" z="1.201076" />
+  <BoundingSphereRadius value="1.292112" />
+  <LodDistHigh value="9998" />
+  <Skeleton>
+   <Unknown_24 value="16777216" />
+   <Unknown_60 value="256" />
+   <ParentBoneTag value="0" />
+   <Bones>
+    <Item>
+     <Name>Root_features</Name>
+     <Tag value="0" />
+     <Flags>RotX, RotY, RotZ, TransX, TransY, TransZ</Flags>
+     <Index value="0" />
+     <ParentIndex value="-1" />
+     <NextSiblingIndex value="-1" />
+     <LastSiblingIndex value="2" />
+     <Rotation x="0" y="0" z="0" w="1" />
+     <Position x="0" y="0" z="0" />
+     <Scale x="1" y="1" z="1" />
+    </Item>
+    <Item>
+     <Name>door</Name>
+     <Tag value="6102" />
+     <Flags>RotX, RotY, RotZ</Flags>
+     <Index value="1" />
+     <ParentIndex value="0" />
+     <NextSiblingIndex value="2" />
+     <LastSiblingIndex value="2" />
+     <Rotation x="0" y="0" z="0" w="1" />
+     <Position x="0.5" y="0" z="0" />
+     <Scale x="1" y="1" z="1" />
+    </Item>
+    <Item>
+     <Name>pane</Name>
+     <Tag value="42850" />
+     <Flags>RotX, RotY, RotZ, TransX, TransY, TransZ</Flags>
+     <Index value="2" />
+     <ParentIndex value="0" />
+     <NextSiblingIndex value="-1" />
+     <LastSiblingIndex value="2" />
+     <Rotation x="0" y="0" z="0" w="1" />
+     <Position x="0" y="0" z="1" />
+     <Scale x="1" y="1" z="1" />
+    </Item>
+   </Bones>
+  </Skeleton>
+ </Drawable>
+ <DrawableArrayNames>
+  <Item>extra_part</Item>
+ </DrawableArrayNames>
+ <DrawableArray>
+  <Item>
+   <FragName>extra_part</FragName>
+   <FragMatrix>
+    1 0 0 0
+    0 1 0 0
+    0 0 1 0
+    0 0 2 0
+   </FragMatrix>
+   <Name>extra_part_drawable</Name>
+   <BoundingSphereRadius value="0.5" />
+  </Item>
+ </DrawableArray>
+ <EnvironmentCloth>
+  <Item>
+   <InstanceTuning>
+    <Unknown10 value="1" />
+    <Unknown14 value="1" />
+    <Unknown30 value="1296" />
+    <Unknown34 value="-1" />
+    <Unknown3C value="0.05" />
+    <Unknown44 value="-1" />
+   </InstanceTuning>
+   <Drawable>
+    <FragName>flag</FragName>
+    <FragMatrix>
+     1 0 0 0
+     0 1 0 0
+     0 0 1 0
+     0 0 0 0
+    </FragMatrix>
+    <Skeleton>
+     <Bones>
+      <Item>
+       <Name>dropped_from_the_csharp_xml</Name>
+       <Index value="0" />
+       <ParentIndex value="-1" />
+       <NextSiblingIndex value="-1" />
+       <LastSiblingIndex value="-1" />
+      </Item>
+     </Bones>
+    </Skeleton>
+   </Drawable>
+   <Controller>
+    <Name>flag_controller</Name>
+    <Type value="3" />
+    <BridgeSimGfx>
+     <Unknown20>0 0.5 1</Unknown20>
+     <Unknown160>0 1 2</Unknown160>
+    </BridgeSimGfx>
+    <VerletCloth1>
+     <UnknownA2 value="6" />
+     <UnknownA8 value="60" />
+     <UnknownAC value="0" />
+     <Unknown174 value="1" />
+     <Unknown160>0 1 2</Unknown160>
+     <Vertices>
+      <Item>
+       <Position x="0" y="0" z="1" />
+      </Item>
+      <Item>
+       <Position x="1" y="0" z="1" />
+       <UnknownC value="1" />
+      </Item>
+      <Item>
+       <Position x="0" y="0" z="0" />
+      </Item>
+     </Vertices>
+     <Constraints>
+      <Item>
+       <Unknown02 value="1" />
+       <Unknown04 value="1" />
+      </Item>
+     </Constraints>
+    </VerletCloth1>
+    <VerletCloth2>
+     <UnknownA2 value="4" />
+     <UnknownA8 value="9999" />
+     <UnknownAC value="9999" />
+     <Unknown174 value="0" />
+    </VerletCloth2>
+   </Controller>
+   <Unknown78 value="16" />
+  </Item>
+ </EnvironmentCloth>
+ <CharacterCloth>
+  <Item>
+   <Name>features_char_cloth</Name>
+   <Controller>
+    <Name>CLOTHSIM_FEATURES</Name>
+    <Type value="3" />
+    <BoneIds>6102</BoneIds>
+   </Controller>
+   <BoneIds>42850</BoneIds>
+  </Item>
+ </CharacterCloth>
+ <BoneTransforms>
+  <Item>1 0 0 0 0 1 0 0 0 0 1 0</Item>
+  <Item>1 0 0 0.5 0 1 0 0 0 0 1 0</Item>
+  <Item>1 0 0 0 0 1 0 0 0 0 1 1</Item>
+ </BoneTransforms>
+ <PaneModelInfos>
+  <Item>
+   <Projection>
+    0.9527135 0 0 0
+    -0.95266753 0 0 0
+    -7.679706E-05 0 2.402344 0
+    0.025161743 0.01423645 0.97158813 0.9777832
+   </Projection>
+   <VertexLayout>
+    <Semantics>PNXCTT</Semantics>
+    <Formats>344522</Formats>
+    <NonInterleaved value="True" />
+   </VertexLayout>
+   <VertexCount value="8" />
+   <ColourSemantic value="1" />
+   <Unknown180 value="0.01171875" />
+   <Unknown184 value="2" />
+   <FragIndex value="1" />
+   <Thickness value="0.020000998" />
+   <Tangent x="0.019998997" y="-0.9999999" z="0" />
+   <Unknown198 value="0" />
+  </Item>
+ </PaneModelInfos>
+ <PhysicsLODGroup>
+  <PhysicsLOD1>
+   <MinMoveForce value="-1" />
+   <OriginalRootCgOffset x="0.47641" y="-1E-06" z="1.201076" w="-3.6032321" />
+   <Archetype>
+    <Name>features</Name>
+    <TypeFlags>CF_MAP_TYPE_WEAPON, CF_OBJECT_TYPE</TypeFlags>
+    <Mass x="13.211066" y="15.28544" z="2.0816984" w="27.46622" />
+    <MassInv x="0.07569412" y="0.06542173" z="0.48037696" w="0.036408357" />
+    <GravityFactor value="1" />
+    <MaxSpeed value="150" />
+    <MaxAngSpeed value="6.2831855" />
+    <BuoyancyFactor value="1" />
+    <LinearC x="0.02" y="0.02" z="0.02" w="1E-45" />
+    <LinearV x="0.02" y="0.02" z="0.02" w="1E-45" />
+    <LinearV2 x="0.05" y="0.05" z="0.05" w="1E-45" />
+    <AngularC x="0.02" y="0.02" z="0.02" w="1E-45" />
+    <AngularV x="0.02" y="0.02" z="0.02" w="1E-45" />
+    <AngularV2 x="0.01" y="0.01" z="0.01" w="1E-45" />
+   </Archetype>
+   <Groups>
+    <Item>
+     <Name>root_group</Name>
+     <Unknown00 value="2" />
+     <ParentIndex value="65535" />
+     <ChildIndex value="0" />
+     <ChildCount value="1" />
+     <BoneId value="0" />
+     <Strength value="-1" />
+     <MinSoftAngle1 value="-1" />
+     <MaxSoftAngle1 value="1" />
+     <MinDamageForce value="10" />
+     <DamageHealth value="1000" />
+     <WeaponScale value="1" />
+    </Item>
+    <Item>
+     <Name>door_group</Name>
+     <ParentIndex value="0" />
+     <ChildIndex value="1" />
+     <ChildCount value="1" />
+     <BoneId value="6102" />
+     <Strength value="0.33333334" />
+     <JointStiffness value="65504" />
+     <Unknown4C value="3" />
+     <Unknown4E value="1" />
+    </Item>
+    <Item>
+     <Name>pane_group</Name>
+     <ParentIndex value="0" />
+     <ChildIndex value="1" />
+     <ChildCount value="0" />
+     <BoneId value="42850" />
+     <Strength value="100000" />
+    </Item>
+   </Groups>
+   <UnknownData1>1 2</UnknownData1>
+   <ChildrenUnkFloats>3.4028235E+38 1</ChildrenUnkFloats>
+   <ChildrenPristineMass>27.46622 1</ChildrenPristineMass>
+   <ChildrenDamagedMass>27.46622 1</ChildrenDamagedMass>
+   <ChildrenGroupIndices>0 1</ChildrenGroupIndices>
+   <ChildrenUnkVecs>
+    <Item x="0" y="0" z="0" w="0" />
+    <Item x="1" y="0" z="0" w="0" />
+   </ChildrenUnkVecs>
+   <ChildrenInertiaTensors>
+    <Item x="13.211066" y="15.28544" z="2.0816984" w="2.5146441" />
+    <Item x="1" y="1" z="1" w="1" />
+   </ChildrenInertiaTensors>
+   <Drawables1>
+    <Item>
+     <FragName />
+     <FragMatrix>
+      1 0 0 0
+      0 1 0 3.999999
+      0 0 1 -2.999999
+      0.47641 -1E-06 1.201076 0
+     </FragMatrix>
+    </Item>
+    <Item>
+     <FragName>door_child</FragName>
+     <FragMatrix>
+      1 0 0 0
+      0 1 0 0
+      0 0 1 0
+      0 0 0 0
+     </FragMatrix>
+     <ExtraMatrices>
+      <Item>1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</Item>
+     </ExtraMatrices>
+     <Bounds type="Sphere" version="2">
+      <SphereRadius value="9" />
+     </Bounds>
+    </Item>
+   </Drawables1>
+   <Drawables2>
+    <Item type="null" />
+    <Item>
+     <FragName>door_child_damaged</FragName>
+     <Bounds type="Box" version="2">
+      <BoxMin x="-1" y="-1" z="-1" />
+      <BoxMax x="1" y="1" z="1" />
+      <Margin value="0.005" />
+     </Bounds>
+    </Item>
+   </Drawables2>
+   <Bounds type="Composite" version="2">
+    <BoxMin x="-7.5399876E-06" y="-0.020001" z="1.66893E-06" />
+    <BoxMax x="0.9528276" y="0.019999" z="2.4021504" />
+    <BoxCenter x="0.47641003" y="-1.0002404E-06" z="1.201076" />
+    <SphereCenter x="0.47641" y="-1E-06" z="1.201076" />
+    <SphereRadius value="1.2922666" />
+    <Mass value="1" />
+    <Inertia x="1" y="1" z="1" />
+    <Unknown_3Ch value="2" />
+    <Bounds>
+     <Item type="Box" version="2">
+      <BoxMin x="-0.47641754" y="-0.02" z="-1.2010744" />
+      <BoxMax x="0.47641754" y="0.02" z="1.2010744" />
+      <SphereRadius value="1.2922666" />
+      <Margin value="0.005" />
+      <Mass value="0.09155407" />
+      <Inertia x="0.4809932" y="0.5565178" z="0.075791225" />
+      <Unknown_3Ch value="2" />
+      <MaterialName>31555</MaterialName>
+      <Transform>
+       1 0 0 0
+       0 1 0 4
+       0 0 1 -3
+       0.47641 -1E-06 1.201076 1
+      </Transform>
+      <TypeFlags>CF_MAP_TYPE_WEAPON, CF_MAP_TYPE_MOVER</TypeFlags>
+      <IncludeFlags>CF_PED_TYPE, CF_OBJECT_TYPE</IncludeFlags>
+     </Item>
+     <Item type="Sphere" version="2">
+      <SphereRadius value="0.25" />
+      <Margin value="0.25" />
+      <Transform>
+       1 0 0 0
+       0 1 0 0
+       0 0 1 0
+       0.5 0 0 1
+      </Transform>
+      <TypeFlags>CF_MAP_TYPE_WEAPON</TypeFlags>
+     </Item>
+    </Bounds>
+   </Bounds>
+   <ArticulatedBodyType>
+    <ItemIndices>0 1 2</ItemIndices>
+    <ItemFlags>1 2 3</ItemFlags>
+    <Joints>
+     <Item type="DOF1">
+      <FragIndex1 value="0" />
+      <FragIndex2 value="1" />
+      <Unknown20 x="1" y="0" z="0" w="0" />
+      <UnknownA0 x="-0.5" y="0.5" z="0" w="0" />
+     </Item>
+     <Item type="DOF3">
+      <FragIndex1 value="0" />
+      <FragIndex2 value="2" />
+      <Unknown40 x="0" y="0" z="1" w="0" />
+     </Item>
+    </Joints>
+   </ArticulatedBodyType>
+   <FragTypeConnections>
+    <Item>
+     <Unknown10 value="1" />
+     <Unknown14 value="0.5" />
+    </Item>
+   </FragTypeConnections>
+  </PhysicsLOD1>
+  <PhysicsLOD2>
+   <MinMoveForce value="2" />
+   <Groups />
+   <Drawables1 />
+   <Drawables2 />
+  </PhysicsLOD2>
+ </PhysicsLODGroup>
+ <DrawableCloth>
+  <Item>
+   <FragName>flag_cloth</FragName>
+   <FragMatrix>
+    1 0 0 0
+    0 1 0 0
+    0 0 1 0
+    0 0 0 0
+   </FragMatrix>
+   <Name>flag_cloth_drawable</Name>
+  </Item>
+ </DrawableCloth>
+</RDR2Fragment>

@@ -68,7 +68,7 @@ mod geometry;
 mod sampler;
 mod shader;
 mod skeleton;
-mod util;
+pub(crate) mod util;
 mod vertex;
 
 pub use drawable::{Drawable, DrawableBase, DrawableDictionary, DrawableLod, DrawableModel};
@@ -80,7 +80,7 @@ pub use shader::{
 pub use skeleton::{
     BONE_FLAG_NAMES, Bone, JointLimit, JointLimits, Matrix4, Skeleton, SkeletonDebugBlock, SkeletonMappingBlock,
 };
-pub use vertex::{VertexLayout, format_size, semantic, vertex_format};
+pub use vertex::{VertexLayout, f32_to_half, format_size, half_to_f32, semantic, vertex_format};
 
 use super::XmlContext;
 use crate::rsc8::{BlockMap, Rsc8Writer, read_resource};

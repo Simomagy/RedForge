@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RDR2ClothDictionary version="0">
+ <Clothes>
+  <Item>
+   <Name>bVksLyA_0x2C6B8D63</Name>
+   <Transform>
+    1 0 0 0
+    0 1 0 0
+    0 0 1 0
+    0.5 0 2 0
+   </Transform>
+   <Unknown10>
+    <Item x="1" y="2" z="3" w="4" />
+    <Item x="0" y="0" z="0" w="0" />
+   </Unknown10>
+   <Unknown90>7 8 9</Unknown90>
+   <Controller>
+    <Name>CLOTHSIM_A_NAME_LONGER_THAN_THIR</Name>
+    <Type value="3" />
+    <BridgeSimGfx>
+     <Unknown20>0 0 0.1 0.1</Unknown20>
+     <Unknown60>0 0 0 0</Unknown60>
+     <UnknownA0>1.3 1.3 1.3 1.3</UnknownA0>
+     <UnknownE0>0.00040000002 0.00040000002 0.00040000002 0.00040000002</UnknownE0>
+     <Unknown120>0 0 0 0</Unknown120>
+     <Unknown160>2 3 0 1</Unknown160>
+     <Unknown1A0>16481 16481 16481 16481</Unknown1A0>
+     <Unknown1E0>0 0 0 0</Unknown1E0>
+     <Unknown30>1 2</Unknown30>
+     <Unknown70>3</Unknown70>
+     <UnknownB0>4 5</UnknownB0>
+     <UnknownF0>6</UnknownF0>
+     <Unknown130>7 8</Unknown130>
+     <Unknown170>9 10</Unknown170>
+     <Unknown1B0>11</Unknown1B0>
+     <Unknown1F0>12</Unknown1F0>
+     <Unknown40>13</Unknown40>
+     <Unknown80>14</Unknown80>
+     <UnknownC0>15</UnknownC0>
+     <UnknownA0>1.3 1.3 1.3 1.3</UnknownA0>
+     <Unknown140>16</Unknown140>
+     <Unknown180>17</Unknown180>
+     <Unknown1C0>18</Unknown1C0>
+     <Unknown200>19</Unknown200>
+    </BridgeSimGfx>
+    <MorphController>
+     <Unknown18>
+      <Item />
+      <Item>
+       <Unknown0 x="1" y="0" z="0" w="-1" />
+       <Unknown1 value="1" />
+       <Unknown5 value="70000" />
+       <Unknown14 value="14" />
+      </Item>
+     </Unknown18>
+     <Unknown28>
+      <Item>
+       <Unknown2 value="2" />
+      </Item>
+     </Unknown28>
+     <Unknown58>1 2 3</Unknown58>
+     <Unknown188>4</Unknown188>
+     <Unknown98 value="280" />
+     <Unknown120 value="72" />
+    </MorphController>
+    <VerletCloth1>
+     <UnknownA2 value="2" />
+     <UnknownA8 value="9999" />
+     <UnknownAC value="9999" />
+     <Unknown174 value="1" />
+     <Unknown160>0 1 3 3 2 0</Unknown160>
+     <Vertices>
+      <Item>
+       <Position x="0.1082446" y="-0.12859204" z="-0.041306674" />
+       <UnknownC value="512" />
+       <UnknownE value="8200" />
+      </Item>
+      <Item>
+       <Position x="0.15053272" y="-0.09760341" z="-0.027688146" />
+      </Item>
+      <Item />
+     </Vertices>
+     <Vertices2>
+      <Item>
+       <Position x="0.1082446" y="-0.12859204" z="-0.041306674" />
+       <UnknownC value="512" />
+       <UnknownE value="8200" />
+      </Item>
+     </Vertices2>
+     <Constraints>
+      <Item>
+       <Unknown02 value="3" />
+       <Unknown04 value="0.015827" />
+       <Unknown10 value="0.75" />
+      </Item>
+      <Item>
+       <Unknown00 value="1" />
+       <Unknown04 value="100000000" />
+       <Unknown1C value="-1" />
+      </Item>
+     </Constraints>
+     <Constraints2>
+      <Item>
+       <Unknown00 value="2" />
+       <Unknown02 value="1" />
+       <Unknown04 value="0.017392" />
+       <Unknown08 value="1" />
+       <Unknown0C value="0.6" />
+       <Unknown10 value="0.75" />
+      </Item>
+     </Constraints2>
+    </VerletCloth1>
+    <VerletCloth3>
+     <UnknownA2 value="58" />
+     <UnknownA8 value="60" />
+     <UnknownAC value="0" />
+     <Unknown174 value="0" />
+     <Vertices>
+      <Item>
+       <Position x="1" y="2" z="3" />
+      </Item>
+     </Vertices>
+    </VerletCloth3>
+    <Unknown9C value="0.04" />
+    <UnknownA0>0 1 3 3 2 0</UnknownA0>
+    <Vertices>
+     <Item>
+      <Position x="0.108245" y="-0.128592" z="-0.041307" />
+     </Item>
+     <Item>
+      <Position x="0.150533" y="-0.097603" z="-0.027688" />
+      <UnknownE value="5" />
+     </Item>
+    </Vertices>
+    <UnknownC0 value="4" />
+    <UnknownD0>266 283 259 260 277 257 49 250</UnknownD0>
+    <BoneWeightsInds>
+     <Item>
+      <Weight0 value="0.421106" />
+      <Weight7 value="7.3E-05" />
+      <Index1 value="1" />
+      <Index7 value="7" />
+     </Item>
+     <Item />
+    </BoneWeightsInds>
+    <UnknownFC value="1" />
+    <BoneIds>16481 25643</BoneIds>
+   </Controller>
+   <Bounds type="Composite" version="2">
+    <Mass value="1" />
+    <Inertia x="1" y="1" z="1" />
+    <Bounds>
+     <Item type="Capsule" version="2">
+      <BoxMin x="-0.13" y="-0.28499997" z="-0.13" />
+      <BoxMax x="0.13" y="0.28499997" z="0.13" />
+      <SphereRadius value="0.28499997" />
+      <Margin value="0.13" />
+      <Mass value="0.025661573" />
+      <Inertia x="0.024305994" y="0.00784393" z="0.024305994" />
+      <Unknown_3Ch value="2" />
+      <Transform>
+       -0.09201592 0.035750538 -0.9951154 0
+       -0.99478805 -0.047385186 0.09028348 0.9005228
+       -0.04392624 0.99823654 0.03992462 0.09947717
+       0.131967 0.030404 -0.005109 1
+      </Transform>
+     </Item>
+     <Item type="Capsule" version="2">
+      <BoxMin x="-0.1" y="-0.2" z="-0.1" />
+      <BoxMax x="0.1" y="0.2" z="0.1" />
+      <SphereRadius value="0.2" />
+      <Margin value="0.1" />
+     </Item>
+    </Bounds>
+   </Bounds>
+   <BoneIds>18545 4089</BoneIds>
+  </Item>
+  <Item>
+   <Name>mp_t2_nl_belt_fr1_001_oc</Name>
+   <Transform>
+    0 0 0 0
+    0 0 0 0
+    0 0 0 0
+    0 0 0 0
+   </Transform>
+   <Controller>
+    <Name>CLOTHSIM_MP_T2_NL_BELT_FR1_001</Name>
+    <Type value="3" />
+    <Unknown9C value="0.04" />
+    <UnknownC0 value="4" />
+    <UnknownFC value="1" />
+   </Controller>
+  </Item>
+ </Clothes>
+</RDR2ClothDictionary>

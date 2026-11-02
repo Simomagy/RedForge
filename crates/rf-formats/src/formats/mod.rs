@@ -271,8 +271,3 @@ pub fn from_xml(xml_name: &str, xml: &str, cx: &XmlContext) -> Result<Vec<u8>> {
         Kind::ImposterExtents => dat::imposter_extents_from_xml(xml, cx),
     }
 }
-
-/// For format modules that aren't ported yet.
-pub(crate) fn todo<T>(what: &str) -> Result<T> {
-    Err(Error::Unsupported(format!("{what} isn't ported to Rust yet")))
-}
