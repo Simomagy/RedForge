@@ -8,7 +8,7 @@ use std::time::Instant;
 use rf_formats::formats::databag::DataBag;
 use rf_formats::rpf8::FileRef;
 
-use crate::map::{Entity, MapData};
+use crate::map::{Entity, InteriorDef, MapData};
 use crate::math::{self, Aabb};
 use crate::nodes::Node;
 use crate::stream::Loaded;
@@ -100,6 +100,31 @@ impl World {
         }
         self.restream = true;
         self.relink = true;
+    }
+
+    /// Uses `def` (a `CMloArchetypeDef`) for an interior archetype instead of
+    /// its ytyp's, or with `None` goes back to the ytyp; every placed instance
+    /// is placed again now.
+    pub fn set_interior(&mut self, archetype: u32, def: Option<&DataBag>) {
+        let src = &self.loader.src;
+        let def = match def {
+            Some(bag) => Some(Arc::new(InteriorDef::read(bag))),
+            None => {
+                src.interiors.lock().unwrap().remove(&archetype);
+                src.interior(archetype)
+            }
+        };
+        src.interiors.lock().unwrap().insert(archetype, def.clone());
+        let Some(def) = def else { return };
+        for l in self.loaded.values_mut() {
+            let MapData { entities, interiors, .. } = &mut l.map;
+            for e in entities.iter().filter(|e| e.archetype == archetype) {
+                if let Some(i) = e.interior.and_then(|i| interiors.get_mut(i as usize)) {
+                    i.rebuild(&def, &src.data.archetypes);
+                }
+            }
+        }
+        self.rewalk = true;
     }
 
     /// The map data used for a ymap instead of its file, if any.

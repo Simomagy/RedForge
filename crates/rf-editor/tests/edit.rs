@@ -123,3 +123,63 @@ fn move_delete_place_and_undo() {
     while ed.undo().is_some() {}
     assert!(ed.map(name).is_none() && ed.target.is_none());
 }
+
+#[test]
+fn interior_entities() {
+    let Some(mut ed) = editor() else { return };
+    let val = ed.world.places().into_iter().find(|(n, _)| n == "Valentine").unwrap().1;
+    settle(&mut ed, val);
+
+    // A plain interior entity (not in an entity set) that's shown.
+    let ids: Vec<EntityId> =
+        ed.world.visible().iter().map(|e| e.id).filter(|id| id.interior_entity != u32::MAX).collect();
+    assert!(!ids.is_empty(), "interiors show from the town centre");
+    let id = ids
+        .into_iter()
+        .find(|id| {
+            ed.select(vec![*id]);
+            ed.is_editable(*id)
+        })
+        .expect("an editable interior entity");
+    let before = position(&ed, id);
+    let p = ed.placement(id).unwrap();
+    assert!((p.position - before).length() < 1e-3, "the editor places it where the world does");
+
+    // Moving it edits the interior's ytyp, and the world follows.
+    let mut moved = p;
+    moved.position += Vec3::X;
+    ed.set_placements("Move", &[(id, moved)]);
+    assert_eq!(ed.edited_types().len(), 1);
+    assert!((position(&ed, id) - before - Vec3::X).length() < 1e-3);
+    assert!((ed.placement(id).unwrap().position - moved.position).length() < 1e-3);
+    ed.undo();
+    assert!(ed.edited_types().is_empty());
+    assert!((position(&ed, id) - before).length() < 1e-3);
+
+    // A copy lands next to it in the interior, selected.
+    ed.select(vec![id]);
+    ed.duplicate_selected().unwrap();
+    let copy = ed.selection()[0];
+    assert_ne!(copy, id);
+    assert_eq!((copy.node, copy.entity), (id.node, id.entity));
+    ed.world.update(val, 12.0);
+    assert!((position(&ed, copy) - before).length() < 1e-3, "the copy is where the original is");
+    ed.undo();
+
+    // Deleting keeps the rooms' and portals' entity indices in range.
+    ed.select(vec![id]);
+    ed.delete_selected().unwrap();
+    let ytyp = ed.edited_types()[0].root.clone();
+    for mlo in rf_editor::interior::archetypes(&ytyp).iter().flatten() {
+        let n = lod::entities(mlo).len() as u32;
+        for holder in ["rooms", "portals"] {
+            for b in mlo.bags(holder).unwrap_or_default().iter().flatten() {
+                if let Some(rf_formats::formats::databag::Value::U32s(v)) = b.object("attachedObjects") {
+                    assert!(v.iter().all(|&i| i < n), "{holder}: {v:?} with {n} entities");
+                }
+            }
+        }
+    }
+    ed.undo();
+    assert!(ed.edited_types().is_empty());
+}

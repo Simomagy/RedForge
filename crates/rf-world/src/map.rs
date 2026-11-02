@@ -198,7 +198,7 @@ pub(crate) struct InteriorDef {
 }
 
 impl InteriorDef {
-    fn read(arch: &DataBag) -> Self {
+    pub fn read(arch: &DataBag) -> Self {
         let defs = |b: &DataBag| -> Vec<Option<EntityDef>> {
             b.bags(ENTITIES).unwrap_or_default().iter().map(|e| e.as_ref().map(EntityDef::read)).collect()
         };
@@ -223,6 +223,8 @@ pub(crate) struct Interior {
     pub sets: Vec<EntitySet>,
     /// How many plain entities there are (they come first).
     pub plain: u32,
+    /// The instance it's placed by, to place it again when it changes.
+    pub instance: EntityDef,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -250,7 +252,16 @@ impl Interior {
             let enabled = defaults.contains(name) && !sets.iter().any(|s: &EntitySet| s.name == *name && s.enabled);
             sets.push(EntitySet { name: *name, start, end: entities.len() as u32, enabled });
         }
-        Interior { entities, sets, plain }
+        Interior { entities, sets, plain, instance: mlo.clone() }
+    }
+
+    /// Placed again from a changed definition (keeping which sets are on).
+    pub fn rebuild(&mut self, def: &InteriorDef, archetypes: &HashMap<u32, Archetype>) {
+        let enabled: Vec<bool> = self.sets.iter().map(|s| s.enabled).collect();
+        *self = Interior::new(def, &self.instance, archetypes);
+        for (s, on) in self.sets.iter_mut().zip(enabled) {
+            s.enabled = on;
+        }
     }
 
     /// The entities shown: the plain ones and those of the enabled sets.

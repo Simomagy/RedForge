@@ -97,14 +97,14 @@ impl Properties {
             }
         });
         if id.interior_entity != u32::MAX {
-            ui.label(format!("Interior entity {} of entity {}", id.interior_entity, id.entity));
-            if let Some(i) = info {
-                ui.label(format!("Archetype {}", hashes.name(i.archetype)));
-            }
-            ui.label(RichText::new("Interior entities can't be edited yet.").weak());
-            return;
+            let mlo = editor.entity_def(rf_editor::EntityId { interior_entity: u32::MAX, ..id });
+            let name = mlo.map(|d| hashes.name(d.hash("archetypeName"))).unwrap_or_default();
+            ui.label(format!("Entity {} of the interior {name} (entity {})", id.interior_entity, id.entity));
+            ui.label(RichText::new("Changes go to the interior's ytyp: every place it's in.").weak());
+        } else {
+            ui.label(format!("Entity {}", id.entity));
         }
-        ui.label(format!("Entity {}", id.entity));
+        let _ = info;
 
         // The archetype, by name.
         if self.archetype_for != Some(id) {
@@ -370,8 +370,10 @@ impl Properties {
         }
     }
 
-    /// The edited ymaps: where new entities go, and saving them.
+    /// The edited ymaps: where new entities go, and saving them; and the
+    /// ytyps of edited interiors.
     fn maps_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor) {
+        self.types_ui(ui, editor);
         ui.heading("Edited ymaps");
         let maps: Vec<(u32, String, bool, bool)> = editor
             .edited_maps()
@@ -415,6 +417,30 @@ impl Properties {
                 }
             }
         });
+    }
+}
+
+impl Properties {
+    fn types_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor) {
+        let types: Vec<(rf_formats::rpf8::FileRef, String, bool)> =
+            editor.edited_types().iter().map(|t| (t.file, t.file_name.clone(), t.is_dirty())).collect();
+        if types.is_empty() {
+            return;
+        }
+        ui.heading("Edited interiors (ytyps)");
+        for (file, name, dirty) in types {
+            ui.horizontal(|ui| {
+                ui.label(format!("{name}{}", if dirty { " *" } else { "" }));
+                if ui.button("Save as…").clicked() {
+                    let dialog =
+                        rfd::FileDialog::new().set_file_name(format!("{name}.ytyp")).add_filter("Types", &["ytyp"]);
+                    if let Some(path) = dialog.save_file() {
+                        self.error = editor.save_types(file, &path).err();
+                    }
+                }
+            });
+        }
+        ui.separator();
     }
 }
 
