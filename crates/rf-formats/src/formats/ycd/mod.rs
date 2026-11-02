@@ -43,7 +43,7 @@ use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 
-pub use anim::{Anim, BoneId, Sequence, Track};
+pub use anim::{Anim, BoneId, FramePosition, Sequence, Track};
 pub use channel::{CHANNEL_TYPES, Channel, ChannelData, ChannelRef};
 pub use clip::{
     ATTRIBUTE_TYPES, AnimRefs, Attribute, AttributeValue, CLIP_TYPES, Clip, ClipKind, ClipMulti, ClipMultiClip,
@@ -545,6 +545,21 @@ impl ClipDictionary {
         self.anim_dicts.as_ref().and_then(|a| a.items.first()).and_then(Option::as_ref)
     }
 
+    /// The embedded dictionary's animations by hash, which is how clips name
+    /// the animations they play (empty when they're in other dictionaries).
+    pub fn anims(&self) -> HashMap<u32, &Anim> {
+        let Some(d) = self.anim_dict() else { return HashMap::new() };
+        d.lookup().unwrap_or_default().into_iter().filter_map(|(h, i)| Some((h, d.entries[i].anim.as_ref()?))).collect()
+    }
+
+    /// The clips, sorted by name as the C#'s viewer lists them (ordinal,
+    /// ignoring case).
+    pub fn clips(&self) -> Vec<&Clip> {
+        let mut clips: Vec<&Clip> = self.entries.iter().filter_map(|e| e.clip.as_ref()).collect();
+        clips.sort_by_cached_key(|c| c.name.as_deref().unwrap_or("").to_uppercase());
+        clips
+    }
+
     /// The dictionary the XML has: only with no more than one in the array
     /// (the C# never writes the imports).
     fn xml_anim_dict(&self) -> Option<&AnimDictionary> {
@@ -791,8 +806,13 @@ impl ClipDictionary {
 }
 
 /// A ycd (loose, with its RSC8 header) to XML.
+/// Reads a ycd (a loose resource).
+pub fn read(file: &[u8], hashes: &HashIndex) -> Result<ClipDictionary> {
+    read_resource(file, |r, _| ClipDictionary::read(r, VIRTUAL_BASE, &mut ReadCx::new(hashes)))
+}
+
 pub fn to_xml(file: &[u8], cx: &XmlContext) -> Result<String> {
-    let d = read_resource(file, |r, _| ClipDictionary::read(r, VIRTUAL_BASE, &mut ReadCx::new(cx.hashes)))?;
+    let d = read(file, cx.hashes)?;
     d.check_xml()?;
     Ok(XmlWriter::document(cx.hashes, "RDR2ClipDictionary", None, |w| d.write_xml(w)))
 }
@@ -950,6 +970,41 @@ mod tests {
         let xml = to_xml(&file, &cx).unwrap();
         assert!(xml.contains("<Item type=\"RawFloat\">"), "{xml}");
         assert!(xml.contains("<Value>hello</Value>"));
+    }
+
+    #[test]
+    fn animations_evaluate_like_the_csharp() {
+        let hashes = HashIndex::new();
+        let cx = XmlContext { hashes: &hashes, folder: None };
+        let file = from_xml(XML, &cx).unwrap();
+        let d = read_resource(&file, |r, _| ClipDictionary::read(r, VIRTUAL_BASE, &mut ReadCx::new(&hashes))).unwrap();
+        let clip = d.clips()[0];
+        assert_eq!(clip.duration(), 1.0);
+        let anims = d.anims();
+        let anim = anims[&clip.animation_hashes()[0]];
+        let close = |a: [f32; 4], b: [f32; 4]| a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 1e-4);
+
+        // 4 frames over 0.1 s, the last being the first again: 0.05 s is halfway
+        // between frames 1 and 2.
+        let p = anim.frame_position(0.05);
+        assert_eq!((p.frame0, p.frame1), (1, 2));
+        assert!((p.alpha1 - 0.5).abs() < 1e-5);
+        assert_eq!(anim.evaluate(&p, 1), [1.0, 2.0, 3.0, 0.0]);
+        assert!(close(anim.evaluate(&p, 2), [6.5, 0.0, 0.0, 0.0]));
+        // A cached quaternion puts back its left-out component (w) and
+        // normalises: (0.2, 2, 0.5, 0) and (0.3, 1, 0.5, 0), blended.
+        let norm = |v: [f32; 4]| {
+            let l = v.iter().map(|c| c * c).sum::<f32>().sqrt();
+            v.map(|c| c / l)
+        };
+        let (a, b) = (norm([0.2, 2.0, 0.5, 0.0]), norm([0.3, 1.0, 0.5, 0.0]));
+        assert!(close(anim.evaluate(&p, 0), std::array::from_fn(|i| (a[i] + b[i]) * 0.5)));
+        // The last frame's other side wraps round to the first.
+        let p = anim.frame_position(0.1);
+        assert_eq!((p.frame0, p.alpha1), (3, 0.0));
+        assert!(close(anim.evaluate(&p, 2), [8.0, 0.0, 0.0, 0.0]));
+        // No such track.
+        assert_eq!(anim.evaluate(&p, 7), [0.0; 4]);
     }
 
     #[test]
