@@ -13,7 +13,9 @@ It is early work. Today:
   with its LODs, interiors, terrain and time of day; a ymap opens on its own;
 - entities can be selected, moved, rotated, scaled, edited in Properties,
   duplicated, copied, deleted and placed, with undo; edited ymaps and ytyps
-  are saved with "Save as…" in Properties.
+  are saved with "Save as…" in Properties;
+- the Objects pane lists the game's archetypes with 3D thumbnails, to search
+  and choose the one to place.
 
 Projects (`.rfproj`), RedM export and the other panes come in later milestones.
 
@@ -42,6 +44,12 @@ Editing (the keys are the C# RedForge's):
 | Home | Look at the selection |
 | Esc | Clear the selection; leave the Place tool |
 
+To place something, find it in Objects (beside Properties, or View → Objects):
+the search matches the names and the ytyps they're in, and the list can be
+narrowed to props, drawable dictionaries, fragments or interiors. Clicking an
+object picks the Place tool with it; then a click in the map places it in the
+ymap chosen under "Place in" (Q/E turn it, a right click stops).
+
 Editing an entity of a game ymap makes that ymap edited: the map shows the
 edited data from then on. Deleting fixes the LOD indices (`parentIndex`,
 `numChildren`) in the ymap, its parent and its children, and refuses entities
@@ -60,6 +68,8 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 `world:<place>` or `world:x,y,z[,yaw,pitch]`. `REDFORGE_SELECT_CENTRE=1`
 selects what's in the middle of the world map before the screenshot, and
 `REDFORGE_TEST_DRAG=1` then drags the gizmo with made-up mouse events.
+`REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside the world map
+with that search, and chooses the first object.
 
 ## Crates
 
@@ -70,7 +80,7 @@ selects what's in the middle of the world map before the screenshot, and
 | `rf-world` | The world: map nodes, ymaps and their entities, the LOD tree, interiors, cull boxes and map states, streamed around a camera. |
 | `rf-editor` | The editor: the ymaps and ytyps being edited, the selection, undo and redo, LOD-safe deletes, saving. No UI. |
 | `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain). |
-| `rf-app` | The `redforge` app: egui, with Game Files, the model, texture and XML viewers, and the map. |
+| `rf-app` | The `redforge` app: egui, with Game Files, the model, texture and XML viewers, the map, Properties and Objects. |
 | `rf-cli` | The `rf` command: list, extract and check game files. |
 
 ## The `rf` command

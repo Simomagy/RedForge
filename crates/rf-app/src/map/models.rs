@@ -1,9 +1,10 @@
-//! Models for the map, by archetype: decoded on worker threads, uploaded to the
-//! GPU a few per frame, and dropped when unused for a while.
+//! Models by archetype, for the map and the Objects pane's thumbnails: decoded
+//! on worker threads, uploaded to the GPU a few per frame, and dropped when
+//! unused for a while.
 
-use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, VecDeque};
+use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use rf_formats::formats::ydr::DrawableBase;
@@ -31,7 +32,9 @@ struct Decoded {
     txds: Vec<(FileRef, Arc<TextureDictionary>)>,
 }
 
-enum Slot {
+/// Where an archetype's model is at.
+#[derive(Clone)]
+pub enum ModelState {
     Loading,
     Ready(Arc<GpuModel>),
     /// No model (assetless archetypes, missing files).
@@ -39,18 +42,37 @@ enum Slot {
 }
 
 struct Entry {
-    slot: Slot,
+    slot: ModelState,
     last_used: Instant,
+}
+
+/// The models waiting for a worker, oldest first.
+#[derive(Default)]
+struct Queue {
+    jobs: VecDeque<(u32, ModelFiles)>,
+    /// Set when the cache goes: the workers stop.
+    closed: bool,
+}
+
+#[derive(Default)]
+struct Requests {
+    queue: Mutex<Queue>,
+    added: Condvar,
 }
 
 pub struct ModelCache {
     game: Arc<Game>,
-    requests: Sender<(u32, ModelFiles)>,
+    requests: Arc<Requests>,
     decoded: Receiver<Decoded>,
     models: HashMap<u32, Entry>,
     /// GPU textures by dictionary and lowercase name, shared between models.
     textures: HashMap<(FileRef, String), Option<Arc<GpuTexture>>>,
     files: Arc<Mutex<FileCache>>,
+    /// How many parsed model files are kept at most (and half as many texture
+    /// dictionaries) when evicting.
+    kept_files: usize,
+    /// Set when a model was forgotten: what only it used can go.
+    trim: bool,
     pub uploaded_last_frame: usize,
 }
 
@@ -138,55 +160,99 @@ impl TextureSource for CachedTextures<'_> {
 }
 
 impl ModelCache {
+    /// The map's cache: half the cores (2 to 8) decoding, and plenty of
+    /// parsed files kept for the models around the camera.
     pub fn new(game: Arc<Game>) -> Self {
-        let (req_tx, req_rx) = channel::<(u32, ModelFiles)>();
+        let threads = std::thread::available_parallelism().map(|n| n.get() / 2).unwrap_or(4).clamp(2, 8);
+        Self::with_threads(game, threads, 2000)
+    }
+
+    /// A cache with `threads` workers, keeping up to `kept_files` parsed model
+    /// files between evictions.
+    pub fn with_threads(game: Arc<Game>, threads: usize, kept_files: usize) -> Self {
         let (dec_tx, dec_rx) = channel();
         let files = Arc::new(Mutex::new(FileCache::default()));
         // A few workers share one queue.
-        let req_rx = Arc::new(Mutex::new(req_rx));
-        let threads = std::thread::available_parallelism().map(|n| n.get() / 2).unwrap_or(4).clamp(2, 8);
-        for _ in 0..threads {
-            let (rx, tx, g, f) = (req_rx.clone(), dec_tx.clone(), game.clone(), files.clone());
+        let requests = Arc::new(Requests::default());
+        for _ in 0..threads.max(1) {
+            let (r, tx, g, f) = (requests.clone(), dec_tx.clone(), game.clone(), files.clone());
             std::thread::spawn(move || {
                 loop {
-                    let job = rx.lock().unwrap().recv();
-                    let Ok((archetype, mf)) = job else { break };
+                    let (archetype, mf) = {
+                        let mut q = r.queue.lock().unwrap();
+                        loop {
+                            if q.closed {
+                                return;
+                            }
+                            if let Some(job) = q.jobs.pop_front() {
+                                break job;
+                            }
+                            q = r.added.wait(q).unwrap();
+                        }
+                    };
                     if tx.send(decode(&g, &f, archetype, &mf)).is_err() {
-                        break;
+                        return;
                     }
                 }
             });
         }
         Self {
             game,
-            requests: req_tx,
+            requests,
             decoded: dec_rx,
             models: HashMap::new(),
             textures: HashMap::new(),
             files,
+            kept_files,
+            trim: false,
             uploaded_last_frame: 0,
         }
     }
 
     /// The model of an archetype if it's ready; starts loading it if not.
     pub fn get(&mut self, archetype: u32) -> Option<Arc<GpuModel>> {
+        match self.state(archetype) {
+            ModelState::Ready(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// Where an archetype's model is at; starts loading it the first time.
+    pub fn state(&mut self, archetype: u32) -> ModelState {
         let now = Instant::now();
         if let Some(e) = self.models.get_mut(&archetype) {
             e.last_used = now;
-            return match &e.slot {
-                Slot::Ready(m) => Some(m.clone()),
-                _ => None,
-            };
+            return e.slot.clone();
         }
         let slot = match rf_world::model_files(&self.game.data, archetype) {
             Some(mf) => {
-                let _ = self.requests.send((archetype, mf));
-                Slot::Loading
+                self.requests.queue.lock().unwrap().jobs.push_back((archetype, mf));
+                self.requests.added.notify_one();
+                ModelState::Loading
             }
-            None => Slot::None,
+            None => ModelState::None,
         };
-        self.models.insert(archetype, Entry { slot, last_used: now });
-        None
+        self.models.insert(archetype, Entry { slot: slot.clone(), last_used: now });
+        slot
+    }
+
+    /// Drops the requests still waiting for a worker that aren't `wanted` any
+    /// more (scrolled away), so the workers get to the wanted ones sooner.
+    pub fn cancel_unless(&mut self, wanted: impl Fn(u32) -> bool) {
+        let mut q = self.requests.queue.lock().unwrap();
+        q.jobs.retain(|(archetype, _)| {
+            let keep = wanted(*archetype);
+            if !keep {
+                self.models.remove(archetype);
+            }
+            keep
+        });
+    }
+
+    /// Drops an archetype's model now; the next [`ModelCache::state`] loads it
+    /// again.
+    pub fn forget(&mut self, archetype: u32) {
+        self.trim |= self.models.remove(&archetype).is_some();
     }
 
     /// Uploads decoded models for up to `budget` of frame time.
@@ -195,13 +261,17 @@ impl ModelCache {
         self.uploaded_last_frame = 0;
         while start.elapsed() < budget {
             let Ok(d) = self.decoded.try_recv() else { break };
+            // Forgotten while it was being decoded: not wanted any more.
+            if !self.models.contains_key(&d.archetype) {
+                continue;
+            }
             let slot = match &d.drawable {
                 Some(drawable) => {
                     let mut source = CachedTextures { ctx, txds: &d.txds, cache: &mut self.textures };
                     let m = GpuModel::from_drawable(ctx, renderer, &d.name, drawable, &self.game.hashes, &mut source);
-                    Slot::Ready(Arc::new(m))
+                    ModelState::Ready(Arc::new(m))
                 }
-                None => Slot::None,
+                None => ModelState::None,
             };
             if let Some(e) = self.models.get_mut(&d.archetype) {
                 e.slot = slot;
@@ -215,22 +285,30 @@ impl ModelCache {
     pub fn evict(&mut self, unused_for: Duration) {
         let now = Instant::now();
         let before = self.models.len();
-        self.models.retain(|_, e| matches!(e.slot, Slot::Loading) || now.duration_since(e.last_used) < unused_for);
-        if self.models.len() != before {
+        self.models
+            .retain(|_, e| matches!(e.slot, ModelState::Loading) || now.duration_since(e.last_used) < unused_for);
+        if self.models.len() != before || std::mem::take(&mut self.trim) {
             self.textures.retain(|_, t| t.as_ref().is_none_or(|t| Arc::strong_count(t) > 1));
             let mut files = self.files.lock().unwrap();
-            if files.models.len() > 2000 {
+            if files.models.len() > self.kept_files {
                 files.models.clear();
             }
-            if files.dictionaries.len() > 1000 {
+            if files.dictionaries.len() > self.kept_files / 2 {
                 files.dictionaries.clear();
             }
         }
     }
 
     pub fn stats(&self) -> (usize, usize, usize) {
-        let ready = self.models.values().filter(|e| matches!(e.slot, Slot::Ready(_))).count();
-        let loading = self.models.values().filter(|e| matches!(e.slot, Slot::Loading)).count();
+        let ready = self.models.values().filter(|e| matches!(e.slot, ModelState::Ready(_))).count();
+        let loading = self.models.values().filter(|e| matches!(e.slot, ModelState::Loading)).count();
         (ready, loading, self.textures.values().filter(|t| t.is_some()).count())
+    }
+}
+
+impl Drop for ModelCache {
+    fn drop(&mut self) {
+        self.requests.queue.lock().unwrap().closed = true;
+        self.requests.added.notify_all();
     }
 }

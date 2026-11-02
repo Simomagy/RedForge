@@ -12,6 +12,7 @@ use crate::browser::{Browser, BrowserAction};
 use crate::game::{Game, LoadMessage, is_game_folder, start_loading};
 use crate::map::MapView;
 use crate::map::tools::Tools;
+use crate::objects::Objects;
 use crate::properties::Properties;
 use crate::settings::{GAME_FOLDER, Settings};
 use crate::viewers::Gpu;
@@ -41,6 +42,15 @@ pub enum Tab {
     Map(Box<MapView>),
     /// The selection's properties and the edited ymaps.
     Properties,
+    /// The game's archetypes, to choose the one to place.
+    Objects,
+}
+
+impl Tab {
+    /// The panes beside the map, which share a leaf of the dock.
+    fn is_side(&self) -> bool {
+        matches!(self, Tab::Properties | Tab::Objects)
+    }
 }
 
 /// For testing without anyone at the screen: opens a file, takes a screenshot
@@ -52,13 +62,15 @@ pub enum Tab {
 /// `REDFORGE_SELECT_CENTRE=1` selects what's in the middle of the world map
 /// two seconds before, with the Move tool; `REDFORGE_TEST_DRAG=1` then drags
 /// the gizmo's X arrow 100 pixels with made-up mouse events and logs what
-/// happened.
+/// happened. `REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside
+/// the world map with that search, and chooses the first object shown.
 struct AutoShot {
     open: String,
     out: PathBuf,
     delay: f32,
     select_centre: bool,
     drag_test: Option<DragTest>,
+    objects_search: Option<String>,
     opened: Option<Instant>,
     requested: bool,
 }
@@ -89,6 +101,7 @@ pub struct RedForgeApp {
     editor: Option<Editor>,
     tools: Tools,
     properties: Properties,
+    objects: Objects,
 }
 
 impl RedForgeApp {
@@ -114,11 +127,13 @@ impl RedForgeApp {
                 delay: std::env::var("REDFORGE_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(6.0),
                 select_centre: std::env::var("REDFORGE_SELECT_CENTRE").is_ok(),
                 drag_test: std::env::var("REDFORGE_TEST_DRAG").is_ok().then(DragTest::default),
+                objects_search: std::env::var("REDFORGE_OBJECTS_SEARCH").ok(),
                 opened: None,
                 requested: false,
             }),
             _ => None,
         };
+        let tile_size = settings.get(crate::objects::TILE_SIZE).and_then(|v| v.parse().ok());
         let mut app = Self {
             auto,
             settings,
@@ -129,6 +144,7 @@ impl RedForgeApp {
             editor: None,
             tools: Tools::default(),
             properties: Properties::default(),
+            objects: Objects::new(tile_size.unwrap_or(crate::objects::DEFAULT_TILE)),
         };
         if let Some(f) = folder {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
@@ -173,16 +189,15 @@ impl RedForgeApp {
         self.show_tab(tab);
     }
 
-    /// The world map, with the editor (made the first time) and Properties
-    /// beside it.
+    /// The world map, with the editor (made the first time), and Properties
+    /// and Objects beside it.
     fn open_world(&mut self, game: &Arc<Game>, place: Option<&str>) -> bool {
         let editor =
             self.editor.get_or_insert_with(|| Editor::new(game.fs.clone(), game.hashes.clone(), game.data.clone()));
         let Some(view) = world_view(game, &self.gpu, editor, place.unwrap_or_default()) else { return false };
         self.show_tab(Tab::Map(Box::new(view)));
-        if self.dock.find_tab_from(|t| matches!(t, Tab::Properties)).is_none() {
-            self.dock.main_surface_mut().split_right(NodeIndex::root(), 0.76, vec![Tab::Properties]);
-        }
+        self.show_side_tab(Tab::Properties, false);
+        self.show_side_tab(Tab::Objects, false);
         true
     }
 
@@ -191,7 +206,42 @@ impl RedForgeApp {
         if let Some(path) = self.dock.find_tab_from(|t| matches!(t, Tab::Welcome)) {
             self.dock.remove_tab(path);
         }
+        // Documents go with the other documents, not beside the map.
+        let focused_side = self
+            .dock
+            .focused_leaf()
+            .and_then(|p| self.dock.leaf(p).ok())
+            .is_some_and(|l| l.tabs.iter().any(Tab::is_side));
+        let documents = self.dock.iter_leaves().find(|(_, l)| !l.tabs.iter().any(Tab::is_side)).map(|(p, _)| p);
+        if focused_side && let Some(path) = documents {
+            self.dock.set_focused_node_and_surface(path);
+        }
         self.dock.push_to_focused_leaf(tab);
+    }
+
+    /// Opens a side pane (Properties, Objects) if it isn't open: beside the
+    /// other one, or on the right of everything. `activate` brings it to the
+    /// front.
+    fn show_side_tab(&mut self, tab: Tab, activate: bool) {
+        let kind = std::mem::discriminant(&tab);
+        if let Some(path) = self.dock.find_tab_from(|t| std::mem::discriminant(t) == kind) {
+            if activate {
+                let _ = self.dock.set_active_tab(path);
+            }
+            return;
+        }
+        match self.dock.find_tab_from(Tab::is_side).and_then(|p| self.dock.leaf_mut(p.node_path()).ok()) {
+            Some(leaf) => {
+                let active = leaf.active;
+                leaf.append_tab(tab);
+                if !activate {
+                    leaf.active = active;
+                }
+            }
+            None => {
+                self.dock.main_surface_mut().split_right(NodeIndex::root(), 0.76, vec![tab]);
+            }
+        }
     }
 
     fn folder_ui(&mut self, ui: &mut egui::Ui) {
@@ -262,9 +312,15 @@ impl RedForgeApp {
                 a.opened = Some(Instant::now());
                 if let Some(target) = a.open.strip_prefix("world") {
                     let target = target.to_owned();
+                    let search = a.objects_search.clone();
                     if !self.open_world(game, Some(&target)) {
                         log::error!("no place {target}");
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if let Some(s) = search {
+                        self.show_side_tab(Tab::Objects, true);
+                        self.objects.set_search(&s);
+                        self.objects.choose_first = true;
                     }
                     return;
                 }
@@ -331,6 +387,7 @@ struct Tabs<'a> {
     editor: Option<&'a mut Editor>,
     tools: &'a mut Tools,
     properties: &'a mut Properties,
+    objects: &'a mut Objects,
 }
 
 impl TabViewer for Tabs<'_> {
@@ -344,6 +401,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Text(v) => format!("📄 {}", v.title).into(),
             Tab::Map(v) => format!("🗺 {}", v.title).into(),
             Tab::Properties => "Properties".into(),
+            Tab::Objects => "Objects".into(),
         }
     }
 
@@ -355,6 +413,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Text(v) => egui::Id::new(("text", &v.path)),
             Tab::Map(v) => egui::Id::new(("map", &v.path)),
             Tab::Properties => egui::Id::new("properties"),
+            Tab::Objects => egui::Id::new("objects"),
         }
     }
 
@@ -382,6 +441,12 @@ impl TabViewer for Tabs<'_> {
                     ui.label("Open the world map (View → World map) to edit.");
                 }
             },
+            Tab::Objects => match self.game {
+                Some(g) => self.objects.ui(ui, self.gpu, g, self.editor.as_deref_mut(), self.tools),
+                None => {
+                    ui.label("The game isn't loaded.");
+                }
+            },
         }
     }
 
@@ -390,6 +455,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Model(v) => v.free(self.gpu),
             Tab::Texture(v) => v.free(self.gpu),
             Tab::Map(v) => v.free(self.gpu),
+            Tab::Objects => self.objects.free(self.gpu),
             _ => {}
         }
         egui_dock::widgets::tab_viewer::OnCloseResponse::Close
@@ -427,6 +493,7 @@ impl eframe::App for RedForgeApp {
                         Ok(g) => {
                             self.game = GameState::Ready(Arc::new(g));
                             self.editor = None;
+                            self.objects.reset(&self.gpu);
                             break;
                         }
                         Err(e) => {
@@ -449,13 +516,11 @@ impl eframe::App for RedForgeApp {
                             ui.close();
                         }
                         if ui.button("Properties").clicked() {
-                            if self.dock.find_tab_from(|t| matches!(t, Tab::Properties)).is_none() {
-                                self.dock.main_surface_mut().split_right(
-                                    NodeIndex::root(),
-                                    0.76,
-                                    vec![Tab::Properties],
-                                );
-                            }
+                            self.show_side_tab(Tab::Properties, true);
+                            ui.close();
+                        }
+                        if ui.button("Objects").clicked() {
+                            self.show_side_tab(Tab::Objects, true);
                             ui.close();
                         }
                     });
@@ -566,9 +631,13 @@ impl eframe::App for RedForgeApp {
                 editor: self.editor.as_mut(),
                 tools: &mut self.tools,
                 properties: &mut self.properties,
+                objects: &mut self.objects,
             };
             DockArea::new(&mut self.dock).style(Style::from_egui(ui.style().as_ref())).show_inside(ui, &mut tabs);
         });
+        if std::mem::take(&mut self.objects.tile_size_changed) {
+            self.settings.set(crate::objects::TILE_SIZE, self.objects.tile_size.to_string());
+        }
 
         if let Some(g) = &game {
             self.auto_shot(ctx, g);
@@ -577,7 +646,8 @@ impl eframe::App for RedForgeApp {
         // Viewers waiting on a background job need frames to notice it finishing.
         let waiting = self.dock.iter_all_tabs().any(|(_, t)| match t {
             Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Map(_) => true,
-            Tab::Welcome | Tab::Properties => false,
+            // Objects asks for frames itself while its thumbnails load.
+            Tab::Welcome | Tab::Properties | Tab::Objects => false,
         });
         if waiting {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
