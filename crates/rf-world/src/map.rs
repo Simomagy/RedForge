@@ -273,7 +273,7 @@ pub(crate) struct Sources {
 
 impl Sources {
     /// An MLO archetype's definition, read from its ytyp once.
-    fn interior(&self, archetype: u32) -> Option<Arc<InteriorDef>> {
+    pub(crate) fn interior(&self, archetype: u32) -> Option<Arc<InteriorDef>> {
         if let Some(i) = self.interiors.lock().unwrap().get(&archetype) {
             return i.clone();
         }

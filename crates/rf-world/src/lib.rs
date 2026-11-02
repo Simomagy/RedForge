@@ -88,6 +88,7 @@
 //! - A ymap's parents are streamed with it even when disabled, as in the C#, so
 //!   a disabled parent of a streamed ymap still shows.
 
+mod edit;
 mod map;
 mod math;
 mod nodes;
@@ -99,10 +100,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+use rf_formats::formats::databag::DataBag;
 use rf_formats::hash::{HashIndex, joaat};
 use rf_formats::rpf8::{FileRef, Rpf8FileSystem};
 use rf_game::{AssetType, GameData};
 
+pub use crate::edit::EntityInfo;
 use crate::map::{MapData, Sources};
 use crate::nodes::{Bvh, MAP_STATES, Node};
 pub use crate::nodes::{CullBox, MapStateEntitySet, MapStateGroup, parse_map_states};
@@ -254,6 +257,9 @@ pub struct World {
 
     loader: Loader,
     loaded: HashMap<u32, Loaded>,
+    /// Edited or new map data, by node: used instead of the file, and never
+    /// dropped.
+    overrides: HashMap<u32, Arc<DataBag>>,
     /// Requested loads, with the flag that cancels them.
     pending: HashMap<u32, Arc<AtomicBool>>,
     /// The streamed nodes, sorted.
@@ -296,8 +302,7 @@ impl World {
             let chain = std::iter::successors(nodes[i].parent_index, |&j| nodes[j as usize].parent_index);
             nodes[i].depth = chain.take(64).count() as u32;
         }
-        let boxes = nodes.iter().map(|n| n.streaming).collect();
-        let bvh = Bvh::build(boxes, (0..nodes.len() as u32).filter(|&i| nodes[i as usize].has_streaming_box()));
+        let bvh = build_bvh(&nodes);
 
         let path = "common:/data/mapdatacullboxes_new.meta";
         let cull_boxes = match data.meta_load(&fs, &hashes, path) {
@@ -321,6 +326,7 @@ impl World {
             evict_after: EVICT_AFTER,
             loader: Loader::new(src),
             loaded: HashMap::new(),
+            overrides: HashMap::new(),
             pending: HashMap::new(),
             streamed: Vec::new(),
             camera: None,
@@ -521,6 +527,9 @@ impl World {
             match done {
                 Done::Loaded(node, map) => {
                     self.pending.remove(&node);
+                    if self.overrides.contains_key(&node) {
+                        continue;
+                    }
                     let n = &mut self.nodes[node as usize];
                     let map = map.unwrap_or_else(|| {
                         log::warn!("{}: couldn't be read", n.file_name);
@@ -621,8 +630,9 @@ impl World {
                 c.store(false, Ordering::Relaxed);
                 continue;
             }
+            let Some(file) = self.nodes[n as usize].file else { continue };
             let cancel = Arc::new(AtomicBool::new(false));
-            self.loader.request(n, self.nodes[n as usize].file, cancel.clone());
+            self.loader.request(n, file, cancel.clone());
             self.pending.insert(n, cancel);
         }
     }
@@ -635,8 +645,20 @@ impl World {
         }
         self.last_evict = now;
         let after = self.evict_after;
-        self.loaded.retain(|_, l| l.unwanted_since.is_none_or(|t| now.duration_since(t) < after));
+        let overrides = &self.overrides;
+        self.loaded
+            .retain(|n, l| overrides.contains_key(n) || l.unwanted_since.is_none_or(|t| now.duration_since(t) < after));
     }
+
+    fn rebuild_bvh(&mut self) {
+        self.bvh = build_bvh(&self.nodes);
+    }
+}
+
+/// The streaming BVH over the nodes that have a streaming box.
+fn build_bvh(nodes: &[Node]) -> Bvh {
+    let boxes = nodes.iter().map(|n| n.streaming).collect();
+    Bvh::build(boxes, (0..nodes.len() as u32).filter(|&i| nodes[i as usize].has_streaming_box()))
 }
 
 impl Drop for World {

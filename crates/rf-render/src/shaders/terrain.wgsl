@@ -46,9 +46,9 @@ struct VertexIn {
     @location(8) m1: vec4<f32>,
     @location(9) m2: vec4<f32>,
     @location(10) m3: vec4<f32>,
-    @location(11) extra: vec4<f32>,
     @location(12) uv2: vec2<f32>,
     @location(13) tangent1: vec4<f32>,
+    @location(14) id: u32,
 };
 
 struct VertexOut {
@@ -62,6 +62,7 @@ struct VertexOut {
     @location(6) uv2: vec2<f32>,
     @location(7) colour0: vec4<f32>,
     @location(8) colour1: vec4<f32>,
+    @location(9) @interpolate(flat) id: u32,
 };
 
 @vertex
@@ -80,6 +81,7 @@ fn vs_main(v: VertexIn) -> VertexOut {
     o.uv2 = v.uv2;
     o.colour0 = v.colour0;
     o.colour1 = v.colour1;
+    o.id = v.id;
     return o;
 }
 
@@ -137,7 +139,7 @@ fn layer_normal(
 }
 
 @fragment
-fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> SceneOut {
     var n = normalize(i.normal);
     if !front {
         n = -n;
@@ -180,5 +182,5 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let p = p0 * bf.x + p1 * bf.y + p2 * bf.z + p3 * bf.w;
     // Roughness in green; terrain isn't metal.
     let roughness = clamp(p.g, 0.04, 1.0);
-    return lit(i.world, vec4<f32>(albedo.rgb, 1.0), normal, 0.0, roughness, i.colour0);
+    return SceneOut(lit(i.world, vec4<f32>(albedo.rgb, 1.0), normal, 0.0, roughness, i.colour0), i.id);
 }

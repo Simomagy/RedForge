@@ -14,6 +14,13 @@ struct Frame {
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 
+// What the scene pass writes: the colour, and the drawn instance's id for
+// picking (0 for nothing).
+struct SceneOut {
+    @location(0) colour: vec4<f32>,
+    @location(1) id: u32,
+};
+
 const PI: f32 = 3.14159265;
 
 // A tangent-space normal map value applied to a surface, as RedForge's

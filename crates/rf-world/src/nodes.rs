@@ -16,7 +16,8 @@ pub(crate) struct Node {
     pub parent: u32,
     /// The parent's index, when there's a node for it.
     pub parent_index: Option<u32>,
-    pub file: FileRef,
+    /// `None` for a ymap made in the editor.
+    pub file: Option<FileRef>,
     /// The file's name, lowercase, without folder or extension.
     pub file_name: String,
     pub streaming: Aabb,
@@ -38,7 +39,7 @@ impl Node {
             name: c.name_hash,
             parent: c.parent_name_hash,
             parent_index: None,
-            file,
+            file: Some(file),
             file_name,
             streaming: Aabb::new(c.streaming_min, c.streaming_max),
             enabled: true,

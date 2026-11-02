@@ -24,3 +24,4 @@ rf-render = { path = "../rf-render" }
 rfd = "0.17.2"
 rf-game = { path = "../rf-game" }
 rf-world = { path = "../rf-world" }
+transform-gizmo-egui = "0.11"

@@ -47,8 +47,9 @@ struct VertexIn {
     @location(8) m1: vec4<f32>,
     @location(9) m2: vec4<f32>,
     @location(10) m3: vec4<f32>,
-    // x: the tint palette row
-    @location(11) extra: vec4<f32>,
+    // The tint palette row.
+    @location(11) tint: f32,
+    @location(14) id: u32,
 };
 
 struct VertexOut {
@@ -60,6 +61,7 @@ struct VertexOut {
     @location(4) colour0: vec4<f32>,
     @location(5) colour1: vec4<f32>,
     @location(6) @interpolate(flat) tint: f32,
+    @location(7) @interpolate(flat) id: u32,
 };
 
 @vertex
@@ -75,7 +77,8 @@ fn vs_main(v: VertexIn) -> VertexOut {
     o.uv0 = v.uv0;
     o.colour0 = v.colour0;
     o.colour1 = v.colour1;
-    o.tint = v.extra.x;
+    o.tint = v.tint;
+    o.id = v.id;
     return o;
 }
 
@@ -151,6 +154,6 @@ fn shade(i: VertexOut, front: bool) -> vec4<f32> {
 }
 
 @fragment
-fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return shade(i, front);
+fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> SceneOut {
+    return SceneOut(shade(i, front), i.id);
 }

@@ -19,6 +19,8 @@ pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// What the final image is: 8-bit sRGB, which egui can show directly.
 pub const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// Where the scene pass writes each pixel's instance id, for picking.
+const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
 /// The colour water is drawn with, in linear RGB.
 const WATER_COLOUR: [f32; 4] = [0.03, 0.07, 0.07, 1.0];
 
@@ -52,13 +54,25 @@ pub struct Instance {
     pub transform: [[f32; 4]; 4],
     /// The row of the tint palette.
     pub tint: f32,
-    pub _pad: [f32; 3],
+    /// What [`Renderer::pick`] finds where this instance is drawn; 0 for
+    /// nothing.
+    pub id: u32,
+    pub _pad: [u32; 2],
 }
 
 impl Instance {
-    pub fn new(transform: Mat4, tint: u32) -> Self {
-        Self { transform: transform.to_cols_array_2d(), tint: tint as f32, _pad: [0.0; 3] }
+    pub fn new(transform: Mat4, tint: u32, id: u32) -> Self {
+        Self { transform: transform.to_cols_array_2d(), tint: tint as f32, id, _pad: [0; 2] }
     }
+}
+
+/// What's drawn at a pixel.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pick {
+    /// The [`Instance::id`] drawn there, 0 for none.
+    pub id: u32,
+    /// Its reversed depth (0 for nothing, at infinity).
+    pub depth: f32,
 }
 
 #[repr(C)]
@@ -130,7 +144,10 @@ pub struct RenderTargets {
     pub width: u32,
     pub height: u32,
     hdr: wgpu::TextureView,
-    depth: wgpu::TextureView,
+    depth: wgpu::Texture,
+    depth_view: wgpu::TextureView,
+    ids: wgpu::Texture,
+    ids_view: wgpu::TextureView,
     pub output: wgpu::Texture,
     pub output_view: wgpu::TextureView,
     /// The output seen as plain UNORM: the sRGB-encoded bytes as they are, which
@@ -207,8 +224,8 @@ fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
 
 /// The [`Instance`]s, one per draw, as a vertex buffer.
 fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
-    const ATTRS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
-        7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4
+    const ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+        7 => Float32x4, 8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32, 14 => Uint32
     ];
     wgpu::VertexBufferLayout {
         array_stride: size_of::<Instance>() as u64,
@@ -324,10 +341,17 @@ impl Renderer {
             stencil: Default::default(),
             bias: wgpu::DepthBiasState { constant: bias, slope_scale: if bias != 0 { 1.0 } else { 0.0 }, clamp: 0.0 },
         };
+        // Blended draws don't count for picking: they leave the ids alone.
+        let scene_targets = |blend: Option<wgpu::BlendState>| {
+            let ids = if blend.is_some() { wgpu::ColorWrites::empty() } else { wgpu::ColorWrites::ALL };
+            [
+                Some(wgpu::ColorTargetState { format: HDR_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL }),
+                Some(wgpu::ColorTargetState { format: ID_FORMAT, blend: None, write_mask: ids }),
+            ]
+        };
         let pipeline = |label: &str, topology, blend: Option<wgpu::BlendState>, depth_write: bool, bias: i32| {
             let buffers = [Some(Vertex::layout()), Some(instance_layout())];
-            let targets =
-                [Some(wgpu::ColorTargetState { format: HDR_FORMAT, blend, write_mask: wgpu::ColorWrites::ALL })];
+            let targets = scene_targets(blend);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
@@ -354,8 +378,7 @@ impl Renderer {
         let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
         let terrain = {
             let buffers = [Some(Vertex::layout()), Some(instance_layout()), Some(VertexExtra::layout())];
-            let targets =
-                [Some(wgpu::ColorTargetState { format: HDR_FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })];
+            let targets = scene_targets(None);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("terrain"),
                 layout: Some(&terrain_pl),
@@ -609,7 +632,11 @@ impl Renderer {
         let rt = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let hdr =
             texture("hdr", HDR_FORMAT, rt | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default());
-        let depth = texture("depth", DEPTH_FORMAT, rt).create_view(&Default::default());
+        let copy = wgpu::TextureUsages::COPY_SRC;
+        let depth = texture("depth", DEPTH_FORMAT, rt | copy);
+        let depth_view = depth.create_view(&Default::default());
+        let ids = texture("ids", ID_FORMAT, rt | copy);
+        let ids_view = ids.create_view(&Default::default());
         let output =
             texture("output", OUTPUT_FORMAT, rt | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC);
         let output_view = output.create_view(&Default::default());
@@ -625,7 +652,19 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: self.tonemap_buffer.as_entire_binding() },
             ],
         });
-        RenderTargets { width, height, hdr, depth, output, output_view, display_view, tonemap_group }
+        RenderTargets {
+            width,
+            height,
+            hdr,
+            depth,
+            depth_view,
+            ids,
+            ids_view,
+            output,
+            output_view,
+            display_view,
+            tonemap_group,
+        }
     }
 
     /// Draws one model with an orbiting camera (the model viewer).
@@ -640,7 +679,7 @@ impl Renderer {
         let view = camera.camera_view(targets.width as f32 / targets.height as f32);
         let lod = settings.lod.min(3);
         let lod = if model.lods[lod].is_empty() { model.highest_lod() } else { lod };
-        let instance = Instance::new(Mat4::IDENTITY, 0);
+        let instance = Instance::new(Mat4::IDENTITY, 0, 0);
         self.render(ctx, targets, &view, settings, &[instance], &[DrawBatch { model, lod, instances: 0..1 }]);
     }
 
@@ -696,17 +735,28 @@ impl Renderer {
             let [r, g, b] = settings.background;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &targets.hdr,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &targets.hdr,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &targets.ids_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &targets.depth,
+                    view: &targets.depth_view,
                     depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0.0), store: wgpu::StoreOp::Store }),
                     stencil_ops: None,
                 }),
@@ -768,6 +818,49 @@ impl Renderer {
         }
         ctx.queue.submit([encoder.finish()]);
         stats
+    }
+
+    /// What the last frame drew at a pixel of `targets` (waits for the GPU).
+    pub fn pick(&self, ctx: &GpuContext, targets: &RenderTargets, x: u32, y: u32) -> Option<Pick> {
+        if x >= targets.width || y >= targets.height {
+            return None;
+        }
+        // One row each, 256-byte aligned: the id, then the depth.
+        let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pick"),
+            size: 512,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = ctx.device.create_command_encoder(&Default::default());
+        let one = wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
+        let at = wgpu::Origin3d { x, y, z: 0 };
+        for (i, (texture, aspect)) in
+            [(&targets.ids, wgpu::TextureAspect::All), (&targets.depth, wgpu::TextureAspect::DepthOnly)]
+                .into_iter()
+                .enumerate()
+        {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: at, aspect },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: i as u64 * 256,
+                        bytes_per_row: Some(256),
+                        rows_per_image: Some(1),
+                    },
+                },
+                one,
+            );
+        }
+        ctx.queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        let mapped = slice.get_mapped_range().ok()?;
+        let id = u32::from_le_bytes(mapped[0..4].try_into().unwrap());
+        let depth = f32::from_le_bytes(mapped[256..260].try_into().unwrap());
+        Some(Pick { id, depth })
     }
 
     /// Reads the output back as tightly packed RGBA8 (sRGB) rows.

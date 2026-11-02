@@ -266,7 +266,7 @@ impl MapView {
             let dist = centre.distance(camera.eye) - radius;
             let lod = model.lod_for_distance(dist.max(0.0));
             let key = (Arc::as_ptr(&model) as usize, lod);
-            groups.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint));
+            groups.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint, 0));
         }
         let mut instances = Vec::new();
         let mut ranges = Vec::new();
