@@ -49,6 +49,8 @@ pub struct Tools {
     /// Whether the gizmo has a selection to show this frame.
     gizmo_shown: bool,
     pub hover: Option<EntityId>,
+    /// Asks the map view to look at the selection (Hierarchy's double click).
+    pub focus: bool,
     /// Where the mouse points at the scene, from the last pick.
     pub hover_point: Option<Vec3>,
     pending: Option<Pending>,
@@ -83,6 +85,7 @@ impl Default for Tools {
             gizmo_press: false,
             gizmo_shown: false,
             hover: None,
+            focus: false,
             hover_point: None,
             pending: None,
             status: None,

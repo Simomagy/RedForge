@@ -3,7 +3,9 @@
 mod app;
 mod browser;
 mod game;
+mod hierarchy;
 mod map;
+mod project_pane;
 mod properties;
 mod settings;
 mod viewers;

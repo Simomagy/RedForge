@@ -127,6 +127,23 @@ impl World {
         self.rewalk = true;
     }
 
+    /// Hides an entity from [`World::visible`] (or shows it again): for the
+    /// editor's view only.
+    pub fn set_hidden(&mut self, id: EntityId, hidden: bool) {
+        let changed = if hidden { self.hidden.insert(id) } else { self.hidden.remove(&id) };
+        self.rewalk |= changed;
+    }
+
+    pub fn is_hidden(&self, id: EntityId) -> bool {
+        self.hidden.contains(&id)
+    }
+
+    /// Shows every hidden entity again.
+    pub fn show_all(&mut self) {
+        self.rewalk |= !self.hidden.is_empty();
+        self.hidden.clear();
+    }
+
     /// The map data used for a ymap instead of its file, if any.
     pub fn map_override(&self, name: u32) -> Option<&Arc<DataBag>> {
         self.overrides.get(self.by_name.get(&name)?)

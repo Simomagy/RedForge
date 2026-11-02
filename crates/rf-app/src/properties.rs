@@ -52,7 +52,6 @@ pub struct Properties {
     pending_field: Option<(u32, f64)>,
     archetype_text: String,
     archetype_for: Option<EntityId>,
-    new_map_name: String,
     search: String,
     /// Archetype names, sorted, once asked for.
     archetypes: Option<Vec<(String, u32)>>,
@@ -68,7 +67,6 @@ impl Properties {
                 self.place_ui(ui, editor, tools);
                 ui.separator();
             }
-            self.maps_ui(ui, editor);
             if let Some(e) = &self.error {
                 ui.separator();
                 ui.colored_label(egui::Color32::from_rgb(230, 110, 90), e);
@@ -368,79 +366,6 @@ impl Properties {
                 tools.tool = crate::map::tools::Tool::Place;
             }
         }
-    }
-
-    /// The edited ymaps: where new entities go, and saving them; and the
-    /// ytyps of edited interiors.
-    fn maps_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor) {
-        self.types_ui(ui, editor);
-        ui.heading("Edited ymaps");
-        let maps: Vec<(u32, String, bool, bool)> = editor
-            .edited_maps()
-            .iter()
-            .map(|m| (m.name, m.file_name.clone(), m.is_dirty(), m.source.is_none()))
-            .collect();
-        if maps.is_empty() {
-            ui.label(RichText::new("None yet: change something, or make a new ymap.").weak());
-        }
-        for (name, file, dirty, new) in maps {
-            ui.horizontal(|ui| {
-                let mut target = editor.target == Some(name);
-                if ui.radio(target, "").on_hover_text("Place and paste into this ymap").clicked() {
-                    target = true;
-                    editor.target = Some(name);
-                }
-                let _ = target;
-                let mut text = RichText::new(format!("{file}{}", if dirty { " *" } else { "" }));
-                if new {
-                    text = text.italics();
-                }
-                ui.label(text);
-                if ui.button("Save as…").clicked() {
-                    let dialog =
-                        rfd::FileDialog::new().set_file_name(format!("{file}.ymap")).add_filter("Map data", &["ymap"]);
-                    if let Some(path) = dialog.save_file() {
-                        self.error = editor.save_map(name, &path).err();
-                    }
-                }
-            });
-        }
-        ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.new_map_name).on_hover_text("The new ymap's name");
-            if ui.button("New ymap").clicked() {
-                match editor.new_map(&self.new_map_name) {
-                    Ok(_) => {
-                        self.new_map_name.clear();
-                        self.error = None;
-                    }
-                    Err(e) => self.error = Some(e),
-                }
-            }
-        });
-    }
-}
-
-impl Properties {
-    fn types_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor) {
-        let types: Vec<(rf_formats::rpf8::FileRef, String, bool)> =
-            editor.edited_types().iter().map(|t| (t.file, t.file_name.clone(), t.is_dirty())).collect();
-        if types.is_empty() {
-            return;
-        }
-        ui.heading("Edited interiors (ytyps)");
-        for (file, name, dirty) in types {
-            ui.horizontal(|ui| {
-                ui.label(format!("{name}{}", if dirty { " *" } else { "" }));
-                if ui.button("Save as…").clicked() {
-                    let dialog =
-                        rfd::FileDialog::new().set_file_name(format!("{name}.ytyp")).add_filter("Types", &["ytyp"]);
-                    if let Some(path) = dialog.save_file() {
-                        self.error = editor.save_types(file, &path).err();
-                    }
-                }
-            });
-        }
-        ui.separator();
     }
 }
 

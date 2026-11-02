@@ -785,8 +785,9 @@ impl Editor {
                 log::warn!("{e}");
                 continue;
             }
-            if id.interior_entity != u32::MAX
-                && let Some(def) = lod::entities(&self.maps[&id.node].root).get(id.entity as usize).cloned().flatten()
+            // An interior entity's ytyp, or an interior instance's (to list its entities).
+            if let Some(def) = lod::entities(&self.maps[&id.node].root).get(id.entity as usize).cloned().flatten()
+                && (id.interior_entity != u32::MAX || placement::is_mlo_instance(&def))
                 && let Some(a) = self.data.archetypes.get(&def.hash("archetypeName"))
                 && let Err(e) = self.open_types(a.ytyp)
             {
@@ -806,6 +807,17 @@ impl Editor {
         let mlo = interior::archetypes(&self.types.get(&a.ytyp)?.root).get(a.index as usize)?.as_ref()?;
         let slot = interior::slot(mlo, id.interior_entity as usize)?;
         Some(InteriorRef { ytyp: a.ytyp, archetype: a.index as usize, slot, instance: Placement::of_entity(def) })
+    }
+
+    /// The interior archetype (`CMloArchetypeDef`) an entity is in, or that an
+    /// interior instance places; its ytyp must be open (selecting opens it).
+    pub fn interior_archetype(&self, id: EntityId) -> Option<&DataBag> {
+        let def = lod::entities(&self.map(id.node)?.root).get(id.entity as usize)?.as_ref()?;
+        if id.interior_entity == u32::MAX && !placement::is_mlo_instance(def) {
+            return None;
+        }
+        let a = self.data.archetypes.get(&def.hash("archetypeName"))?;
+        interior::archetypes(&self.types.get(&a.ytyp)?.root).get(a.index as usize)?.as_ref()
     }
 
     fn interior_def(&self, r: &InteriorRef) -> Option<&DataBag> {

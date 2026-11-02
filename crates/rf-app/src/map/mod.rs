@@ -371,6 +371,11 @@ impl MapView {
                 self.focus_selection(ed);
             }
         }
+        if let Some(ed) = editor.as_deref_mut()
+            && std::mem::take(&mut tools.focus)
+        {
+            self.focus_selection(ed);
+        }
 
         // What to draw.
         let visible: Vec<VisibleEntity> = match (&self.source, editor.as_deref_mut()) {

@@ -260,6 +260,8 @@ pub struct World {
     /// Edited or new map data, by node: used instead of the file, and never
     /// dropped.
     overrides: HashMap<u32, Arc<DataBag>>,
+    /// Entities hidden in the editor (they're still in their maps).
+    hidden: HashSet<EntityId>,
     /// Requested loads, with the flag that cancels them.
     pending: HashMap<u32, Arc<AtomicBool>>,
     /// The streamed nodes, sorted.
@@ -327,6 +329,7 @@ impl World {
             loader: Loader::new(src),
             loaded: HashMap::new(),
             overrides: HashMap::new(),
+            hidden: HashSet::new(),
             pending: HashMap::new(),
             streamed: Vec::new(),
             camera: None,
@@ -383,6 +386,9 @@ impl World {
             let names = |n: u32| nodes[n as usize].name;
             self.interiors_visible =
                 stream::walk(&self.loaded, &self.streamed, &names, camera, self.hour, self.stamp, &mut self.visible);
+            if !self.hidden.is_empty() {
+                self.visible.retain(|e| !self.hidden.contains(&e.id));
+            }
             self.rewalk = false;
         }
         self.evict();

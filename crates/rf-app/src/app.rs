@@ -10,8 +10,10 @@ use rf_render::{GpuContext, Renderer, TexturePreview};
 
 use crate::browser::{Browser, BrowserAction};
 use crate::game::{Game, LoadMessage, is_game_folder, start_loading};
+use crate::hierarchy::Hierarchy;
 use crate::map::MapView;
 use crate::map::tools::Tools;
+use crate::project_pane::ProjectPane;
 use crate::properties::Properties;
 use crate::settings::{GAME_FOLDER, Settings};
 use crate::viewers::Gpu;
@@ -39,8 +41,14 @@ pub enum Tab {
     Texture(Box<TextureViewer>),
     Text(Box<TextViewer>),
     Map(Box<MapView>),
-    /// The selection's properties and the edited ymaps.
+    /// The selection's properties.
     Properties,
+    /// The project's files, saving, the RedM export.
+    Project,
+    /// The objects of the selection's ymap or interior.
+    Hierarchy,
+    /// The game's archives.
+    GameFiles,
 }
 
 /// For testing without anyone at the screen: opens a file, takes a screenshot
@@ -59,6 +67,7 @@ struct AutoShot {
     delay: f32,
     select_centre: bool,
     drag_test: Option<DragTest>,
+    tab_shown: bool,
     opened: Option<Instant>,
     requested: bool,
 }
@@ -85,10 +94,12 @@ pub struct RedForgeApp {
     game: GameState,
     dock: DockState<Tab>,
     browser: Browser,
-    /// The world being edited, from when the world map first opens.
+    /// The world being edited, from when the game is loaded.
     editor: Option<Editor>,
     tools: Tools,
     properties: Properties,
+    project_pane: ProjectPane,
+    hierarchy: Hierarchy,
 }
 
 impl RedForgeApp {
@@ -114,6 +125,7 @@ impl RedForgeApp {
                 delay: std::env::var("REDFORGE_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(6.0),
                 select_centre: std::env::var("REDFORGE_SELECT_CENTRE").is_ok(),
                 drag_test: std::env::var("REDFORGE_TEST_DRAG").is_ok().then(DragTest::default),
+                tab_shown: false,
                 opened: None,
                 requested: false,
             }),
@@ -124,11 +136,13 @@ impl RedForgeApp {
             settings,
             gpu,
             game: GameState::NoFolder { input: folder.clone().unwrap_or_default(), error: None },
-            dock: DockState::new(vec![Tab::Welcome]),
+            dock: default_dock(),
             browser: Browser::default(),
             editor: None,
             tools: Tools::default(),
             properties: Properties::default(),
+            project_pane: ProjectPane::default(),
+            hierarchy: Hierarchy::default(),
         };
         if let Some(f) = folder {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
@@ -186,12 +200,17 @@ impl RedForgeApp {
         true
     }
 
+    /// Shows a document with the others (in place of the welcome page).
     fn show_tab(&mut self, tab: Tab) {
-        // Replace the welcome page with the first document.
+        let document =
+            |t: &Tab| matches!(t, Tab::Welcome | Tab::Map(_) | Tab::Model(_) | Tab::Texture(_) | Tab::Text(_));
+        if let Some(path) = self.dock.find_tab_from(document) {
+            self.dock.set_focused_node_and_surface(egui_dock::NodePath { surface: path.surface, node: path.node });
+        }
+        self.dock.push_to_focused_leaf(tab);
         if let Some(path) = self.dock.find_tab_from(|t| matches!(t, Tab::Welcome)) {
             self.dock.remove_tab(path);
         }
-        self.dock.push_to_focused_leaf(tab);
     }
 
     fn folder_ui(&mut self, ui: &mut egui::Ui) {
@@ -228,6 +247,26 @@ impl RedForgeApp {
             self.load_game(&ctx, f);
         }
     }
+}
+
+/// The fixed tabs' titles.
+fn tab_title(t: &Tab) -> &'static str {
+    match t {
+        Tab::Project => "Project",
+        Tab::Hierarchy => "Hierarchy",
+        Tab::GameFiles => "Game Files",
+        Tab::Properties => "Properties",
+        _ => "",
+    }
+}
+
+/// The layout to start with, as the C#'s: project, hierarchy and game files on
+/// the left, documents in the middle (Properties joins on the right with the
+/// world map).
+fn default_dock() -> DockState<Tab> {
+    let mut dock = DockState::new(vec![Tab::Welcome]);
+    dock.main_surface_mut().split_left(NodeIndex::root(), 0.22, vec![Tab::Project, Tab::Hierarchy, Tab::GameFiles]);
+    dock
 }
 
 /// Made-up mouse events for testing the gizmo.
@@ -299,6 +338,15 @@ impl RedForgeApp {
                     }
                 }
             }
+            Some(t) if !a.requested && t.elapsed().as_secs_f32() > a.delay - 1.0 && !a.tab_shown => {
+                // REDFORGE_SHOW_TAB=<title> brings a tab to the front for the screenshot.
+                a.tab_shown = true;
+                if let Ok(title) = std::env::var("REDFORGE_SHOW_TAB")
+                    && let Some(path) = self.dock.find_tab_from(|t| tab_title(t) == title)
+                {
+                    let _ = self.dock.set_active_tab(path);
+                }
+            }
             Some(t) if !a.requested && t.elapsed().as_secs_f32() > a.delay => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
                 a.requested = true;
@@ -331,6 +379,12 @@ struct Tabs<'a> {
     editor: Option<&'a mut Editor>,
     tools: &'a mut Tools,
     properties: &'a mut Properties,
+    project: &'a mut ProjectPane,
+    hierarchy: &'a mut Hierarchy,
+    browser: &'a mut Browser,
+    settings: &'a mut Settings,
+    /// What the Game Files browser asked to open.
+    action: &'a mut Option<BrowserAction>,
 }
 
 impl TabViewer for Tabs<'_> {
@@ -344,6 +398,9 @@ impl TabViewer for Tabs<'_> {
             Tab::Text(v) => format!("📄 {}", v.title).into(),
             Tab::Map(v) => format!("🗺 {}", v.title).into(),
             Tab::Properties => "Properties".into(),
+            Tab::Project => "Project".into(),
+            Tab::Hierarchy => "Hierarchy".into(),
+            Tab::GameFiles => "Game Files".into(),
         }
     }
 
@@ -355,6 +412,9 @@ impl TabViewer for Tabs<'_> {
             Tab::Text(v) => egui::Id::new(("text", &v.path)),
             Tab::Map(v) => egui::Id::new(("map", &v.path)),
             Tab::Properties => egui::Id::new("properties"),
+            Tab::Project => egui::Id::new("project"),
+            Tab::Hierarchy => egui::Id::new("hierarchy"),
+            Tab::GameFiles => egui::Id::new("game-files"),
         }
     }
 
@@ -379,7 +439,29 @@ impl TabViewer for Tabs<'_> {
             Tab::Properties => match self.editor.as_deref_mut() {
                 Some(ed) => self.properties.ui(ui, ed, Some(self.tools)),
                 None => {
-                    ui.label("Open the world map (View → World map) to edit.");
+                    ui.label("The game isn't loaded.");
+                }
+            },
+            Tab::Project => match self.editor.as_deref_mut() {
+                Some(ed) => self.project.ui(ui, ed, self.settings),
+                None => {
+                    ui.label("The game isn't loaded.");
+                }
+            },
+            Tab::Hierarchy => match self.editor.as_deref_mut() {
+                Some(ed) => self.hierarchy.ui(ui, ed, self.tools),
+                None => {
+                    ui.label("The game isn't loaded.");
+                }
+            },
+            Tab::GameFiles => match self.game {
+                Some(g) => {
+                    if let Some(a) = self.browser.ui(ui, g) {
+                        *self.action = Some(a);
+                    }
+                }
+                None => {
+                    ui.label("The game isn't loaded.");
                 }
             },
         }
@@ -425,8 +507,9 @@ impl eframe::App for RedForgeApp {
                     LoadMessage::Progress(s) => *status = s,
                     LoadMessage::Done(result) => match *result {
                         Ok(g) => {
-                            self.game = GameState::Ready(Arc::new(g));
-                            self.editor = None;
+                            let g = Arc::new(g);
+                            self.editor = Some(Editor::new(g.fs.clone(), g.hashes.clone(), g.data.clone()));
+                            self.game = GameState::Ready(g);
                             break;
                         }
                         Err(e) => {
@@ -447,6 +530,20 @@ impl eframe::App for RedForgeApp {
                         if ui.button("World map").clicked() {
                             self.open_world(&g, None);
                             ui.close();
+                        }
+                        for (label, tab) in
+                            [("Project", Tab::Project), ("Hierarchy", Tab::Hierarchy), ("Game Files", Tab::GameFiles)]
+                        {
+                            if ui.button(label).clicked() {
+                                let missing = self
+                                    .dock
+                                    .find_tab_from(|t| std::mem::discriminant(t) == std::mem::discriminant(&tab))
+                                    .is_none();
+                                if missing {
+                                    self.dock.main_surface_mut().split_left(NodeIndex::root(), 0.22, vec![tab]);
+                                }
+                                ui.close();
+                            }
                         }
                         if ui.button("Properties").clicked() {
                             if self.dock.find_tab_from(|t| matches!(t, Tab::Properties)).is_none() {
@@ -548,17 +645,14 @@ impl eframe::App for RedForgeApp {
             }
         });
 
-        let mut action = None;
-        if let Some(g) = &game {
-            egui::Panel::left("game-files").default_size(340.0).show(ui, |ui| {
-                ui.heading("Game Files");
-                action = self.browser.ui(ui, g);
-            });
-        }
-        if let (Some(a), Some(g)) = (action, &game) {
-            self.open(ctx, g, a);
+        // Ctrl+S saves the project's files, wherever the focus is.
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
+            && let Some(ed) = &mut self.editor
+        {
+            self.project_pane.save_all(ed, &mut self.settings);
         }
 
+        let mut action = None;
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             let mut tabs = Tabs {
                 gpu: &self.gpu,
@@ -566,9 +660,17 @@ impl eframe::App for RedForgeApp {
                 editor: self.editor.as_mut(),
                 tools: &mut self.tools,
                 properties: &mut self.properties,
+                project: &mut self.project_pane,
+                hierarchy: &mut self.hierarchy,
+                browser: &mut self.browser,
+                settings: &mut self.settings,
+                action: &mut action,
             };
             DockArea::new(&mut self.dock).style(Style::from_egui(ui.style().as_ref())).show_inside(ui, &mut tabs);
         });
+        if let (Some(a), Some(g)) = (action, &game) {
+            self.open(ctx, g, a);
+        }
 
         if let Some(g) = &game {
             self.auto_shot(ctx, g);
@@ -577,7 +679,7 @@ impl eframe::App for RedForgeApp {
         // Viewers waiting on a background job need frames to notice it finishing.
         let waiting = self.dock.iter_all_tabs().any(|(_, t)| match t {
             Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Map(_) => true,
-            Tab::Welcome | Tab::Properties => false,
+            Tab::Welcome | Tab::Properties | Tab::Project | Tab::Hierarchy | Tab::GameFiles => false,
         });
         if waiting {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
