@@ -10,8 +10,9 @@
 //! 3. `final`: the bloom and flares added, the exposure, the scotopic shift and
 //!    the curve.
 //!
-//! The curve's result is written as linear for the sRGB output to encode; the
-//! C# wrote it to a UNORM backbuffer as it was, so its images are darker.
+//! The curve's result is written to the output's UNORM view as it is, as the
+//! C# wrote it to its UNORM backbuffer (its middle greys are chosen for that);
+//! pass-through frames are encoded to sRGB by the shader.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -19,7 +20,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
 use crate::GpuContext;
-use crate::renderer::OUTPUT_FORMAT;
+use crate::targets::OUTPUT_FORMAT;
 
 const BLOOM_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The adapted value before the first frame: the sum of the log luminances, so
@@ -328,7 +329,12 @@ impl Post {
         let bloom_pl = pipeline_layout("post bloom", &bloom_layout);
         let bloom_h = fullscreen("post bloom h", &bloom_pl, "fs_bloom_h", BLOOM_FORMAT);
         let bloom_v = fullscreen("post bloom v", &bloom_pl, "fs_bloom_v", BLOOM_FORMAT);
-        let finish = fullscreen("post final", &pipeline_layout("post final", &final_layout), "fs_final", OUTPUT_FORMAT);
+        let finish = fullscreen(
+            "post final",
+            &pipeline_layout("post final", &final_layout),
+            "fs_final",
+            OUTPUT_FORMAT.remove_srgb_suffix(),
+        );
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("post"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -447,7 +453,7 @@ impl Post {
     }
 
     /// Records the post-processing of `targets`' HDR image into `output` (an
-    /// [`OUTPUT_FORMAT`] view of the same size).
+    /// [`OUTPUT_FORMAT`] texture's UNORM view, the same size).
     pub fn run(
         &self,
         ctx: &GpuContext,

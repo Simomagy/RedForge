@@ -2,7 +2,11 @@
 //! RedForge's `DeferredScene`), the ambient occlusion, the lit and finished
 //! HDR images, the picking ids and the 8-bit output.
 
+use std::sync::Mutex;
+use std::time::Instant;
+
 use crate::GpuContext;
+use crate::post::{Post, PostTargets};
 
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -26,7 +30,6 @@ pub(crate) struct ViewLayouts {
     /// The occlusion pass: depth, normals and its constants; then its blur.
     pub ssao: wgpu::BindGroupLayout,
     pub blur: wgpu::BindGroupLayout,
-    pub tonemap: wgpu::BindGroupLayout,
 }
 
 fn texture_entry(binding: u32, sample_type: wgpu::TextureSampleType) -> wgpu::BindGroupLayoutEntry {
@@ -73,10 +76,6 @@ impl ViewLayouts {
             background: layout("background", &[depth, texture_entry(6, float)]),
             ssao: layout("ssao", &[depth, texture_entry(1, float), uniform]),
             blur: layout("ssao blur", &[texture_entry(3, float)]),
-            tonemap: layout(
-                "tonemap",
-                &[texture_entry(0, float), wgpu::BindGroupLayoutEntry { binding: 1, ..uniform }],
-            ),
         }
     }
 }
@@ -97,14 +96,18 @@ pub struct RenderTargets {
     pub(crate) hdr: wgpu::TextureView,
     pub output: wgpu::Texture,
     pub output_view: wgpu::TextureView,
-    /// The output seen as plain UNORM: the sRGB-encoded bytes as they are, which
-    /// is what egui expects of a texture.
+    /// The output seen as plain UNORM: the bytes as they are, which is what
+    /// egui expects of a texture, and what the tonemap writes (as the C#'s
+    /// UNORM backbuffer took its values).
     pub display_view: wgpu::TextureView,
     pub(crate) lighting_group: wgpu::BindGroup,
     pub(crate) background_group: wgpu::BindGroup,
     pub(crate) ssao_group: wgpu::BindGroup,
     pub(crate) blur_group: wgpu::BindGroup,
-    pub(crate) tonemap_group: wgpu::BindGroup,
+    /// The exposure's adaptation and bloom.
+    pub(crate) post: PostTargets,
+    /// When this view was last drawn, for the adaptation.
+    pub(crate) last_frame: Mutex<Option<Instant>>,
 }
 
 impl RenderTargets {
@@ -112,7 +115,7 @@ impl RenderTargets {
         ctx: &GpuContext,
         layouts: &ViewLayouts,
         ssao_constants: &wgpu::Buffer,
-        tonemap: &wgpu::Buffer,
+        post: &Post,
         width: u32,
         height: u32,
     ) -> Self {
@@ -173,7 +176,7 @@ impl RenderTargets {
             &[(0, tv(&depth_view)), (1, tv(&gbuffer[1])), (2, ssao_constants.as_entire_binding())],
         );
         let blur_group = group("ssao blur", &layouts.blur, &[(3, tv(&ssao_raw))]);
-        let tonemap_group = group("tonemap", &layouts.tonemap, &[(0, tv(&hdr)), (1, tonemap.as_entire_binding())]);
+        let post = post.targets(ctx, &hdr, width, height);
         Self {
             width,
             height,
@@ -192,7 +195,8 @@ impl RenderTargets {
             background_group,
             ssao_group,
             blur_group,
-            tonemap_group,
+            post,
+            last_frame: Mutex::new(None),
         }
     }
 }

@@ -45,7 +45,7 @@ pub struct MapView {
     hour: f32,
     /// The weather's lighting through the day (the world map only).
     timecycle: Option<rf_game::timecycle::TimeCycle>,
-    /// The user's exposure, before the time of day's.
+    /// The user's exposure, before the time of day's, in EV.
     exposure: f32,
     /// Whether scripted ymaps (lockdowns, gang camps...) show, as in the C#.
     scripted: bool,
@@ -155,7 +155,7 @@ impl MapView {
             // REDFORGE_HOUR sets the starting hour (for testing).
             hour: std::env::var("REDFORGE_HOUR").ok().and_then(|h| h.parse().ok()).unwrap_or(12.0),
             timecycle: None,
-            exposure: ViewSettings::default().exposure,
+            exposure: 0.0,
             scripted: true,
             speed: 30.0,
             targets: None,
@@ -235,7 +235,7 @@ impl MapView {
     /// night, each times the timecycle's light colour; its fill light.
     fn light(&mut self) {
         let Some(tc) = &self.timecycle else {
-            self.view.exposure = self.exposure;
+            self.view.exposure_ev = self.exposure;
             return;
         };
         let s = tc.state(self.hour);
@@ -245,7 +245,8 @@ impl MapView {
         self.view.sun_dir = dir;
         self.view.sun_colour = colour * Vec3::from(s.light_colour);
         self.view.fill = Vec3::from(s.fill_ambient);
-        self.view.exposure = self.exposure * 2f32.powf(s.exposure_ev);
+        self.view.exposure_ev = self.exposure + s.exposure_ev;
+        self.view.scotopic = s.scotopic;
     }
 
     /// Selects what's drawn in the middle of the view (for testing).
@@ -361,7 +362,7 @@ impl MapView {
                     }
                 }
                 ui.add(egui::Slider::new(&mut self.speed, 1.0..=5000.0).logarithmic(true).text("Speed m/s"));
-                ui.add(egui::Slider::new(&mut self.exposure, 0.2..=6.0).text("Exposure"));
+                ui.add(egui::Slider::new(&mut self.exposure, -4.0..=4.0).text("Exposure (EV)"));
             });
         });
     }

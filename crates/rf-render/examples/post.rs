@@ -88,7 +88,7 @@ impl Images {
             wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         );
         let output =
-            texture("output", OUTPUT_FORMAT, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+            texture("output", OUTPUT_FORMAT.remove_srgb_suffix(), wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
         let (hdr_view, output_view) = (hdr.create_view(&Default::default()), output.create_view(&Default::default()));
         Self { hdr, hdr_view, output, output_view }
     }

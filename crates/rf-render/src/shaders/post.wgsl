@@ -112,11 +112,17 @@ fn fs_bloom_v(v: VertexOut) -> @location(0) vec4<f32> {
     return vec4<f32>(sum, 1.0);
 }
 
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055, c * 12.92, c <= vec3<f32>(0.0031308));
+}
+
 @fragment
 fn fs_final(v: VertexOut) -> @location(0) vec4<f32> {
     var c = textureLoad(t_input, vec2<i32>(v.clip.xy), 0).rgb;
+    // (The output is written as it is, as the C#'s UNORM backbuffer took it;
+    // what's shown as it is gets its sRGB encoding here.)
     if params.modes.z != 0u {
-        return vec4<f32>(c, 1.0);
+        return vec4<f32>(linear_to_srgb(saturate(c)), 1.0);
     }
     let uv = v.clip.xy / vec2<f32>(textureDimensions(t_input));
     c += params.bloom.y * textureSampleLevel(t_bloom, s_linear, uv, 0.0).rgb;

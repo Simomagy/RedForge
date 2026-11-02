@@ -100,13 +100,16 @@ impl Thumbnails {
     /// The colour around the models in the pictures, as egui shows it: for
     /// the tiles that have none, so they all look alike.
     pub fn background(&self) -> egui::Color32 {
-        // The renderer's tonemap (`tonemap.wgsl`) of the clear colour.
-        let hable = |x: f32| {
-            let (a, b, c, d, e, f) = (0.22, 0.30, 0.10, 0.20, 0.01, 0.30);
+        // The renderer's tonemap (RDR2's curve, `post.wgsl`) of the clear
+        // colour, exposed to the middle grey as a picture that's mostly
+        // background is.
+        let curve = |x: f32| {
+            let (a, b, c, d, e, f) = (0.1, 0.4, 0.1, 0.2, 0.01, 0.3);
             ((x * (a * x + c * b) + d * e) / (x * (a * x + b) + d * f)) - e / f
         };
-        let [r, g, b] =
-            self.view.background.map(|v| (hable(v as f32 * self.view.exposure) / hable(11.2)).clamp(0.0, 1.0));
+        let bg = self.view.background.map(|v| v as f32);
+        let lum = (bg[0] * 0.299 + bg[1] * 0.587 + bg[2] * 0.114).max(1e-5);
+        let [r, g, b] = bg.map(|v| (curve(v * 0.45 / lum) / curve(4.0)).clamp(0.0, 1.0));
         egui::Rgba::from_rgb(r, g, b).into()
     }
 

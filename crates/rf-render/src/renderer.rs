@@ -13,12 +13,13 @@ use crate::GpuContext;
 use crate::anim::Pose;
 use crate::camera::{CameraView, OrbitCamera};
 use crate::mesh::{Vertex, VertexExtra, VertexSkin};
+use crate::post::{Post, PostSettings, Tonemap};
 use crate::model::{
     AlphaMode, DecalMode, GpuDraw, GpuModel, MaterialDesc, MaterialMap, NormalMap, Slot, TerrainDesc, TerrainParams,
     terrain_slot,
 };
 use crate::shadows::{CASCADES, Cascades, SHADOW_SIZE};
-use crate::targets::{DEPTH_FORMAT, GBUFFER_FORMATS, HDR_FORMAT, ID_FORMAT, OUTPUT_FORMAT, SSAO_FORMAT, ViewLayouts};
+use crate::targets::{DEPTH_FORMAT, GBUFFER_FORMATS, HDR_FORMAT, ID_FORMAT, SSAO_FORMAT, ViewLayouts};
 use crate::texture::GpuTexture;
 
 pub use crate::targets::RenderTargets;
@@ -162,12 +163,6 @@ pub struct Pick {
     pub depth: f32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct TonemapUniform {
-    values: [f32; 4],
-}
-
 /// What to show instead of the lit image.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DebugView {
@@ -192,7 +187,13 @@ pub struct ViewSettings {
     /// The ambient light's fill colour, added to the sky's.
     pub fill: Vec3,
     pub background: [f64; 3],
-    pub exposure: f32,
+    /// The user's exposure plus the scene's, in EV (the image is exposed to
+    /// its average first).
+    pub exposure_ev: f32,
+    /// Night vision: the tint colours fade to in the dark, and how much.
+    pub scotopic: [f32; 4],
+    pub tonemap: Tonemap,
+    pub bloom: bool,
     pub shadows: bool,
     pub ssao: bool,
 }
@@ -206,7 +207,10 @@ impl Default for ViewSettings {
             sun_colour: Vec3::new(3.2, 3.0, 2.7),
             fill: Vec3::ZERO,
             background: [0.18, 0.2, 0.24],
-            exposure: 1.6,
+            exposure_ev: 0.0,
+            scotopic: [1.0, 1.0, 1.0, 0.0],
+            tonemap: Tonemap::Rdr2,
+            bloom: true,
             shadows: true,
             ssao: true,
         }
@@ -302,7 +306,7 @@ pub struct Renderer {
     shadow_layers: Vec<wgpu::TextureView>,
     env_group: wgpu::BindGroup,
     ssao_buffer: wgpu::Buffer,
-    tonemap_buffer: wgpu::Buffer,
+    post: Post,
     sampler: wgpu::Sampler,
     point_sampler: wgpu::Sampler,
     pipelines: Pipelines,
@@ -331,7 +335,6 @@ struct Pipelines {
     ssao_blur: wgpu::RenderPipeline,
     lighting: wgpu::RenderPipeline,
     background: wgpu::RenderPipeline,
-    tonemap: wgpu::RenderPipeline,
 }
 
 fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -515,7 +518,6 @@ impl Renderer {
         };
         let frame_buffer = uniform("frame", size_of::<FrameUniform>() as u64);
         let shadow_frames = uniform("shadow frames", FRAME_STRIDE * CASCADES as u64);
-        let tonemap_buffer = uniform("tonemap", size_of::<TonemapUniform>() as u64);
         let ssao_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ssao"),
             contents: bytemuck::bytes_of(&SsaoUniform::new()),
@@ -626,7 +628,6 @@ impl Renderer {
         let deferred_shader =
             module("deferred.wgsl", [common, lighting, include_str!("shaders/deferred.wgsl")].concat());
         let ssao_shader = module("ssao.wgsl", [common, include_str!("shaders/ssao.wgsl")].concat());
-        let tonemap_shader = module("tonemap.wgsl", include_str!("shaders/tonemap.wgsl").into());
 
         let pipeline_layout = |label, groups: &[Option<&wgpu::BindGroupLayout>]| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -753,7 +754,6 @@ impl Renderer {
         let background_pl = pipeline_layout("background", &[Some(&frame_layout), Some(&view_layouts.background)]);
         let ssao_pl = pipeline_layout("ssao", &[Some(&frame_layout), Some(&view_layouts.ssao)]);
         let blur_pl = pipeline_layout("ssao blur", &[None, Some(&view_layouts.blur)]);
-        let tonemap_pl = pipeline_layout("tonemap", &[Some(&view_layouts.tonemap)]);
         let pipelines = Pipelines {
             terrain: make(Desc {
                 label: "terrain",
@@ -819,17 +819,6 @@ impl Renderer {
             ssao_blur: fullscreen("ssao blur", &blur_pl, &ssao_shader, "fs_blur", SSAO_FORMAT),
             lighting: fullscreen("lighting", &lighting_pl, &deferred_shader, "fs_lighting", HDR_FORMAT),
             background: fullscreen("background", &background_pl, &deferred_shader, "fs_background", HDR_FORMAT),
-            tonemap: make(Desc {
-                label: "tonemap",
-                layout: &tonemap_pl,
-                module: &tonemap_shader,
-                vs: "vs_main",
-                fs: Some("fs_main"),
-                buffers: &[],
-                targets: &[Some(OUTPUT_FORMAT.into())],
-                depth: None,
-                topology: tri,
-            }),
         };
 
         let white = Arc::new(GpuTexture::solid(ctx, "white", [255, 255, 255, 255]));
@@ -849,7 +838,7 @@ impl Renderer {
             shadow_layers,
             env_group,
             ssao_buffer,
-            tonemap_buffer,
+            post: Post::new(ctx),
             sampler,
             point_sampler,
             pipelines,
@@ -1016,7 +1005,7 @@ impl Renderer {
     }
 
     pub fn create_targets(&self, ctx: &GpuContext, width: u32, height: u32) -> RenderTargets {
-        RenderTargets::new(ctx, &self.view_layouts, &self.ssao_buffer, &self.tonemap_buffer, width, height)
+        RenderTargets::new(ctx, &self.view_layouts, &self.ssao_buffer, &self.post, width, height)
     }
 
     /// Draws one model with an orbiting camera (the model viewer).
@@ -1323,9 +1312,6 @@ impl Renderer {
             }
             ctx.queue.write_buffer(&self.shadow_frames, 0, &bytes);
         }
-        let passthrough = if settings.debug == DebugView::Lit { 0.0 } else { 1.0 };
-        let tm = TonemapUniform { values: [settings.exposure, 11.2, passthrough, 0.0] };
-        ctx.queue.write_buffer(&self.tonemap_buffer, 0, bytemuck::bytes_of(&tm));
 
         // The instances go in one buffer, kept between frames and grown as needed.
         let instance_buffer = (!instances.is_empty()).then(|| {
@@ -1446,16 +1432,18 @@ impl Renderer {
             rp.set_bind_group(3, &self.env_group, &[]);
             models_pass(&mut rp, draw, Pass::Blend);
         }
-        {
-            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("tonemap"),
-                color_attachments: &[colour(&targets.output_view, wgpu::LoadOp::Clear(wgpu::Color::BLACK))],
-                ..Default::default()
-            });
-            rp.set_pipeline(&p.tonemap);
-            rp.set_bind_group(0, &targets.tonemap_group, &[]);
-            rp.draw(0..3, 0..1);
-        }
+        let now = std::time::Instant::now();
+        let last = targets.last_frame.lock().unwrap().replace(now);
+        let post = PostSettings {
+            exposure_ev: settings.exposure_ev,
+            scotopic: settings.scotopic,
+            bloom: settings.bloom,
+            tonemap: settings.tonemap,
+            passthrough: settings.debug != DebugView::Lit,
+            elapsed: last.map_or(f32::INFINITY, |t| (now - t).as_secs_f32()),
+            ..Default::default()
+        };
+        self.post.run(ctx, &mut encoder, &targets.post, &targets.display_view, &post);
         ctx.queue.submit([encoder.finish()]);
     }
 

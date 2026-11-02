@@ -171,11 +171,12 @@ impl Ready {
                     DebugView::Normals,
                     DebugView::Material,
                     DebugView::VertexColour,
+                    DebugView::Occlusion,
                 ] {
                     changed |= ui.selectable_value(&mut self.view.debug, v, format!("{v:?}")).changed();
                 }
             });
-            changed |= ui.add(egui::Slider::new(&mut self.view.exposure, 0.2..=6.0).text("Exposure")).changed();
+            changed |= ui.add(egui::Slider::new(&mut self.view.exposure_ev, -4.0..=4.0).text("Exposure (EV)")).changed();
             if ui.button("Frame model").clicked() {
                 self.camera.frame(m.min.into(), m.max.into());
                 changed = true;
