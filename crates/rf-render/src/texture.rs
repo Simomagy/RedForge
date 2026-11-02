@@ -49,7 +49,9 @@ fn a8_to_rgba8(src: &[u8]) -> Vec<u8> {
 }
 
 fn bgr5a1_to_rgba8(src: &[u8]) -> Vec<u8> {
-    src.chunks_exact(2)
+    src.as_chunks::<2>()
+        .0
+        .iter()
         .flat_map(|c| {
             let v = u16::from_le_bytes([c[0], c[1]]);
             let ch = |s: u16| (((v >> s) & 31) as u32 * 255 / 31) as u8;
@@ -59,21 +61,23 @@ fn bgr5a1_to_rgba8(src: &[u8]) -> Vec<u8> {
 }
 
 fn rgba16u_to_rgba8(src: &[u8]) -> Vec<u8> {
-    src.chunks_exact(2).map(|c| c[1]).collect()
+    src.as_chunks::<2>().0.iter().map(|c| c[1]).collect()
 }
 
 fn r16u_to_rgba8(src: &[u8]) -> Vec<u8> {
-    src.chunks_exact(2).flat_map(|c| [c[1], c[1], c[1], 255]).collect()
+    src.as_chunks::<2>().0.iter().flat_map(|c| [c[1], c[1], c[1], 255]).collect()
 }
 
 fn f32s_to_f16s(src: &[u8]) -> Vec<u8> {
-    src.chunks_exact(4)
+    src.as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|c| f32_to_f16_bits(f32::from_le_bytes([c[0], c[1], c[2], c[3]])).to_le_bytes())
         .collect()
 }
 
 fn r32ui_to_rgba8(src: &[u8]) -> Vec<u8> {
-    src.chunks_exact(4).flat_map(|c| [c[0], c[1], c[2], 255]).collect()
+    src.as_chunks::<4>().0.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect()
 }
 
 fn upload_for(f: Tf, ctx: &GpuContext) -> Option<Upload> {
