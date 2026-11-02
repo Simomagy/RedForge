@@ -22,6 +22,8 @@
 pub mod interior;
 pub mod lod;
 pub mod placement;
+pub mod project;
+pub mod redm;
 pub mod save;
 
 use std::collections::HashMap;
@@ -36,6 +38,7 @@ use rf_game::GameData;
 pub use rf_world::{EntityId, World};
 
 pub use crate::placement::Placement;
+pub use crate::project::Project;
 
 /// `lodLevel` values (`rage__eLodType`).
 pub mod lod_level {
@@ -65,6 +68,8 @@ pub struct MapDoc {
     pub path: Option<PathBuf>,
     /// False for a new ymap whose making was undone.
     pub exists: bool,
+    /// In the project: loaded from it, made in the editor, or edited.
+    pub in_project: bool,
 }
 
 impl MapDoc {
@@ -94,6 +99,7 @@ pub struct TypesDoc {
     original: Arc<DataBag>,
     saved: Option<Arc<DataBag>>,
     pub path: Option<PathBuf>,
+    pub in_project: bool,
 }
 
 impl TypesDoc {
@@ -108,7 +114,7 @@ impl TypesDoc {
 
 /// A file the editor changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum DocKey {
+pub enum DocKey {
     /// A ymap, by name hash.
     Map(u32),
     /// A ytyp.
@@ -117,6 +123,18 @@ enum DocKey {
 
 /// A file's root before and after a step; `None` when it didn't exist.
 type DocChange = (DocKey, Option<Arc<DataBag>>, Option<Arc<DataBag>>);
+
+/// A file of the project, for showing it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectEntry {
+    /// File name, with its extension.
+    pub name: String,
+    /// The open document; `None` for a file that isn't loaded.
+    pub doc: Option<DocKey>,
+    /// Where it is on disk; `None` until it's saved.
+    pub path: Option<PathBuf>,
+    pub dirty: bool,
+}
 
 /// One undoable change.
 struct Step {
@@ -150,6 +168,11 @@ pub struct Editor {
     clipboard: Vec<DataBag>,
     /// Where new entities go: a ymap made in the editor or edited.
     pub target: Option<u32>,
+    /// The project: made when something is first edited, as in the C#.
+    pub project: Option<Project>,
+    /// Project files that aren't loaded (custom models, textures, collisions
+    /// and new ytyps aren't yet).
+    pub unloaded: Vec<PathBuf>,
 }
 
 /// How many steps undo keeps.
@@ -170,6 +193,8 @@ impl Editor {
             redo: Vec::new(),
             clipboard: Vec::new(),
             target: None,
+            project: None,
+            unloaded: Vec::new(),
         }
     }
 
@@ -213,6 +238,7 @@ impl Editor {
                 saved: None,
                 path: None,
                 exists: true,
+                in_project: false,
             };
             self.maps.insert(name, doc);
         }
@@ -234,7 +260,16 @@ impl Editor {
             let bytes = self.fs.extract_loose(file).map_err(|e| format!("{file_name}: {e}"))?;
             let mut header = Meta::read(&bytes).map_err(|e| format!("{file_name}: {e}"))?;
             let root = Arc::new(header.root.take().ok_or_else(|| format!("{file_name}: no data"))?);
-            let doc = TypesDoc { file, file_name, header, root: root.clone(), original: root, saved: None, path: None };
+            let doc = TypesDoc {
+                file,
+                file_name,
+                header,
+                root: root.clone(),
+                original: root,
+                saved: None,
+                path: None,
+                in_project: false,
+            };
             self.types.insert(file, doc);
         }
         Ok(self.types.get_mut(&file).unwrap())
@@ -242,6 +277,7 @@ impl Editor {
 
     /// Writes an edited ytyp.
     pub fn save_types(&mut self, file: FileRef, path: &Path) -> Result<(), String> {
+        self.project.get_or_insert_with(Project::new).add_file(path);
         let doc = self.types.get(&file).ok_or("no such ytyp")?;
         let mut meta = doc.header.clone();
         meta.root = Some((*doc.root).clone());
@@ -302,8 +338,10 @@ impl Editor {
             saved: None,
             path: None,
             exists: false,
+            in_project: true,
         };
         self.maps.insert(name, doc);
+        self.project.get_or_insert_with(Project::new);
         let before = self.selection.clone();
         self.apply_map(name, Some(root.clone()));
         self.push(Step {
@@ -317,6 +355,7 @@ impl Editor {
 
     /// Writes an edited ymap (as a resource, like the game's).
     pub fn save_map(&mut self, name: u32, path: &Path) -> Result<(), String> {
+        self.project.get_or_insert_with(Project::new).add_file(path);
         let doc = self.maps.get(&name).filter(|m| m.exists).ok_or("no such ymap")?;
         let mut root = (*doc.root).clone();
         save::update_map(&mut root, &self.data.archetypes);
@@ -351,6 +390,384 @@ impl Editor {
                 self.world.clear_map(name, None);
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Project
+
+    /// Puts a changed file in the project (making one if there's none).
+    fn adopt(&mut self, key: DocKey) {
+        self.project.get_or_insert_with(Project::new);
+        match key {
+            DocKey::Map(name) => {
+                if let Some(m) = self.maps.get_mut(&name) {
+                    m.in_project = true;
+                }
+            }
+            DocKey::Types(file) => {
+                if let Some(t) = self.types.get_mut(&file) {
+                    t.in_project = true;
+                }
+            }
+        }
+    }
+
+    /// Makes a new project, saved to `file` (an `.rfproj`); what's edited now
+    /// stays in it.
+    pub fn new_project(&mut self, file: &Path) -> Result<(), String> {
+        let mut p = self.project.take().unwrap_or_else(Project::new);
+        p.file = None;
+        let saved = p.save(Some(file));
+        self.project = Some(p);
+        saved.map(|_| ())
+    }
+
+    /// Closes the project: its files go back to the game's, and undo starts
+    /// over.
+    pub fn close_project(&mut self) {
+        let maps: Vec<u32> = self.maps.values().filter(|m| m.in_project).map(|m| m.name).collect();
+        for name in maps {
+            let doc = self.maps.remove(&name).unwrap();
+            self.world.clear_map(name, None);
+            let _ = doc;
+        }
+        let types: Vec<FileRef> = self.types.values().filter(|t| t.in_project).map(|t| t.file).collect();
+        for file in types {
+            let doc = self.types.remove(&file).unwrap();
+            let original = doc.original.clone();
+            self.types.insert(file, TypesDoc { root: original.clone(), ..doc });
+            self.apply_types(file, original);
+            self.types.remove(&file);
+        }
+        self.project = None;
+        self.unloaded.clear();
+        self.selection.clear();
+        self.target = None;
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    /// Opens an `.rfproj` (closing the project there is): its ymaps and ytyps
+    /// replace the game's, or add to them.
+    pub fn open_project(&mut self, file: &Path) -> Result<Vec<String>, String> {
+        let project = Project::load(file)?;
+        self.close_project();
+        let items = project.items();
+        self.project = Some(project);
+        Ok(self.load_project_files(&items))
+    }
+
+    /// Adds files to the project and loads them; returns the problems.
+    pub fn add_project_files(&mut self, files: &[PathBuf]) -> Vec<String> {
+        let project = self.project.get_or_insert_with(Project::new);
+        for f in files {
+            project.add_file(f);
+        }
+        let mut files = files.to_vec();
+        files.sort_by_key(|f| project::load_order(f));
+        self.load_project_files(&files)
+    }
+
+    /// Adds a folder (its game files) to the project and loads them.
+    pub fn add_project_folder(&mut self, folder: &Path) -> Vec<String> {
+        let project = self.project.get_or_insert_with(Project::new);
+        let before = project.items();
+        project.add_folder(folder);
+        let new: Vec<PathBuf> = project.items().into_iter().filter(|f| !before.contains(f)).collect();
+        self.load_project_files(&new)
+    }
+
+    fn load_project_files(&mut self, files: &[PathBuf]) -> Vec<String> {
+        let mut problems = Vec::new();
+        for f in files {
+            let result = match project::extension(f).as_str() {
+                "ymap" => self.load_map_file(f),
+                "ytyp" => self.load_types_file(f),
+                _ => Err(String::new()),
+            };
+            match result {
+                Ok(()) => {}
+                Err(e) if e.is_empty() => self.unloaded.push(f.clone()),
+                Err(e) => {
+                    problems.push(e);
+                    self.unloaded.push(f.clone());
+                }
+            }
+        }
+        problems
+    }
+
+    /// A ymap from disk, in place of the game's of the same name (or added).
+    fn load_map_file(&mut self, path: &Path) -> Result<(), String> {
+        let shown = path.display().to_string();
+        let bytes = std::fs::read(path).map_err(|e| format!("{shown}: {e}"))?;
+        let mut header = Meta::read(&bytes).map_err(|e| format!("{shown}: {e}"))?;
+        let root = Arc::new(header.root.take().ok_or_else(|| format!("{shown}: no map data"))?);
+        let file_name = path.file_stem().unwrap_or_default().to_string_lossy().to_lowercase();
+        let name = joaat(&file_name);
+        let doc = MapDoc {
+            name,
+            source: self.world.map_file(name),
+            file_name,
+            header,
+            root: root.clone(),
+            original: None,
+            saved: Some(root.clone()),
+            path: Some(path.to_owned()),
+            exists: true,
+            in_project: true,
+        };
+        self.maps.insert(name, doc);
+        self.apply_map(name, Some(root));
+        Ok(())
+    }
+
+    /// A ytyp from disk in place of the game's of the same name, for its
+    /// interiors. (New ytyps, with new archetypes, aren't loaded yet.)
+    fn load_types_file(&mut self, path: &Path) -> Result<(), String> {
+        let shown = path.display().to_string();
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_lowercase();
+        let file = self.data.stream_entry("ytyp", joaat(&stem)).ok_or_else(String::new)?;
+        let bytes = std::fs::read(path).map_err(|e| format!("{shown}: {e}"))?;
+        let mut meta = Meta::read(&bytes).map_err(|e| format!("{shown}: {e}"))?;
+        let root = Arc::new(meta.root.take().ok_or_else(|| format!("{shown}: no data"))?);
+        let doc = self.open_types(file)?;
+        doc.root = root.clone();
+        doc.saved = Some(root.clone());
+        doc.path = Some(path.to_owned());
+        doc.in_project = true;
+        self.apply_types(file, root);
+        Ok(())
+    }
+
+    /// The project's files, loaded or not, and what's edited but not saved
+    /// yet.
+    pub fn project_entries(&self) -> Vec<ProjectEntry> {
+        let mut out = Vec::new();
+        for m in self.maps.values().filter(|m| m.in_project && m.exists) {
+            out.push(ProjectEntry {
+                name: format!("{}.ymap", m.file_name),
+                doc: Some(DocKey::Map(m.name)),
+                path: m.path.clone(),
+                dirty: m.is_dirty(),
+            });
+        }
+        for t in self.types.values().filter(|t| t.in_project) {
+            out.push(ProjectEntry {
+                name: format!("{}.ytyp", t.file_name),
+                doc: Some(DocKey::Types(t.file)),
+                path: t.path.clone(),
+                dirty: t.is_dirty(),
+            });
+        }
+        for f in &self.unloaded {
+            let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            out.push(ProjectEntry { name, doc: None, path: Some(f.clone()), dirty: false });
+        }
+        out.sort_by(|a, b| {
+            let order = |e: &ProjectEntry| project::load_order(Path::new(&e.name));
+            order(a).cmp(&order(b)).then_with(|| a.name.cmp(&b.name))
+        });
+        out
+    }
+
+    /// Where a file of the project is saved: where it was, or the project's
+    /// folder.
+    pub fn save_path(&self, doc: DocKey) -> Option<PathBuf> {
+        let (path, name) = match doc {
+            DocKey::Map(n) => self.maps.get(&n).map(|m| (m.path.clone(), format!("{}.ymap", m.file_name)))?,
+            DocKey::Types(f) => self.types.get(&f).map(|t| (t.path.clone(), format!("{}.ytyp", t.file_name)))?,
+        };
+        path.or_else(|| Some(self.project.as_ref()?.dir()?.join(name)))
+    }
+
+    pub fn save_doc(&mut self, doc: DocKey, path: &Path) -> Result<(), String> {
+        match doc {
+            DocKey::Map(n) => self.save_map(n, path)?,
+            DocKey::Types(f) => self.save_types(f, path)?,
+        }
+        self.save_project_file()
+    }
+
+    /// Writes the `.rfproj`, if the project has one.
+    pub fn save_project_file(&mut self) -> Result<(), String> {
+        match &mut self.project {
+            Some(p) if p.file.is_some() => p.save(None).map(|_| ()),
+            _ => Ok(()),
+        }
+    }
+
+    /// Saves every changed file of the project where it goes. Returns the
+    /// ones that have nowhere to go yet (the project isn't saved).
+    pub fn save_all(&mut self) -> Result<Vec<DocKey>, String> {
+        let mut homeless = Vec::new();
+        for e in self.project_entries().into_iter().filter(|e| e.dirty) {
+            let Some(doc) = e.doc else { continue };
+            match self.save_path(doc) {
+                Some(path) => match doc {
+                    DocKey::Map(n) => self.save_map(n, &path)?,
+                    DocKey::Types(f) => self.save_types(f, &path)?,
+                },
+                None => homeless.push(doc),
+            }
+        }
+        self.save_project_file()?;
+        Ok(homeless)
+    }
+
+    /// The project's `_manifest.ymf`, as XML (the C#'s
+    /// `RDR2ProjectYmfGenerator`): the ytyps each of its ymaps needs, and for
+    /// interiors the ytyps their entities need.
+    pub fn manifest_xml(&self) -> String {
+        use std::collections::{BTreeMap, BTreeSet};
+        let ytyp_of = |archetype: u32| {
+            let a = self.data.archetypes.get(&archetype)?;
+            let path = self.fs.path(a.ytyp);
+            let name = path.rsplit('/').next().unwrap_or(&path);
+            Some(name.rsplit_once('.').map_or(name, |(s, _)| s).to_lowercase())
+        };
+        let mut imaps: BTreeMap<String, (BTreeSet<String>, bool)> = BTreeMap::new();
+        let mut ityps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mlo_class = joaat("CMloArchetypeDef");
+        for m in self.maps.values().filter(|m| m.in_project && m.exists) {
+            let (deps, interior) = imaps.entry(m.file_name.clone()).or_default();
+            for def in lod::entities(&m.root).iter().flatten() {
+                let archetype = def.hash("archetypeName");
+                let Some(ytyp) = ytyp_of(archetype) else { continue };
+                deps.insert(ytyp.clone());
+                if placement::is_mlo_instance(def) {
+                    *interior = true;
+                    let typdeps = ityps.entry(ytyp.clone()).or_default();
+                    // The interior's own entities, from its (maybe edited) ytyp.
+                    let a = &self.data.archetypes[&archetype];
+                    let root = match self.types.get(&a.ytyp) {
+                        Some(t) => Some(t.root.clone()),
+                        None => self.data.archetype_bag(&self.fs, &self.hashes, archetype).map(|b| {
+                            let mut wrap = Meta::create("CMapTypes").expect("CMapTypes");
+                            wrap.set_object(
+                                "archetypes",
+                                Some(rf_formats::formats::databag::Value::Bags(vec![Some(b)])),
+                            );
+                            Arc::new(wrap)
+                        }),
+                    };
+                    let Some(root) = root else { continue };
+                    for mlo in interior::archetypes(&root).iter().flatten().filter(|b| b.class_name() == mlo_class) {
+                        if mlo.hash("name") != archetype {
+                            continue;
+                        }
+                        let sets = mlo.bags("entitySets").unwrap_or_default().iter().flatten();
+                        for e in lod::entities(mlo).iter().chain(sets.flat_map(|s| lod::entities(s).iter())).flatten() {
+                            if let Some(y) = ytyp_of(e.hash("archetypeName")) {
+                                typdeps.insert(y);
+                            }
+                        }
+                    }
+                }
+            }
+            if deps.is_empty() {
+                imaps.remove(&m.file_name);
+            }
+        }
+        let mut x =
+            String::from("<CPackFileMetaData>\n  <MapDataGroups/>\n  <HDTxdBindingArray/>\n  <imapDependencies/>\n");
+        if imaps.is_empty() {
+            x.push_str("  <imapDependencies_2/>\n");
+        } else {
+            x.push_str("  <imapDependencies_2>\n");
+            for (name, (deps, interior)) in &imaps {
+                x.push_str(&format!("    <Item>\n      <imapName>{name}</imapName>\n"));
+                x.push_str(if *interior {
+                    "      <manifestFlags>INTERIOR_DATA</manifestFlags>\n"
+                } else {
+                    "      <manifestFlags/>\n"
+                });
+                x.push_str("      <itypDepArray>\n");
+                for d in deps {
+                    x.push_str(&format!("        <Item>{d}</Item>\n"));
+                }
+                x.push_str("      </itypDepArray>\n    </Item>\n");
+            }
+            x.push_str("  </imapDependencies_2>\n");
+        }
+        if ityps.is_empty() {
+            x.push_str("  <itypDependencies_2/>\n");
+        } else {
+            x.push_str("  <itypDependencies_2>\n");
+            for (name, deps) in &ityps {
+                x.push_str(&format!(
+                    "    <Item>\n      <itypName>{name}</itypName>\n      <manifestFlags>INTERIOR_DATA</manifestFlags>\n      <itypDepArray>\n"
+                ));
+                for d in deps {
+                    x.push_str(&format!("        <Item>{d}</Item>\n"));
+                }
+                x.push_str("      </itypDepArray>\n    </Item>\n");
+            }
+            x.push_str("  </itypDependencies_2>\n");
+        }
+        if ityps.is_empty() {
+            x.push_str("  <Interiors/>\n");
+        } else {
+            x.push_str("  <Interiors itemType=\"CInteriorBoundsFiles\">\n");
+            for name in ityps.keys() {
+                x.push_str(&format!(
+                    "    <Item>\n      <Name>{name}</Name>\n      <Bounds>\n        <Item>{name}</Item>\n      </Bounds>\n    </Item>\n"
+                ));
+            }
+            x.push_str("  </Interiors>\n");
+        }
+        x.push_str("</CPackFileMetaData>\n");
+        x
+    }
+
+    /// Writes the project's `_manifest.ymf` (PSO, as the game's) and adds it
+    /// to the project.
+    pub fn write_manifest(&mut self, path: &Path) -> Result<(), String> {
+        let cx = rf_formats::formats::XmlContext { hashes: &self.hashes, folder: None };
+        let data = rf_formats::formats::pso::from_xml(&self.manifest_xml(), &cx).map_err(|e| e.to_string())?;
+        std::fs::write(path, data).map_err(|e| format!("{}: {e}", path.display()))?;
+        let project = self.project.get_or_insert_with(Project::new);
+        project.add_file(path);
+        if !self.unloaded.iter().any(|f| f == path) {
+            self.unloaded.push(path.to_owned());
+        }
+        self.save_project_file()
+    }
+
+    /// Whether anything changed isn't saved (the files or the `.rfproj`).
+    pub fn has_unsaved(&self) -> bool {
+        self.project_entries().iter().any(|e| e.dirty)
+    }
+
+    /// Takes a file out of the project: the game's is used again (its edits
+    /// are dropped).
+    pub fn remove_from_project(&mut self, entry: &ProjectEntry) {
+        if let Some(path) = &entry.path
+            && let Some(p) = &mut self.project
+        {
+            p.remove_file(path);
+        }
+        match entry.doc {
+            Some(DocKey::Map(name)) => {
+                self.maps.remove(&name);
+                self.world.clear_map(name, None);
+                if self.target == Some(name) {
+                    self.target = None;
+                }
+            }
+            Some(DocKey::Types(file)) => {
+                if let Some(doc) = self.types.remove(&file) {
+                    let original = doc.original.clone();
+                    self.types.insert(file, TypesDoc { root: original.clone(), ..doc });
+                    self.apply_types(file, original);
+                    self.types.remove(&file);
+                }
+            }
+            None => self.unloaded.retain(|f| Some(f) != entry.path.as_ref()),
+        }
+        self.selection.retain(|id| self.maps.contains_key(&id.node));
+        self.undo.clear();
+        self.redo.clear();
     }
 
     // -----------------------------------------------------------------------
@@ -529,6 +946,7 @@ impl Editor {
             let before = self.root(key).cloned();
             let after = Arc::new(root);
             self.apply(key, Some(after.clone()));
+            self.adopt(key);
             docs.push((key, before, Some(after)));
         }
         let before = std::mem::replace(&mut self.selection, selection.clone());

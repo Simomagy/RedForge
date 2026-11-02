@@ -125,6 +125,13 @@ fn move_delete_place_and_undo() {
     assert!(inside("entitiesExtentsMin", "entitiesExtentsMax"));
     assert!(inside("streamingExtentsMin", "streamingExtentsMax"));
     assert_ne!(root.u32("contentFlags"), 0);
+    // The manifest names the ymap and the ytyp its archetype comes from.
+    let ymf = dir.join("_manifest.ymf");
+    ed.write_manifest(&ymf).unwrap();
+    let cx = rf_formats::formats::XmlContext { hashes: ed.hashes(), folder: None };
+    let xml = rf_formats::formats::to_xml("_manifest.ymf", &std::fs::read(&ymf).unwrap(), &cx).unwrap();
+    assert!(xml.contains("<imapName>rf_editor_test</imapName>"), "{xml}");
+    assert!(xml.matches("<Item>").count() >= 2, "{xml}");
     std::fs::remove_dir_all(&dir).unwrap();
 
     // Undoing everything removes the new ymap.
@@ -190,4 +197,47 @@ fn interior_entities() {
     }
     ed.undo();
     assert!(ed.edited_types().is_empty());
+}
+
+#[test]
+fn project_round_trip() {
+    let Some(mut ed) = editor() else { return };
+    let val = ed.world.places().into_iter().find(|(n, _)| n == "Valentine").unwrap().1;
+    settle(&mut ed, val);
+    let ids: Vec<EntityId> = ed.world.visible().iter().map(|e| e.id).collect();
+    let id = ids
+        .into_iter()
+        .find(|id| {
+            id.interior_entity == u32::MAX && {
+                ed.select(vec![*id]);
+                ed.is_editable(*id)
+            }
+        })
+        .unwrap();
+    let before = position(&ed, id);
+
+    // Editing a game ymap puts it in a (new) project; saving puts it in the project's folder.
+    let mut p = ed.placement(id).unwrap();
+    p.position += Vec3::Z * 5.0;
+    ed.set_placements("Move", &[(id, p)]);
+    let dir = tempfile::tempdir().unwrap();
+    let proj = dir.path().join("test.rfproj");
+    ed.new_project(&proj).unwrap();
+    assert!(ed.has_unsaved());
+    assert!(ed.save_all().unwrap().is_empty());
+    assert!(!ed.has_unsaved());
+    let file = ed.world.map_file_name(id.node).unwrap().to_owned();
+    assert!(dir.path().join(format!("{file}.ymap")).exists());
+
+    // Closing goes back to the game's ymap; opening brings the edit back.
+    ed.close_project();
+    assert!(ed.world.map_override(id.node).is_none());
+    settle(&mut ed, val);
+    assert!((position(&ed, id) - before).length() < 1e-3);
+    let problems = ed.open_project(&proj).unwrap();
+    assert!(problems.is_empty(), "{problems:?}");
+    assert!((position(&ed, id) - before - Vec3::Z * 5.0).length() < 1e-3);
+    let entries = ed.project_entries();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].path.is_some() && !entries[0].dirty);
 }
