@@ -401,10 +401,17 @@ impl DrawableBase {
     /// Writes the 176 bytes into `b` (which a derived struct goes on filling),
     /// adding what they point to.
     pub fn write_fields(&self, b: &mut BlockBuf, w: &mut Rsc8Writer) -> Result<()> {
+        self.write_fields_with(b, w, None)
+    }
+
+    /// [`write_fields`](Self::write_fields), pointing to `skeleton` (a block
+    /// already written) instead of writing the drawable's own skeleton, if it
+    /// has one: fragments' physics drawables share their fragment's.
+    pub fn write_fields_with(&self, b: &mut BlockBuf, w: &mut Rsc8Writer, skeleton: Option<BlockId>) -> Result<()> {
         b.u64(self.vft);
         b.ptr(self.block_map.as_ref().map(|m| m.write(w)));
         b.ptr(self.shader_group.as_ref().map(|g| g.write(w)).transpose()?);
-        b.ptr(self.skeleton.as_ref().map(|s| s.write(w)));
+        b.ptr(self.skeleton.as_ref().map(|s| skeleton.unwrap_or_else(|| s.write(w))));
         b.vec3(self.bounding_sphere_center);
         b.f32(self.bounding_sphere_radius);
         b.vec3(self.bounding_box_min);
@@ -443,6 +450,12 @@ impl DrawableBase {
     }
 
     pub fn write_xml(&self, w: &mut XmlWriter) -> Result<()> {
+        self.write_xml_with(w, true)
+    }
+
+    /// [`write_xml`](Self::write_xml), leaving the skeleton out unless
+    /// `skeleton` (fragments write only their own drawables' skeletons).
+    pub fn write_xml_with(&self, w: &mut XmlWriter, skeleton: bool) -> Result<()> {
         if let Some(n) = &self.name {
             w.string("Name", n);
         }
@@ -474,7 +487,7 @@ impl DrawableBase {
         if let Some(g) = &self.shader_group {
             w.node("ShaderGroup", |w| g.write_xml(w));
         }
-        if let Some(s) = &self.skeleton {
+        if let Some(s) = self.skeleton.as_ref().filter(|_| skeleton) {
             w.node("Skeleton", |w| s.write_xml(w));
         }
         if let Some(j) = &self.joint_limits {

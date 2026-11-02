@@ -368,6 +368,14 @@ impl Bounds {
     /// vertices, shrunk vertices, octants, edges and BVH (which reorders a BVH
     /// geometry's polygons), and a composite's matrices, flags and BVH.
     pub fn write(&self, w: &mut Rsc8Writer) -> Result<BlockId> {
+        Ok(self.write_with_children(w)?.0)
+    }
+
+    /// [`write`](Self::write), also returning the blocks of a composite's
+    /// children (empty for other types), for what points to them too (a
+    /// fragment's physics drawables).
+    pub fn write_with_children(&self, w: &mut Rsc8Writer) -> Result<(BlockId, Vec<Option<BlockId>>)> {
+        let mut children = Vec::new();
         let id = w.reserve();
         let mut b = BlockBuf::with_capacity(self.shape.block_length());
         self.write_base(w, &mut b);
@@ -403,11 +411,11 @@ impl Bounds {
             }
             BoundsShape::Geometry(g) => g.write(self, None, w, &mut b)?,
             BoundsShape::GeometryBvh(g, part) => g.write(self, Some(part), w, &mut b)?,
-            BoundsShape::Composite(c) => self.write_composite(c, w, &mut b)?,
+            BoundsShape::Composite(c) => children = self.write_composite(c, w, &mut b)?,
         }
         b.pad_to(self.shape.block_length());
         w.set(id, b, false);
-        Ok(id)
+        Ok((id, children))
     }
 
     fn write_base(&self, w: &mut Rsc8Writer, b: &mut BlockBuf) {
@@ -432,7 +440,13 @@ impl Bounds {
         b.f32(self.mass);
     }
 
-    fn write_composite(&self, c: &BoundComposite, w: &mut Rsc8Writer, b: &mut BlockBuf) -> Result<()> {
+    /// Writes a composite's fields; returns its children's blocks.
+    fn write_composite(
+        &self,
+        c: &BoundComposite,
+        w: &mut Rsc8Writer,
+        b: &mut BlockBuf,
+    ) -> Result<Vec<Option<BlockId>>> {
         // UpdateStuffBeforeSaving
         let kids = c.children.as_deref();
         let count = kids.map_or(0, |k| k.len()) as u16;
@@ -459,10 +473,11 @@ impl Bounds {
         });
         let bvh = self.composite_bvh(c).map(|bvh| bvh.write(w));
 
+        let mut ids = Vec::new();
         let ptrs = match kids {
             None => None,
             Some(k) => {
-                let mut ids = Vec::with_capacity(k.len());
+                ids.reserve(k.len());
                 for child in k {
                     ids.push(match child {
                         Some(child) => Some(child.write(w)?),
@@ -481,7 +496,7 @@ impl Bounds {
         b.u16(count);
         b.u32(c.unknown_a4h);
         b.ptr(bvh);
-        Ok(())
+        Ok(ids)
     }
 
     /// `Rsc8BoundComposite.BuildBVH`: composites with 6 or more children get a

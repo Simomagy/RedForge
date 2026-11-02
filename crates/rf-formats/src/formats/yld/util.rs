@@ -123,6 +123,11 @@ pub fn field_u32(w: &mut XmlWriter, id: &str, v: u32) {
         w.u32(id, v);
     }
 }
+pub fn field_u64(w: &mut XmlWriter, id: &str, v: u64) {
+    if v != 0 {
+        w.u64(id, v);
+    }
+}
 pub fn field_vec3(w: &mut XmlWriter, id: &str, v: [f32; 3]) {
     if v != [0.0; 3] {
         w.vec3(id, v);
@@ -142,6 +147,13 @@ pub fn ascii_string(bytes: &[u8]) -> String {
 /// .NET's `Encoding.ASCII.GetBytes`: characters past 0x7F become `?`.
 pub fn ascii_bytes(s: &str) -> Vec<u8> {
     s.chars().map(|c| if (c as u32) < 0x80 { c as u8 } else { b'?' }).collect()
+}
+
+/// Runs `f` inside a node, returning its result.
+pub fn node_with(w: &mut XmlWriter, id: &str, f: impl FnOnce(&mut XmlWriter) -> Result<()>) -> Result<()> {
+    let mut res = Ok(());
+    w.node(id, |w| res = f(w));
+    res
 }
 
 /// `WriteNodeArray` of fallible items, keeping null items.

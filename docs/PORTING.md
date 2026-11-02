@@ -36,8 +36,7 @@ named after the file). These are compared byte for byte too.
 
 - **`crates/rf-formats/src/formats/<format>.rs`** (or a `<format>/` folder). Each
   module exposes `to_xml(file, cx)` and `from_xml(xml, cx)`, which
-  `formats/mod.rs` already dispatches to, plus its plain-data structs. Modules that
-  aren't ported return `todo(...)`.
+  `formats/mod.rs` already dispatches to, plus its plain-data structs.
 - **The data structs** are plain data: no rendering, no engine types. Name fields
   after the C# ones in snake_case (`unknown_10h`, `block_count`), keep every
   unknown field, and keep the C# defaults (`Unknown_18h = 1` → `1`).

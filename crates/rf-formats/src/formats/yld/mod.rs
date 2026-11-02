@@ -7,7 +7,7 @@
 //!   hash.
 //! - A [`CharacterCloth`] has a [`CharacterClothController`], composite
 //!   [`Bounds`] of capsules the cloth collides with, and the tags of the bones
-//!   (in the character's [`Skeleton`](crate::formats::ydr::Skeleton), see
+//!   (in the character's [`Skeleton`], see
 //!   [`Skeleton::bone_by_tag`](crate::formats::ydr::Skeleton::bone_by_tag))
 //!   each capsule follows. [`CharacterCloth::capsule_bones`] pairs them up.
 //! - A [`ClothController`] (environment cloth in fragments uses it as is,
