@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RDR2Bounds type="Composite" version="2">
+ <BoxMin x="-10" y="-10" z="-10" />
+ <BoxMax x="10" y="10" z="10" />
+ <SphereRadius value="17.3" />
+ <Bounds>
+  <Item type="GeometryBVH" version="2">
+   <BoxMin x="-3.2" y="-2.1" z="-1.3" />
+   <BoxMax x="3.1" y="2.2" z="1.05" />
+   <Margin value="0.005" />
+   <Transform>
+    0.8 0.6 0 0
+    -0.6 0.8 0 0
+    0 0 1 0
+    12.5 -7.25 3 1
+   </Transform>
+   <TypeFlags>CF_MAP_TYPE_WEAPON, CF_MAP_TYPE_MOVER</TypeFlags>
+   <IncludeFlags>CF_PED_TYPE</IncludeFlags>
+   <Materials>
+    <Item>
+     <Name>23480</Name>
+     <Flags>FLAG_NO_NAVMESH</Flags>
+    </Item>
+    <Item>
+     <Name>2140</Name>
+     <Unk value="8192" />
+    </Item>
+    <Item>
+     <Name>17070</Name>
+    </Item>
+   </Materials>
+   <Vertices>
+-1.0569857, -1.396939, 0.30197072
+-2.5649328, 0.14395887, -0.2689802
+-2.6519334, 0.029985962, -0.9249893
+-0.3979919, -1.7209449, -0.81898934
+-0.45298013, 1.3069811, -0.75196844
+-1.6609913, 0.5099582, 0.8949751
+0.462978, -0.41297954, 0.95299536
+-2.720957, 1.4339458, -0.42098758
+-2.1339672, -1.5289559, -0.38297677
+1.8969985, -1.2769952, 0.16298029
+0.8329951, -0.5099582, 0.09499115
+-2.6229973, -1.7619542, -0.5879841
+1.0819803, -0.2899518, -0.37196797
+0.51296735, -0.18693656, -0.39997405
+1.7659688, 0.7959731, -0.51199836
+0.44692373, 0.100981176, 0.7499962
+1.3769174, -0.84794, 0.95998794
+-2.2919142, -0.32794276, 0.5139706
+-2.0879192, -0.043961912, -0.9219771
+1.008919, 1.057973, 0.145983
+2.2529802, -0.7449904, 0.3909734
+0.56593674, 0.31993774, -0.08799859
+2.0399487, 1.7789484, -0.05199591
+0.98498183, -1.7569674, 0.40298623
+0.8829844, 1.9719871, 0.64399624
+-1.2919354, -0.45694146, 0.33696935
+-2.8649647, -0.1529481, -0.6639698
+-2.2969131, -1.7639881, 0.53598815
+-2.223948, -1.009943, -0.21798837
+2.228947, -1.6779672, -0.1019837
+   </Vertices>
+   <Polygons>
+Tri 1 0 4 13
+Tri 2 27 21 25
+Tri 0 17 12 3
+Tri 1 21 28 12
+Cyl 1 10 11 0.2
+Tri 0 22 13 11
+Tri 0 18 10 4
+Tri 0 23 1 14
+Tri 0 6 14 5
+Tri 0 5 8 9
+Tri 1 22 27 16
+Tri 2 19 20 21
+Tri 1 15 20 12
+Tri 1 3 10 19
+Sph 1 3 0.25
+Cap 2 4 9 0.1
+Tri 2 15 26 18
+Tri 2 17 11 19
+Tri 1 28 27 24
+Tri 2 1 6 2
+Tri 1 4 26 13
+Tri 2 1 3 0
+Tri 0 1 2 3
+Tri 0 1 2 3
+Tri 2 7 4 2
+Tri 0 5 4 7
+Tri 1 21 7 0
+Tri 0 17 8 28
+Tri 2 27 17 8
+Box 0 5 6 7 8
+   </Polygons>
+   <Unknown_142h value="256" />
+  </Item>
+  <Item type="TaperedCapsule" version="2">
+   <BoxMin x="-1" y="-2" z="-1" />
+   <BoxMax x="1" y="2" z="1" />
+   <Margin value="0.5" />
+   <MaterialName>12667</MaterialName>
+   <MaterialFlags>FLAG_STAIRS, FLAG_NO_DECAL</MaterialFlags>
+   <Transform>
+    1 0 0 0
+    0 1 0 0
+    0 0 1 0
+    3 4 5 1
+   </Transform>
+   <TypeFlags>CF_MAP_TYPE_WEAPON</TypeFlags>
+   <OwnedTypeFlags>CF_PED_TYPE, CF_MAP_TYPE_CAMERA</OwnedTypeFlags>
+   <OwnedIncludeFlags>68719476736</OwnedIncludeFlags>
+   <HalfHeight value="1.5" />
+   <Unknown74 value="0.25" />
+   <Unknown80 value="-3" />
+  </Item>
+  <Item type="Disc" version="2">
+   <BoxMin x="-1" y="-0.1" z="-1" />
+   <BoxMax x="1" y="0.1" z="1" />
+   <Unknown_11h value="64" />
+   <Unknown_3Ch value="2" />
+  </Item>
+  <Item type="null" />
+  <Item type="Triangle" version="2">
+   <BoxMax x="1" y="1" z="1" />
+  </Item>
+  <Item type="Box" version="2">
+   <BoxMin x="-5" y="-5" z="0" />
+   <BoxMax x="5" y="5" z="0" />
+  </Item>
+  <Item type="Ring" version="2" />
+  <Item type="Cloth" version="2">
+   <SphereRadius value="2" />
+  </Item>
+  <Item type="MorphGeometry" version="2">
+   <Mass value="12" />
+   <Inertia x="1" y="2" z="3" />
+  </Item>
+  <Item type="Composite" version="2">
+   <BoxMin x="-1" y="-1" z="-1" />
+   <BoxMax x="1" y="1" z="1" />
+   <IncludeFlags>CF_OBJECT_TYPE</IncludeFlags>
+   <Bounds>
+    <Item type="Sphere" version="2">
+     <SphereRadius value="1" />
+     <Transform>
+      0 1 0 0
+      -1 0 0 0
+      0 0 1 0
+      0.5 0 0 1
+     </Transform>
+    </Item>
+    <Item type="Geometry" version="2">
+     <BoxMin x="-1" y="-1" z="-1" />
+     <BoxMax x="1" y="1" z="1" />
+     <Margin value="0.04" />
+     <Materials>
+      <Item>
+       <Name>3117</Name>
+       <ProcID value="3" />
+       <RoomID value="5" />
+       <PedDens value="2" />
+      </Item>
+      <Item />
+     </Materials>
+     <MaterialColours>
+      <Item r="1" g="2" b="3" a="4" />
+     </MaterialColours>
+     <Vertices>
+-1, -1, -1
+1, -1, -1
+1, 1, -1
+-1, 1, 1
+0.24997711, 0.49998474, 1
+     </Vertices>
+     <VertexColours>
+      <Item r="9" g="8" b="7" a="6" />
+      <Item r="9" g="8" b="7" a="6" />
+      <Item r="9" g="8" b="7" a="6" />
+      <Item r="9" g="8" b="7" a="6" />
+      <Item r="1" g="1" b="1" a="1" />
+     </VertexColours>
+     <Polygons>
+Tri 0 0 1 2
+Tri 1 0 2 3
+Tri 0 2 1 4
+Sph 1 4 0.3
+Cap 0 0 4 0.2
+Box 1 0 1 2 3
+Cyl 0 1 3 0.1
+Tri 1 0 0 0
+     </Polygons>
+    </Item>
+   </Bounds>
+  </Item>
+ </Bounds>
+ <NoBVH value="True" />
+</RDR2Bounds>

@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RDR2Bounds type="Composite" version="2">
+ <BoxMin x="-10" y="-10" z="-10" />
+ <BoxMax x="10" y="10" z="10" />
+ <SphereRadius value="17.3" />
+ <Bounds>
+  <Item type="GeometryBVH" version="2">
+   <BoxMin x="-3.2" y="-2.1" z="-1.3" />
+   <BoxMax x="3.1" y="2.2" z="1.05" />
+   <Margin value="0.005" />
+   <Transform>
+    0.8 0.6 0 0
+    -0.6 0.8 0 0
+    0 0 1 0
+    12.5 -7.25 3 1
+   </Transform>
+   <TypeFlags>CF_MAP_TYPE_WEAPON, CF_MAP_TYPE_MOVER</TypeFlags>
+   <IncludeFlags>CF_PED_TYPE</IncludeFlags>
+   <Materials>
+    <Item>
+     <Name>2804</Name>
+     <Flags>FLAG_NO_NAVMESH</Flags>
+    </Item>
+    <Item>
+     <Name>5495</Name>
+     <Unk value="8192" />
+    </Item>
+    <Item>
+     <Name>30768</Name>
+    </Item>
+   </Materials>
+   <Vertices>
+-1.057, -1.397, 0.302
+-2.565, 0.144, -0.269
+-2.652, 0.03, -0.925
+-0.398, -1.721, -0.819
+-0.453, 1.307, -0.752
+-1.661, 0.51, 0.895
+0.463, -0.413, 0.953
+-2.721, 1.434, -0.421
+-2.134, -1.529, -0.383
+1.897, -1.277, 0.163
+0.833, -0.51, 0.095
+-2.623, -1.762, -0.588
+1.082, -0.29, -0.372
+0.513, -0.187, -0.4
+1.766, 0.796, -0.512
+0.447, 0.101, 0.75
+1.377, -0.848, 0.96
+-2.292, -0.328, 0.514
+-2.088, -0.044, -0.922
+1.009, 1.058, 0.146
+2.253, -0.745, 0.391
+0.566, 0.32, -0.088
+2.04, 1.779, -0.052
+0.985, -1.757, 0.403
+0.883, 1.972, 0.644
+-1.292, -0.457, 0.337
+-2.865, -0.153, -0.664
+-2.297, -1.764, 0.536
+-2.224, -1.01, -0.218
+2.229, -1.678, -0.102
+   </Vertices>
+   <Polygons>
+Tri 0 17 8 28
+Tri 1 4 26 13
+Tri 2 27 17 8
+Tri 0 22 13 11
+Tri 1 21 28 12
+Tri 2 7 4 2
+Tri 0 5 4 7
+Tri 1 21 7 0
+Tri 2 15 26 18
+Tri 0 5 8 9
+Tri 1 0 4 13
+Tri 2 17 11 19
+Tri 0 18 10 4
+Tri 1 22 27 16
+Tri 2 19 20 21
+Tri 0 23 1 14
+Tri 1 28 27 24
+Tri 2 27 21 25
+Tri 0 17 12 3
+Tri 1 15 20 12
+Tri 2 1 6 2
+Tri 0 6 14 5
+Tri 1 3 10 19
+Tri 2 1 3 0
+Sph 1 3 0.25
+Cap 2 4 9 0.1
+Box 0 5 6 7 8
+Cyl 1 10 11 0.2
+Tri 0 1 2 3
+Tri 0 1 2 3
+   </Polygons>
+   <Unknown_142h value="256" />
+  </Item>
+  <Item type="TaperedCapsule" version="2">
+   <BoxMin x="-1" y="-2" z="-1" />
+   <BoxMax x="1" y="2" z="1" />
+   <Margin value="0.5" />
+   <MaterialName>DEFAULT</MaterialName>
+   <MaterialFlags>FLAG_STAIRS, FLAG_NO_DECAL</MaterialFlags>
+   <Transform>
+    1 0 0 0
+    0 1 0 0
+    0 0 1 0
+    3 4 5 1
+   </Transform>
+   <TypeFlags>CF_MAP_TYPE_WEAPON</TypeFlags>
+   <OwnedTypeFlags>CF_PED_TYPE, CF_MAP_TYPE_CAMERA</OwnedTypeFlags>
+   <OwnedIncludeFlags>68719476736</OwnedIncludeFlags>
+   <HalfHeight value="1.5" />
+   <Unknown74 value="0.25" />
+   <Unknown80 value="-3" />
+  </Item>
+  <Item type="Disc" version="2">
+   <BoxMin x="-1" y="-0.1" z="-1" />
+   <BoxMax x="1" y="0.1" z="1" />
+   <Unknown_11h value="64" />
+   <Unknown_3Ch value="2" />
+  </Item>
+  <Item type="null" />
+  <Item type="Triangle" version="2">
+   <BoxMax x="1" y="1" z="1" />
+  </Item>
+  <Item type="Plane" version="2">
+   <BoxMin x="-5" y="-5" z="0" />
+   <BoxMax x="5" y="5" z="0" />
+  </Item>
+  <Item type="Ring" version="2" />
+  <Item type="Cloth" version="2">
+   <SphereRadius value="2" />
+  </Item>
+  <Item type="MorphGeometry" version="2">
+   <Mass value="12" />
+   <Inertia x="1" y="2" z="3" />
+  </Item>
+  <Item type="Composite" version="2">
+   <BoxMin x="-1" y="-1" z="-1" />
+   <BoxMax x="1" y="1" z="1" />
+   <IncludeFlags>CF_OBJECT_TYPE</IncludeFlags>
+   <Bounds>
+    <Item type="Sphere" version="2">
+     <SphereRadius value="1" />
+     <Transform>
+      0 1 0 0
+      -1 0 0 0
+      0 0 1 0
+      0.5 0 0 1
+     </Transform>
+    </Item>
+    <Item type="Geometry" version="2">
+     <BoxMin x="-1" y="-1" z="-1" />
+     <BoxMax x="1" y="1" z="1" />
+     <Margin value="0.04" />
+     <Materials>
+      <Item>
+       <Name>CONCRETE</Name>
+       <ProcID value="3" />
+       <RoomID value="5" />
+       <PedDens value="2" />
+      </Item>
+      <Item type="null" />
+     </Materials>
+     <MaterialColours>
+      <Item r="1" g="2" b="3" a="4" />
+     </MaterialColours>
+     <Vertices>
+-1, -1, -1
+1, -1, -1
+1, 1, -1
+-1, 1, 1
+0.25, 0.5, 1
+     </Vertices>
+     <VertexColours>
+      <Item r="9" g="8" b="7" a="6" />
+      <Item r="9" g="8" b="7" a="6" />
+      <Item r="9" g="8" b="7" a="6" />
+      <Item r="9" g="8" b="7" a="6" />
+      <Item r="1" g="1" b="1" a="1" />
+     </VertexColours>
+     <Polygons>
+Tri 0 0 1 2
+Tri 1 0 2 3
+Tri 0 2 1 4
+Sph 1 4 0.3
+Cap 0 0 4 0.2
+Box 1 0 1 2 3
+Cyl 0 1 3 0.1
+Bogus 1 2 3
+     </Polygons>
+    </Item>
+   </Bounds>
+  </Item>
+ </Bounds>
+ <NoBVH value="True" />
+</RDR2Bounds>
