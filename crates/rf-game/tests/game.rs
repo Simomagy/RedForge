@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 
 use rf_formats::hash::{HashIndex, joaat};
 use rf_formats::rpf8::{Rpf8FileSystem, Rpf8Keys};
+use rf_game::peds::{Peds, load_ped};
 use rf_game::{AssetType, GameData, MapEntry, csharp};
 
 struct Game {
@@ -77,6 +78,30 @@ fn finds_a_models_texture_dictionaries() {
     let bag = gd.archetype_bag(fs, &g.strings, joaat("val_01_aucbarns_barn2")).expect("archetype bag");
     assert_eq!(bag.hash("name"), joaat("val_01_aucbarns_barn2"));
     assert_eq!(bag.hash("textureDictionary"), joaat("val_01_"));
+}
+
+#[test]
+fn puts_peds_together() {
+    let Some(g) = game() else { return };
+    let (fs, s, gd) = (&g.fs, &g.strings, &g.gd);
+    let peds = Peds::load(fs, s, gd);
+    assert!(peds.names().len() > 1000 && peds.names().iter().any(|n| n == "mp_male"));
+
+    // A multiplayer ped is its outfit's body shop items.
+    let def = peds.definition(fs, s, gd, "mp_male").expect("mp_male");
+    assert!(fs.path(def.frag.unwrap()).ends_with("/meta_base_mp_male.yft"));
+    let ped = load_ped(fs, s, gd, &def).unwrap();
+    let names: Vec<&str> = ped.parts.iter().map(|p| p.name.as_str()).collect();
+    assert!(names.contains(&"mp_uppertorso_mr1_000_full") && names.contains(&"mp_head_mr1_002"), "{names:?}");
+    assert!(ped.skeleton.as_ref().and_then(|s| s.bones.as_ref()).is_some_and(|b| b.len() > 500));
+
+    // An animal is its outfit's explicit assets, from merged drawable
+    // dictionaries, with their textures.
+    let def = peds.definition(fs, s, gd, "a_c_cow").expect("a_c_cow");
+    let ped = load_ped(fs, s, gd, &def).unwrap();
+    assert_eq!((ped.parts.len(), ped.missing.len()), (5, 0));
+    assert!(ped.parts.iter().all(|p| p.textures.iter().all(Option::is_some)));
+    assert!(ped.parts.iter().any(|p| p.palette.is_some() && p.tints == [52, 247, 248]));
 }
 
 #[test]
