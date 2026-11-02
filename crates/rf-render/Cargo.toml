@@ -19,3 +19,5 @@ anyhow = "1.0.104"
 env_logger = "0.11.11"
 image = "0.25.10"
 pollster = "1.0.1"
+# The snapshot example's --game-data.
+rf-game = { path = "../rf-game" }

@@ -1,0 +1,18 @@
+[package]
+name = "rf-game"
+description = "RDR2's game data layer: mounts, DLCs, data files, stream entries, archetypes and texture dictionary lookups"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+flate2 = "1.1.10"
+indexmap = "2.14.2"
+log = "0.4.35"
+rayon = "1.12.0"
+rf-formats.workspace = true
+
+[dev-dependencies]
+anyhow = "1.0.104"
+env_logger = "0.11.11"

@@ -38,7 +38,7 @@ mod bounds;
 mod bvh;
 mod geometry;
 mod material;
-mod math;
+pub(crate) mod math;
 mod reader;
 
 pub use bounds::{

@@ -3643,6 +3643,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rf-game"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "flate2",
+ "indexmap",
+ "log",
+ "rayon",
+ "rf-formats",
+]
+
+[[package]]
 name = "rf-render"
 version = "0.1.0"
 dependencies = [
@@ -3654,6 +3667,7 @@ dependencies = [
  "log",
  "pollster 1.0.1",
  "rf-formats",
+ "rf-game",
  "thiserror 2.0.21",
  "wgpu",
 ]
