@@ -1,5 +1,6 @@
-//! The document tabs: model, texture and XML viewers.
+//! The document tabs: model, animation, texture and XML viewers.
 
+pub mod anim;
 pub mod model;
 pub mod text;
 pub mod texture;

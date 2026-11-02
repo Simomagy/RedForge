@@ -15,6 +15,7 @@ use crate::map::tools::Tools;
 use crate::properties::Properties;
 use crate::settings::{GAME_FOLDER, Settings};
 use crate::viewers::Gpu;
+use crate::viewers::anim::AnimViewer;
 use crate::viewers::model::ModelViewer;
 use crate::viewers::text::TextViewer;
 use crate::viewers::texture::TextureViewer;
@@ -36,6 +37,8 @@ enum GameState {
 pub enum Tab {
     Welcome,
     Model(Box<ModelViewer>),
+    /// A clip dictionary's clips played on a ped.
+    Anim(Box<AnimViewer>),
     Texture(Box<TextureViewer>),
     Text(Box<TextViewer>),
     Map(Box<MapView>),
@@ -158,6 +161,7 @@ impl RedForgeApp {
                 let ext = path.rsplit('.').next().unwrap_or("");
                 match ext {
                     "ydr" | "ydd" | "yft" => Tab::Model(Box::new(ModelViewer::open(ctx, game, f))),
+                    "ycd" => Tab::Anim(Box::new(AnimViewer::open(ctx, game, f))),
                     "ytd" => Tab::Texture(Box::new(TextureViewer::open(ctx, game, f))),
                     "ymap" => match MapView::ymap(game, &self.gpu, f) {
                         Ok(v) => Tab::Map(Box::new(v)),
@@ -340,6 +344,7 @@ impl TabViewer for Tabs<'_> {
         match tab {
             Tab::Welcome => "Welcome".into(),
             Tab::Model(v) => format!("🧊 {}", v.title).into(),
+            Tab::Anim(v) => format!("🏃 {}", v.title).into(),
             Tab::Texture(v) => format!("🖼 {}", v.title).into(),
             Tab::Text(v) => format!("📄 {}", v.title).into(),
             Tab::Map(v) => format!("🗺 {}", v.title).into(),
@@ -351,6 +356,7 @@ impl TabViewer for Tabs<'_> {
         match tab {
             Tab::Welcome => egui::Id::new("welcome"),
             Tab::Model(v) => egui::Id::new(("model", &v.path)),
+            Tab::Anim(v) => egui::Id::new(("anim", &v.path)),
             Tab::Texture(v) => egui::Id::new(("texture", &v.path)),
             Tab::Text(v) => egui::Id::new(("text", &v.path)),
             Tab::Map(v) => egui::Id::new(("map", &v.path)),
@@ -363,7 +369,8 @@ impl TabViewer for Tabs<'_> {
             Tab::Welcome => {
                 ui.centered_and_justified(|ui| {
                     ui.label(
-                        "Open a model (ydr, ydd, yft), a texture dictionary (ytd) or any other file from Game Files.",
+                        "Open a model (ydr, ydd, yft), a texture dictionary (ytd), a clip dictionary (ycd) or any \
+                         other file from Game Files.",
                     );
                 });
             }
@@ -373,6 +380,7 @@ impl TabViewer for Tabs<'_> {
                     ui.label("The game isn't loaded.");
                 }
             },
+            Tab::Anim(v) => v.ui(ui, self.gpu),
             Tab::Texture(v) => v.ui(ui, self.gpu),
             Tab::Text(v) => v.ui(ui),
             Tab::Map(v) => v.ui(ui, self.gpu, self.editor.as_deref_mut(), self.tools),
@@ -388,6 +396,7 @@ impl TabViewer for Tabs<'_> {
     fn on_close(&mut self, tab: &mut Tab) -> egui_dock::widgets::tab_viewer::OnCloseResponse {
         match tab {
             Tab::Model(v) => v.free(self.gpu),
+            Tab::Anim(v) => v.free(self.gpu),
             Tab::Texture(v) => v.free(self.gpu),
             Tab::Map(v) => v.free(self.gpu),
             _ => {}
@@ -576,7 +585,7 @@ impl eframe::App for RedForgeApp {
 
         // Viewers waiting on a background job need frames to notice it finishing.
         let waiting = self.dock.iter_all_tabs().any(|(_, t)| match t {
-            Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Map(_) => true,
+            Tab::Model(_) | Tab::Anim(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Map(_) => true,
             Tab::Welcome | Tab::Properties => false,
         });
         if waiting {
