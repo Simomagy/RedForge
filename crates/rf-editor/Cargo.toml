@@ -12,3 +12,5 @@ log = "0.4.35"
 rf-formats.workspace = true
 rf-game = { path = "../rf-game" }
 rf-world = { path = "../rf-world" }
+
+[dev-dependencies]

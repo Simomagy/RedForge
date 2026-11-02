@@ -74,13 +74,27 @@ impl World {
         self.relink = true;
     }
 
-    /// Goes back to the ymap's file (or, for a new ymap, removes it).
-    pub fn clear_map(&mut self, name: u32) {
+    /// Goes back to the ymap's file (or, for a new ymap, removes it). With the
+    /// file's data in `original`, the map is rebuilt from it now; else it's
+    /// read again like any other.
+    pub fn clear_map(&mut self, name: u32, original: Option<&DataBag>) {
         let Some(&node) = self.by_name.get(&name) else { return };
         if self.overrides.remove(&node).is_none() {
             return;
         }
-        self.loaded.remove(&node);
+        match original {
+            Some(bag) if self.nodes[node as usize].file.is_some() => {
+                let src = &self.loader.src;
+                let mut l = Loaded::new(MapData::build(bag, &src.data.archetypes, &|a| src.interior(a)));
+                if self.streamed.binary_search(&node).is_err() {
+                    l.unwanted_since = Some(Instant::now());
+                }
+                self.loaded.insert(node, l);
+            }
+            _ => {
+                self.loaded.remove(&node);
+            }
+        }
         if self.nodes[node as usize].file.is_none() {
             self.nodes[node as usize].enabled = false;
         }

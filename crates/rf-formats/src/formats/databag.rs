@@ -556,6 +556,17 @@ impl DataBag {
         }
     }
 
+    /// Sets an enum (or flags) field's raw value, at the field's width.
+    pub fn set_enum_value(&mut self, name: impl FieldKey, v: i64) {
+        let k = name.key();
+        match self.class.field(k).map(|f| f.data_type) {
+            Some(ValueType::Enum8) => self.set_i8(k, v as i8),
+            Some(ValueType::Enum16) => self.set_i16(k, v as i16),
+            Some(ValueType::Enum32 | ValueType::Flags32) => self.set_i32(k, v as i32),
+            _ => {}
+        }
+    }
+
     /// `GetString`: a string field, or an enum field's value names.
     pub fn enum_string(&self, name: impl FieldKey, schema: Option<&Schema>, hashes: &HashIndex) -> Option<String> {
         let k = name.key();
