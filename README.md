@@ -12,12 +12,19 @@ It is early work. Today:
 - the world map streams the game's map around a free camera (View → World map),
   with its LODs, interiors, terrain and time of day; a ymap opens on its own;
 - entities can be selected, moved, rotated, scaled, edited in Properties,
-  duplicated, copied, deleted and placed, with undo; edited ymaps and ytyps
-  are saved with "Save as…" in Properties;
-- the Objects pane lists the game's archetypes with 3D thumbnails, to search
-  and choose the one to place.
+  duplicated, copied, deleted and placed, with undo;
+- projects (`.rfproj`, as the C# RedForge's) hold the edited ymaps and ytyps
+  and the mod's own models, textures and archetypes, and export as a RedM
+  resource;
+- the Objects pane lists the archetypes with 3D thumbnails, Hierarchy the
+  objects of a ymap or interior;
+- the Blender add-on (`blender/redforge_bridge`) edits the selection's models
+  in Blender and sends them back;
+- the map is lit by the game's timecycle for the hour and weather;
+- clip dictionaries play on peds and animals; any file shows as hex.
 
-Projects (`.rfproj`), RedM export and the other panes come in later milestones.
+Graphics parity with the C# (deferred lighting, shadows, atmosphere) and
+RDR2-faithful shaders come in the next milestones.
 
 ## Running it
 
@@ -39,7 +46,8 @@ Editing (the keys are the C# RedForge's):
 | Q, E, toolbar | Move, rotate (Scale and Place are in the toolbar); V back to selecting |
 | `.` | Gizmo along the world's or the object's axes |
 | Shift at the start of a gizmo drag | Drag copies |
-| Delete, Ctrl+D, Ctrl+C, Ctrl+V | Delete, duplicate, copy, paste (into the ymap chosen in Properties) |
+| Delete, Ctrl+D, Ctrl+C, Ctrl+V | Delete, duplicate, copy, paste (into the ymap chosen in Project) |
+| Ctrl+S | Save the project's files |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Home | Look at the selection |
 | Esc | Clear the selection; leave the Place tool |
@@ -49,6 +57,34 @@ the search matches the names and the ytyps they're in, and the list can be
 narrowed to props, drawable dictionaries, fragments or interiors. Clicking an
 object picks the Place tool with it; then a click in the map places it in the
 ymap chosen under "Place in" (Q/E turn it, a right click stops).
+
+### Projects
+
+The Project pane (on the left, with Hierarchy and Game Files) makes, opens and
+saves `.rfproj` projects, read and written as the C# RedForge does (JSON with
+folders, files and export settings, paths relative to it). Editing anything
+of the game puts its ymap (or an interior's ytyp) in the project, made then if
+there's none; Save all (Ctrl+S) writes the changed files next to the
+`.rfproj`. A project's own files replace the game's of the same name: models
+(ydr, ydd, yft), textures (ytd), collisions (ybn), and ytyps, whose new
+archetypes then show in Objects and can be placed. "New ymap" makes a ymap to
+place things in; the radio button by a ymap chooses where new things go.
+
+"RedM resource" exports the project to `<resources folder>/<name>/` with a
+`stream` folder and `fxmanifest.lua` (an existing manifest keeps its edits:
+only the info lines and what a map needs are updated), optionally on every
+save. "Generate _manifest.ymf" lists the ytyps the project's ymaps need.
+
+### Blender
+
+Install `blender/redforge_bridge` as an extension in Blender (it's the C#
+RedForge's add-on, unchanged): it connects to RedForge while both run (port
+47810, the `Bridge.Port` setting). Edit → Edit in Blender sends the selection's
+models (as Sollumz XML) and placements; the models Blender sends back go in the
+project's folder and show on the map, and moving objects in Blender moves them
+in RedForge (one undo step each).
+
+### Viewers
 
 A clip dictionary (ycd) opened from Game Files plays its clips on a ped or
 animal, put together from its metaped as the game does (the C#'s default
@@ -69,23 +105,26 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
     target/release/redforge
 ```
 
-`REDFORGE_OPEN` is a game path (a model, texture, clip dictionary or ymap), `world`,
+`REDFORGE_OPEN` is a game path (a model, texture, clip dictionary or ymap; `hex:<path>` for the hex viewer), `world`,
 `world:<place>` or `world:x,y,z[,yaw,pitch]`. For a clip dictionary,
 `REDFORGE_ANIM_PED` picks the ped and `REDFORGE_ANIM_TIME` stops the clip at a
 time (seconds). `REDFORGE_SELECT_CENTRE=1`
 selects what's in the middle of the world map before the screenshot, and
 `REDFORGE_TEST_DRAG=1` then drags the gizmo with made-up mouse events.
 `REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside the world map
-with that search, and chooses the first object.
+with that search, and chooses the first object. `REDFORGE_SHOW_TAB=<title>`
+brings a pane to the front (Project, Hierarchy...), and `REDFORGE_HOUR` sets
+the map's hour.
 
 ## Crates
 
 | Crate | What it is |
 |---|---|
 | `rf-formats` | The game's file formats as plain data: RPF8 archives; RSC8 resources (ydr, ydd, yft, ytd, ybn, ycd, yad, yld, yed, ynv, yfd, ypmd, yldb, yvr, ywr); metadata (ymap, ytyp, ymt, PSO, RBF); fxdb; DDS. No rendering, no UI. |
-| `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes, texture dictionary relationships (GTXD, HD bindings), peds put together from their metapeds. |
+| `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes, texture dictionary relationships (GTXD, HD bindings), peds put together from their metapeds, the timecycle; a project's files on top. |
 | `rf-world` | The world: map nodes, ymaps and their entities, the LOD tree, interiors, cull boxes and map states, streamed around a camera. |
-| `rf-editor` | The editor: the ymaps and ytyps being edited, the selection, undo and redo, LOD-safe deletes, saving. No UI. |
+| `rf-editor` | The editor: projects, the ymaps and ytyps being edited, the selection, undo and redo, LOD-safe deletes, saving, the RedM export. No UI. |
+| `rf-bridge` | The Blender add-on's link: its protocol (the C#'s) over TCP, the models to and from Sollumz XML. |
 | `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain); skinned models posed by clips. |
 | `rf-app` | The `redforge` app: egui, with Game Files, the model, animation, texture, XML and hex viewers, the map, Project, Hierarchy, Properties and Objects. |
 | `rf-cli` | The `rf` command: list, extract and check game files. |
