@@ -7,10 +7,11 @@ use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::GpuContext;
+use crate::anim::Pose;
 use crate::camera::{CameraView, OrbitCamera};
-use crate::mesh::{Vertex, VertexExtra};
+use crate::mesh::{Vertex, VertexExtra, VertexSkin};
 use crate::model::{
-    AlphaMode, DecalMode, GpuModel, MaterialDesc, MaterialMap, NormalMap, Slot, TerrainDesc, TerrainParams,
+    AlphaMode, DecalMode, GpuDraw, GpuModel, MaterialDesc, MaterialMap, NormalMap, Slot, TerrainDesc, TerrainParams,
     terrain_slot,
 };
 use crate::texture::GpuTexture;
@@ -45,6 +46,7 @@ struct MaterialUniform {
     decal_masks: [f32; 4],
     modes: [u32; 4],
     config: [u32; 4],
+    palette: [f32; 4],
 }
 
 /// One drawn instance of a model: its transform and the entity's values the
@@ -190,8 +192,28 @@ pub struct RenderStats {
     pub draw_calls: usize,
 }
 
+/// One model drawn by [`Renderer::render_posed`], at one of its LODs.
+pub struct PosedModel<'a> {
+    pub model: &'a GpuModel,
+    pub lod: usize,
+}
+
+/// The bones a skinned draw can use (the C#'s `BoneMatrices[256]`), and the
+/// bytes a rig's matrices take in the bone buffer (3 rows of 4 floats each).
+const RIG_BONES: u64 = 256;
+const RIG_BYTES: u64 = RIG_BONES * 48;
+
+/// The bone buffer of posed draws, kept between frames and grown as needed,
+/// with its bind group (one rig's matrices, picked by a dynamic offset).
+struct BoneBuffer {
+    buffer: wgpu::Buffer,
+    group: wgpu::BindGroup,
+}
+
 pub struct Renderer {
     instance_buffer: std::sync::Mutex<Option<wgpu::Buffer>>,
+    bone_buffer: std::sync::Mutex<Option<BoneBuffer>>,
+    bones_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     terrain_layout: wgpu::BindGroupLayout,
     tonemap_layout: wgpu::BindGroupLayout,
@@ -214,6 +236,10 @@ struct Pipelines {
     blend: wgpu::RenderPipeline,
     decal: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
+    /// Skinned meshes drawn posed: with the bone weights stream and matrices.
+    skinned_opaque: wgpu::RenderPipeline,
+    skinned_blend: wgpu::RenderPipeline,
+    skinned_decal: wgpu::RenderPipeline,
 }
 
 fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -252,6 +278,11 @@ fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
         step_mode: wgpu::VertexStepMode::Instance,
         attributes: &ATTRS,
     }
+}
+
+/// The phase a draw goes in: cut-out draws go with the opaque ones.
+fn draw_phase(draw: &GpuDraw) -> AlphaMode {
+    if draw.alpha == AlphaMode::Cutout { AlphaMode::Opaque } else { draw.alpha }
 }
 
 fn sampler_entry(binding: u32, ty: wgpu::SamplerBindingType) -> wgpu::BindGroupLayoutEntry {
@@ -295,6 +326,19 @@ impl Renderer {
         let tonemap_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("tonemap"),
             entries: &[texture_entry(0, false), uniform_entry(1, wgpu::ShaderStages::FRAGMENT)],
+        });
+        let bones_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bones"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(RIG_BYTES),
+                },
+                count: None,
+            }],
         });
         let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame"),
@@ -342,6 +386,11 @@ impl Renderer {
             bind_group_layouts: &[Some(&frame_layout), Some(&material_layout)],
             immediate_size: 0,
         });
+        let skinned_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("skinned model"),
+            bind_group_layouts: &[Some(&frame_layout), Some(&material_layout), Some(&bones_layout)],
+            immediate_size: 0,
+        });
         let terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terrain.wgsl"),
             source: wgpu::ShaderSource::Wgsl(
@@ -369,31 +418,34 @@ impl Renderer {
                 Some(wgpu::ColorTargetState { format: ID_FORMAT, blend: None, write_mask: ids }),
             ]
         };
-        let pipeline = |label: &str, topology, blend: Option<wgpu::BlendState>, depth_write: bool, bias: i32| {
-            let buffers = [Some(Vertex::layout()), Some(instance_layout())];
-            let targets = scene_targets(blend);
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &buffers,
-                },
-                primitive: wgpu::PrimitiveState { topology, cull_mode: None, ..Default::default() },
-                depth_stencil: Some(depth(depth_write, bias)),
-                multisample: Default::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &targets,
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
+        // Skinned pipelines add the bone weights stream and the bone matrices.
+        let pipeline =
+            |label: &str, topology, blend: Option<wgpu::BlendState>, depth_write: bool, bias: i32, skinned: bool| {
+                let buffers = [Some(Vertex::layout()), Some(instance_layout()), skinned.then(VertexSkin::layout)];
+                let buffers = if skinned { &buffers[..] } else { &buffers[..2] };
+                let targets = scene_targets(blend);
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(if skinned { &skinned_layout } else { &layout }),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some(if skinned { "vs_skinned" } else { "vs_main" }),
+                        compilation_options: Default::default(),
+                        buffers,
+                    },
+                    primitive: wgpu::PrimitiveState { topology, cull_mode: None, ..Default::default() },
+                    depth_stencil: Some(depth(depth_write, bias)),
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_main"),
+                        compilation_options: Default::default(),
+                        targets: &targets,
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
         let tri = wgpu::PrimitiveTopology::TriangleList;
         let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
         let terrain = {
@@ -423,10 +475,13 @@ impl Renderer {
         };
         let pipelines = Pipelines {
             terrain,
-            opaque: pipeline("opaque", tri, None, true, 0),
-            blend: pipeline("blend", tri, alpha, false, 0),
-            decal: pipeline("decal", tri, alpha, false, 2),
-            lines: pipeline("lines", wgpu::PrimitiveTopology::LineList, None, true, 0),
+            opaque: pipeline("opaque", tri, None, true, 0, false),
+            blend: pipeline("blend", tri, alpha, false, 0, false),
+            decal: pipeline("decal", tri, alpha, false, 2, false),
+            lines: pipeline("lines", wgpu::PrimitiveTopology::LineList, None, true, 0, false),
+            skinned_opaque: pipeline("skinned opaque", tri, None, true, 0, true),
+            skinned_blend: pipeline("skinned blend", tri, alpha, false, 0, true),
+            skinned_decal: pipeline("skinned decal", tri, alpha, false, 2, true),
         };
 
         let tonemap_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -465,6 +520,8 @@ impl Renderer {
         let black = Arc::new(GpuTexture::solid(ctx, "black", [0, 0, 0, 0]));
         let mut r = Self {
             instance_buffer: Default::default(),
+            bone_buffer: Default::default(),
+            bones_layout,
             material_layout,
             terrain_layout,
             tonemap_layout,
@@ -519,7 +576,7 @@ impl Renderer {
                     DecalMode::Decal => 1,
                     DecalMode::Dirt => 2,
                 },
-                has(Slot::TintPalette) as u32,
+                if desc.palette.is_some() { 2 } else { has(Slot::TintPalette) as u32 },
                 desc.two_layer.is_some() as u32,
                 desc.two_layer.unwrap_or(0) as u32,
             ],
@@ -536,6 +593,7 @@ impl Renderer {
                 desc.water as u32,
                 0,
             ],
+            palette: desc.palette.unwrap_or_default(),
         };
         let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&desc.shader_name),
@@ -714,9 +772,200 @@ impl Renderer {
         instances: &[Instance],
         batches: &[DrawBatch],
     ) -> RenderStats {
+        let mut stats = RenderStats { instances: instances.len(), ..Default::default() };
+        self.frame(ctx, targets, camera, settings, instances, |pass| {
+            // Opaque and cut-out first, then decals, then blended draws.
+            for phase in [AlphaMode::Opaque, AlphaMode::Decal, AlphaMode::Blend] {
+                for batch in batches {
+                    if batch.instances.is_empty() {
+                        continue;
+                    }
+                    for draw in &batch.model.lods[batch.lod.min(3)] {
+                        if draw_phase(draw) != phase {
+                            continue;
+                        }
+                        let Some(pipeline) = self.pipeline(pass, draw, phase) else { continue };
+                        pass.set_pipeline(pipeline);
+                        pass.set_bind_group(1, &draw.material.bind_group, &[]);
+                        pass.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
+                        pass.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+                        pass.draw_indexed(0..draw.mesh.index_count, 0, batch.instances.clone());
+                        stats.draw_calls += 1;
+                    }
+                }
+            }
+        });
+        stats
+    }
+
+    /// Draws models posed by a skeleton, all with one transform (a ped and its
+    /// parts): skinned meshes blend their rig's bone matrices, unskinned ones
+    /// that follow a bone move with it. The models must have been uploaded with
+    /// [`ModelOptions::skin`](crate::model::ModelOptions::skin).
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_posed(
+        &self,
+        ctx: &GpuContext,
+        targets: &RenderTargets,
+        camera: &CameraView,
+        settings: &ViewSettings,
+        transform: Mat4,
+        pose: &Pose,
+        models: &[PosedModel],
+    ) -> RenderStats {
+        // Instance 0 is the transform; unskinned draws that follow a bone get
+        // one of their own. Each rig's matrices take a slot of the bone buffer.
+        let mut instances = vec![Instance::new(transform, 0, 0)];
+        let mut draw_instances: Vec<Vec<u32>> = Vec::with_capacity(models.len());
+        let mut rig_slots: Vec<u64> = Vec::with_capacity(models.len());
+        let mut rig_count = 0u64;
+        for m in models {
+            rig_slots.push(rig_count);
+            rig_count += m.model.rigs.len() as u64;
+            let draws = &m.model.lods[m.lod.min(3)];
+            draw_instances.push(
+                draws
+                    .iter()
+                    .map(|d| match d.bone.filter(|_| d.rig.is_none()).and_then(|t| pose.bone_transform(t)) {
+                        Some(bone) => {
+                            instances.push(Instance::new(transform * bone, 0, 0));
+                            instances.len() as u32 - 1
+                        }
+                        None => 0,
+                    })
+                    .collect(),
+            );
+        }
+        let align = ctx.device.limits().min_storage_buffer_offset_alignment as u64;
+        let slot = RIG_BYTES.div_ceil(align) * align;
+        let mut bones = vec![0u8; (slot * rig_count) as usize];
+        for (m, &first) in models.iter().zip(&rig_slots) {
+            for (r, tags) in m.model.rigs.iter().enumerate() {
+                let at = ((first + r as u64) * slot) as usize;
+                let rows: Vec<[[f32; 4]; 3]> = pose.skin_rows(&tags[..tags.len().min(RIG_BONES as usize)]).collect();
+                let bytes: &[u8] = bytemuck::cast_slice(&rows);
+                bones[at..at + bytes.len()].copy_from_slice(bytes);
+            }
+        }
+        let bone_group = (rig_count > 0).then(|| self.upload_bones(ctx, &bones));
+
+        let mut stats = RenderStats { instances: instances.len(), ..Default::default() };
+        self.frame(ctx, targets, camera, settings, &instances, |pass| {
+            for phase in [AlphaMode::Opaque, AlphaMode::Decal, AlphaMode::Blend] {
+                for ((m, insts), &first) in models.iter().zip(&draw_instances).zip(&rig_slots) {
+                    for (draw, &inst) in m.model.lods[m.lod.min(3)].iter().zip(insts) {
+                        if draw_phase(draw) != phase {
+                            continue;
+                        }
+                        let skinned = draw.rig.zip(draw.mesh.skin.as_ref()).zip(bone_group.as_ref());
+                        let pipeline = match skinned {
+                            Some(((rig, skin), group)) if !draw.mesh.lines => {
+                                pass.set_vertex_buffer(2, skin.slice(..));
+                                let offset = (first + rig as u64) * slot;
+                                pass.set_bind_group(2, group, &[offset as u32]);
+                                match phase {
+                                    AlphaMode::Blend => &self.pipelines.skinned_blend,
+                                    AlphaMode::Decal => &self.pipelines.skinned_decal,
+                                    _ => &self.pipelines.skinned_opaque,
+                                }
+                            }
+                            _ => {
+                                let Some(p) = self.pipeline(pass, draw, phase) else { continue };
+                                p
+                            }
+                        };
+                        pass.set_pipeline(pipeline);
+                        pass.set_bind_group(1, &draw.material.bind_group, &[]);
+                        pass.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
+                        pass.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+                        pass.draw_indexed(0..draw.mesh.index_count, 0, inst..inst + 1);
+                        stats.draw_calls += 1;
+                    }
+                }
+            }
+        });
+        stats
+    }
+
+    /// [`Renderer::render_posed`] with an orbiting camera (the animation viewer).
+    pub fn render_posed_orbit(
+        &self,
+        ctx: &GpuContext,
+        targets: &RenderTargets,
+        camera: &OrbitCamera,
+        settings: &ViewSettings,
+        pose: &Pose,
+        models: &[PosedModel],
+    ) -> RenderStats {
+        let view = camera.camera_view(targets.width as f32 / targets.height as f32);
+        self.render_posed(ctx, targets, &view, settings, Mat4::IDENTITY, pose, models)
+    }
+
+    /// The pipeline of an unskinned draw in a phase (binding the terrain's
+    /// extra stream); `None` for a terrain draw without it.
+    fn pipeline<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        draw: &'a GpuDraw,
+        phase: AlphaMode,
+    ) -> Option<&'a wgpu::RenderPipeline> {
+        Some(match (draw.material.kind, draw.mesh.lines, phase) {
+            (MaterialKind::Terrain, ..) => {
+                pass.set_vertex_buffer(2, draw.mesh.extra.as_ref()?.slice(..));
+                &self.pipelines.terrain
+            }
+            (_, true, _) => &self.pipelines.lines,
+            (_, _, AlphaMode::Blend) => &self.pipelines.blend,
+            (_, _, AlphaMode::Decal) => &self.pipelines.decal,
+            _ => &self.pipelines.opaque,
+        })
+    }
+
+    /// Writes the bone matrices into the bone buffer (grown as needed) and
+    /// gives its bind group.
+    fn upload_bones(&self, ctx: &GpuContext, bytes: &[u8]) -> wgpu::BindGroup {
+        let mut slot = self.bone_buffer.lock().unwrap();
+        if slot.as_ref().is_none_or(|b| b.buffer.size() < bytes.len() as u64) {
+            let size = (bytes.len() as u64).next_power_of_two().max(64 * 1024);
+            let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("bones"),
+                size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("bones"),
+                layout: &self.bones_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(RIG_BYTES),
+                    }),
+                }],
+            });
+            *slot = Some(BoneBuffer { buffer, group });
+        }
+        let b = slot.as_ref().unwrap();
+        ctx.queue.write_buffer(&b.buffer, 0, bytes);
+        b.group.clone()
+    }
+
+    /// One frame: the frame's constants and instances, the scene pass (`draw`
+    /// fills it, with the frame bound at 0 and the instances at vertex buffer
+    /// 1), then the tonemap pass into `targets.output`.
+    fn frame(
+        &self,
+        ctx: &GpuContext,
+        targets: &RenderTargets,
+        camera: &CameraView,
+        settings: &ViewSettings,
+        instances: &[Instance],
+        draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
+    ) {
         let view_proj = camera.projection * camera.view;
         let debug = settings.debug as u32;
-        let mut stats = RenderStats { instances: instances.len(), ..Default::default() };
         let frame = FrameUniform {
             view_proj: view_proj.to_cols_array_2d(),
             camera_pos: camera.eye.extend(1.0).to_array(),
@@ -785,37 +1034,7 @@ impl Renderer {
             if let Some(ib) = &instance_buffer {
                 pass.set_vertex_buffer(1, ib.slice(..));
             }
-            // Opaque and cut-out first, then decals, then blended draws.
-            for phase in [AlphaMode::Opaque, AlphaMode::Decal, AlphaMode::Blend] {
-                for batch in batches {
-                    if batch.instances.is_empty() {
-                        continue;
-                    }
-                    for draw in &batch.model.lods[batch.lod.min(3)] {
-                        let draw_phase = if draw.alpha == AlphaMode::Cutout { AlphaMode::Opaque } else { draw.alpha };
-                        if draw_phase != phase {
-                            continue;
-                        }
-                        let pipeline = match (draw.material.kind, draw.mesh.lines, phase) {
-                            (MaterialKind::Terrain, ..) => {
-                                let Some(extra) = &draw.mesh.extra else { continue };
-                                pass.set_vertex_buffer(2, extra.slice(..));
-                                &self.pipelines.terrain
-                            }
-                            (_, true, _) => &self.pipelines.lines,
-                            (_, _, AlphaMode::Blend) => &self.pipelines.blend,
-                            (_, _, AlphaMode::Decal) => &self.pipelines.decal,
-                            _ => &self.pipelines.opaque,
-                        };
-                        pass.set_pipeline(pipeline);
-                        pass.set_bind_group(1, &draw.material.bind_group, &[]);
-                        pass.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-                        pass.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
-                        pass.draw_indexed(0..draw.mesh.index_count, 0, batch.instances.clone());
-                        stats.draw_calls += 1;
-                    }
-                }
-            }
+            draw(&mut pass);
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -836,7 +1055,6 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         ctx.queue.submit([encoder.finish()]);
-        stats
     }
 
     /// What the last frame drew at a pixel of `targets` (waits for the GPU).

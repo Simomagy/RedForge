@@ -193,11 +193,12 @@ impl GpuTexture {
                     };
                     let rows = (mh.div_ceil(bh)) as usize;
                     let (cw, ch) = ((mw.div_ceil(bw) * bw), (mh.div_ceil(bh) * bh));
-                    // The physical size of the mip in the padded texture.
+                    // The physical size of the mip in the padded texture: whole
+                    // blocks (a padded size halved needn't be).
                     let (gw, gh) = ((pw >> mip).max(1), (ph >> mip).max(1));
                     let size = wgpu::Extent3d {
-                        width: cw.min(gw.max(bw)),
-                        height: ch.min(gh.max(bh)),
+                        width: cw.min(gw.div_ceil(bw) * bw),
+                        height: ch.min(gh.div_ceil(bh) * bh),
                         depth_or_array_layers: 1,
                     };
                     if bytes.len() >= bytes_per_row * rows {

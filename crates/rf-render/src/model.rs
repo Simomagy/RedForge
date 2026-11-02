@@ -104,6 +104,10 @@ pub struct MaterialDesc<'a> {
     pub material_map: MaterialMap,
     /// Water, drawn as a flat glossy colour until there's a water shader.
     pub water: bool,
+    /// A ped part's palette tinting (the C#'s `ColourTintMode` 2): the diffuse's
+    /// red, green and blue weigh three colours of the tint palette, at these
+    /// columns (0-255) and this row (0-1, in w).
+    pub palette: Option<[f32; 4]>,
 }
 
 /// What a normal map holds.
@@ -235,6 +239,33 @@ mod names {
     pub const BUMPINESS: u32 = 0xf6712b81;
     pub const DECAL_OPACITY: [u32; 4] = [0x0bc0cd58, 0x9db47191, 0x2be58df5, 0x39172858]; // decalblendopacitygbuffer0..3
     pub const DIRT_DECAL_MASK: u32 = 0x3e95fa90;
+
+    /// The ped shaders a part's palette tints (`RDR2Ped.ApplyTextures`).
+    pub const PED_PALETTE: &[u32] = &[
+        0x34d90761, // ped
+        0x7574b09b, // ped_standard
+        0x7dd2a845, // ped_standard_cloth
+        0xfe562866, // ped_standard_hair
+        0xcc5d1333, // ped_standard_hair_lod
+        0x92ca7852, // ped_standard_fur
+        0x1f747353, // ped_standard_alpha
+        0xa9dfb1e7, // ped_standard_cutout
+        0x89a1cf72, // ped_standard_eye
+        0x801d25b1, // ped_standard_eye_emissive
+        0x1280e07f, // ped_standard_eye_retroreflect
+        0x15c42150, // ped_standard_wrinkle
+        0xf74149b5, // ped_standard_eye_cap
+        0x0a156515, // ped_standard_hair_alpha
+        0x2a6e3cff, // ped_standard_hair_normal
+        0xc499b7a7, // ped_standard_hair_cloth
+        0x05e14454, // ped_standard_hat
+        0xe5acf189, // ped_standard_cloth_wrinkle
+        0x86acf99a, // ped_slod_tint
+        0x934fa33f, // ped_hair_cutout_alpha
+        0x7b10334d, // ped_standard_skin_tint
+        0x8b21e952, // ped_emissive_additive_alpha_flipbook
+        0xf1345b4c, // horse_standard
+    ];
 
     pub const TWO_LAYER: &[u32] = &[
         0x77d8ab27, // standard_2lyr
@@ -495,12 +526,34 @@ pub struct GpuDraw {
     pub mesh: GpuMesh,
     pub material: Arc<GpuMaterial>,
     pub alpha: AlphaMode,
+    /// For drawing posed, a skinned mesh's rig: its index in [`GpuModel::rigs`].
+    pub rig: Option<u16>,
+    /// For drawing posed, the bone (by tag) an unskinned mesh moves with.
+    pub bone: Option<u16>,
+}
+
+/// What [`GpuModel::from_drawable_with`] does beyond uploading a drawable.
+#[derive(Default)]
+pub struct ModelOptions {
+    /// Uploads the bone weights and indices of skinned meshes and keeps their
+    /// rigs, for drawing posed ([`Renderer::render_posed`]).
+    pub skin: bool,
+    /// Textures replacing every material's diffuse, normal and material maps
+    /// (a ped part's own, as the C#'s `ApplyTextures`).
+    pub overrides: [Option<Arc<GpuTexture>>; 3],
+    /// A ped part's tint palette and the columns its diffuse's red, green and
+    /// blue pick, for the ped shaders.
+    pub palette: Option<(Arc<GpuTexture>, [u8; 3])>,
 }
 
 pub struct GpuModel {
     pub name: String,
     /// The draws of each LOD (high, medium, low, very low).
     pub lods: [Vec<GpuDraw>; 4],
+    /// With [`ModelOptions::skin`]: what the bone indices of each skinned
+    /// model's vertices stand for, as bone tags (the model's bone mapping, or
+    /// the drawable's skeleton).
+    pub rigs: Vec<Vec<u16>>,
     pub min: [f32; 3],
     pub max: [f32; 3],
     /// Up to which distance each LOD is drawn (the drawable's `LodDistHigh`...).
@@ -601,6 +654,21 @@ impl GpuModel {
         hashes: &rf_formats::hash::HashIndex,
         source: &mut dyn TextureSource,
     ) -> Self {
+        Self::from_drawable_with(ctx, renderer, name, d, hashes, source, &ModelOptions::default())
+    }
+
+    /// [`GpuModel::from_drawable`], with [`ModelOptions`].
+    pub fn from_drawable_with(
+        ctx: &GpuContext,
+        renderer: &Renderer,
+        name: &str,
+        d: &DrawableBase,
+        hashes: &rf_formats::hash::HashIndex,
+        source: &mut dyn TextureSource,
+        options: &ModelOptions,
+    ) -> Self {
+        let bones = d.skeleton.as_ref().and_then(|s| s.bones.as_deref()).unwrap_or(&[]);
+        let mut rigs: Vec<Vec<u16>> = Vec::new();
         let group = d.shader_group.as_ref();
         let shaders: &[Option<Shader>] = group.and_then(|g| g.shaders.as_deref()).unwrap_or(&[]);
         let mut resolver = Resolver {
@@ -618,6 +686,21 @@ impl GpuModel {
         for (li, lod) in d.lods.iter().enumerate() {
             let Some(lod) = lod else { continue };
             for model in lod.models.iter().flatten().flatten() {
+                // `SetSkeleton`: a skinned model's vertices index its bone mapping
+                // (or the skeleton); an unskinned one may follow a bone.
+                let (mut rig, mut bone) = (None, None);
+                if options.skin && model.has_skin == 1 {
+                    let tags = match &model.bone_mapping {
+                        Some(m) => m.clone(),
+                        None => bones.iter().map(|b| b.tag).collect(),
+                    };
+                    if !tags.is_empty() {
+                        rig = Some(rigs.len() as u16);
+                        rigs.push(tags);
+                    }
+                } else if options.skin {
+                    bone = bones.get(model.bone_index as usize).map(|b| b.tag);
+                }
                 for g in model.geometries.iter().flatten().flatten() {
                     let si = g.shader_id as usize;
                     let shader = shaders.get(si).and_then(Option::as_ref);
@@ -631,8 +714,22 @@ impl GpuModel {
                                         Some(renderer.create_terrain_material(ctx, &t, textures))
                                     }
                                     None => {
-                                        let desc = MaterialDesc::from_shader(s, name);
-                                        let textures = desc.textures.map(|t| resolver.resolve(t));
+                                        let mut desc = MaterialDesc::from_shader(s, name);
+                                        let mut textures = desc.textures.map(|t| resolver.resolve(t));
+                                        let slots = [Slot::Diffuse, Slot::Normal, Slot::Material];
+                                        for (slot, t) in slots.into_iter().zip(&options.overrides) {
+                                            if let Some(t) = t {
+                                                textures[slot as usize] = Some(t.clone());
+                                            }
+                                        }
+                                        if let Some((palette, tints)) = &options.palette
+                                            && names::PED_PALETTE.contains(&s.name_hash)
+                                        {
+                                            // The C#'s fixed row ("TODO: configure this").
+                                            let [r, g, b] = tints.map(f32::from);
+                                            desc.palette = Some([r, g, b, 0.1]);
+                                            textures[Slot::TintPalette as usize] = Some(palette.clone());
+                                        }
                                         let helper = textures[Slot::Diffuse as usize].is_none()
                                             && desc.texture(Slot::Diffuse).is_some_and(is_placeholder);
                                         (!helper).then(|| renderer.create_material(ctx, &desc, textures))
@@ -646,19 +743,20 @@ impl GpuModel {
                         None => (renderer.default_material(), AlphaMode::Opaque),
                     };
                     let terrain = material.kind == MaterialKind::Terrain;
-                    let Some(mesh) = GpuMesh::upload(ctx, g, terrain) else { continue };
+                    let Some(mesh) = GpuMesh::upload_with(ctx, g, terrain, rig.is_some()) else { continue };
                     for i in 0..3 {
                         min[i] = min[i].min(mesh.min[i]);
                         max[i] = max[i].max(mesh.max[i]);
                     }
-                    lods[li].push(GpuDraw { mesh, material, alpha });
+                    let rig = rig.filter(|_| mesh.skin.is_some());
+                    lods[li].push(GpuDraw { mesh, material, alpha, rig, bone });
                 }
             }
         }
         if min[0] > max[0] {
             (min, max) = (d.bounding_box_min, d.bounding_box_max);
         }
-        Self { name: name.to_owned(), lods, min, max, lod_dists: d.lod_dists, missing_textures: resolver.missing }
+        Self { name: name.to_owned(), lods, rigs, min, max, lod_dists: d.lod_dists, missing_textures: resolver.missing }
     }
 }
 

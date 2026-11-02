@@ -14,13 +14,17 @@ struct Material {
     params: vec4<f32>,
     // How much of a decal reaches the albedo, normals, material and lighting.
     decal_masks: vec4<f32>,
-    // x: decal mode (0 none, 1 decal, 2 dirt), y: has tint palette,
+    // x: decal mode (0 none, 1 decal, 2 dirt), y: tint palette (0 none, 1 by
+    // the vertex colour and the entity's tint, 2 a ped part's palette),
     // z: two layers, w: the channel of colour1 that blends them
     modes: vec4<u32>,
     // x: normal map (0 tangent-space XY, 1 the normal in RGB),
     // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R),
     // z: water (glossy)
     config: vec4<u32>,
+    // A ped part's palette: the columns (0-255) the diffuse's red, green and
+    // blue pick, and the row (0-1) in w.
+    palette: vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> material: Material;
@@ -64,16 +68,16 @@ struct VertexOut {
     @location(7) @interpolate(flat) id: u32,
 };
 
-@vertex
-fn vs_main(v: VertexIn) -> VertexOut {
+// A vertex's outputs, from its model-space position, normal and tangent.
+fn vertex_out(v: VertexIn, position: vec3<f32>, normal: vec3<f32>, tangent: vec3<f32>) -> VertexOut {
     let model = mat4x4<f32>(v.m0, v.m1, v.m2, v.m3);
-    let world = model * vec4<f32>(v.position, 1.0);
+    let world = model * vec4<f32>(position, 1.0);
     let normal_m = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
     var o: VertexOut;
     o.clip = frame.view_proj * world;
     o.world = world.xyz;
-    o.normal = normal_m * v.normal;
-    o.tangent = vec4<f32>(normal_m * v.tangent.xyz, v.tangent.w);
+    o.normal = normal_m * normal;
+    o.tangent = vec4<f32>(normal_m * tangent, v.tangent.w);
     o.uv0 = v.uv0;
     o.colour0 = v.colour0;
     o.colour1 = v.colour1;
@@ -82,12 +86,70 @@ fn vs_main(v: VertexIn) -> VertexOut {
     return o;
 }
 
+@vertex
+fn vs_main(v: VertexIn) -> VertexOut {
+    return vertex_out(v, v.position, v.normal, v.tangent.xyz);
+}
+
+// Skinned meshes drawn posed: the draw's rig, 256 bones each as the 3 rows of
+// a 3x4 matrix (the dynamic offset picks the rig).
+@group(2) @binding(0) var<storage, read> bones: array<vec4<f32>>;
+
+struct SkinIn {
+    // The weights of bones 0-3 and 4-7 (unorm8 each), then their indices.
+    @location(12) skin: vec4<u32>,
+};
+
+// The C#'s skin mode 2: the matrices of up to 8 bones blended by weight, as
+// 3 rows (the columns here). A first index of 255 marks a cloth vertex, which
+// isn't simulated: it stays as it is.
+fn skin_rows(s: vec4<u32>) -> mat3x4<f32> {
+    if (s.z & 0xFFu) == 255u {
+        return mat3x4<f32>(vec4<f32>(1.0, 0.0, 0.0, 0.0), vec4<f32>(0.0, 1.0, 0.0, 0.0), vec4<f32>(0.0, 0.0, 1.0, 0.0));
+    }
+    let w0 = unpack4x8unorm(s.x);
+    let w1 = unpack4x8unorm(s.y);
+    var m = mat3x4<f32>(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
+    for (var k = 0u; k < 4u; k++) {
+        let a = ((s.z >> (8u * k)) & 0xFFu) * 3u;
+        let b = ((s.w >> (8u * k)) & 0xFFu) * 3u;
+        m[0] += bones[a] * w0[k] + bones[b] * w1[k];
+        m[1] += bones[a + 1u] * w0[k] + bones[b + 1u] * w1[k];
+        m[2] += bones[a + 2u] * w0[k] + bones[b + 2u] * w1[k];
+    }
+    return m;
+}
+
+fn skin(m: mat3x4<f32>, p: vec4<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(m[0], p), dot(m[1], p), dot(m[2], p));
+}
+
+@vertex
+fn vs_skinned(v: VertexIn, s: SkinIn) -> VertexOut {
+    let m = skin_rows(s.skin);
+    let position = skin(m, vec4<f32>(v.position, 1.0));
+    let normal = skin(m, vec4<f32>(v.normal, 0.0));
+    let tangent = skin(m, vec4<f32>(v.tangent.xyz, 0.0));
+    return vertex_out(v, position, normal, tangent);
+}
+
 // The palette colour for this vertex, or white where the palette is black.
 fn palette_tint(i: VertexOut) -> vec3<f32> {
     let size = textureDimensions(t_tint);
     let uv = vec2<f32>(i.colour0.b, (i.tint + 0.5) / f32(size.y));
     let t = textureSampleLevel(t_tint, s_point, uv, 0.0).rgb;
     return select(vec3<f32>(1.0), t, dot(t, t) != 0.0);
+}
+
+// A ped part's colour (the C#'s `ColourTintMode` 2): the diffuse's red, green
+// and blue weigh three colours of the palette.
+fn ped_palette(c: vec3<f32>) -> vec3<f32> {
+    let size = f32(textureDimensions(t_tint).x);
+    let p = material.palette;
+    let r = textureSampleLevel(t_tint, s_wrap, vec2<f32>(p.x / size, p.w), 0.0).rgb;
+    let g = textureSampleLevel(t_tint, s_wrap, vec2<f32>(p.y / size, p.w), 0.0).rgb;
+    let b = textureSampleLevel(t_tint, s_wrap, vec2<f32>(p.z / size, p.w), 0.0).rgb;
+    return r * c.r + g * c.g + b * c.b;
 }
 
 fn shade(i: VertexOut, front: bool) -> vec4<f32> {
@@ -100,8 +162,10 @@ fn shade(i: VertexOut, front: bool) -> vec4<f32> {
     if decal_mode == 2u {
         albedo_s = i.colour0;
     }
-    if material.modes.y != 0u {
+    if material.modes.y == 1u {
         albedo_s = vec4<f32>(albedo_s.rgb * palette_tint(i), albedo_s.a);
+    } else if material.modes.y == 2u {
+        albedo_s = vec4<f32>(ped_palette(albedo_s.rgb), albedo_s.a);
     }
     let diffuse2 = textureSample(t_albedo2, s_wrap, i.uv0);
     if two_layer {
