@@ -33,6 +33,8 @@ pub struct MapView {
     camera: FlyCamera,
     view: ViewSettings,
     hour: f32,
+    /// Whether scripted ymaps (lockdowns, gang camps...) show, as in the C#.
+    scripted: bool,
     /// Metres per second.
     speed: f32,
     targets: Option<RenderTargets>,
@@ -138,6 +140,7 @@ impl MapView {
             camera: FlyCamera::default(),
             view: ViewSettings::default(),
             hour: 12.0,
+            scripted: true,
             speed: 30.0,
             targets: None,
             texture_id: None,
@@ -209,6 +212,14 @@ impl MapView {
                         }
                     });
                     ui.add(egui::Slider::new(&mut self.hour, 0.0..=24.0).text("Hour"));
+                    if ui
+                        .checkbox(&mut self.scripted, "Scripted maps")
+                        .on_hover_text("Ymaps the game's scripts switch on and off: lockdowns, camps, mission states")
+                        .changed()
+                        && let Source::World(w) = &mut self.source
+                    {
+                        w.set_hide_scripted(!self.scripted);
+                    }
                 }
                 ui.add(egui::Slider::new(&mut self.speed, 1.0..=5000.0).logarithmic(true).text("Speed m/s"));
                 ui.add(egui::Slider::new(&mut self.view.exposure, 0.2..=6.0).text("Exposure"));
