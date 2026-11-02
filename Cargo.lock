@@ -1865,6 +1865,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rf-game"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger",
+ "flate2",
+ "indexmap",
+ "log",
+ "rayon",
+ "rf-formats",
+]
+
+[[package]]
 name = "rf-render"
 version = "0.1.0"
 dependencies = [
