@@ -14,12 +14,16 @@ struct Frame {
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 
-// What the scene pass writes: the colour, and the drawn instance's id for
-// picking (0 for nothing).
+// What the scene pass writes: the colour, and for picking the drawn
+// instance's id (0 for nothing) with the depth's bits.
 struct SceneOut {
     @location(0) colour: vec4<f32>,
-    @location(1) id: u32,
+    @location(1) pick: vec2<u32>,
 };
+
+fn scene_out(colour: vec4<f32>, id: u32, frag: vec4<f32>) -> SceneOut {
+    return SceneOut(colour, vec2<u32>(id, bitcast<u32>(frag.z)));
+}
 
 const PI: f32 = 3.14159265;
 

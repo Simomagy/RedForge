@@ -19,8 +19,9 @@ pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// What the final image is: 8-bit sRGB, which egui can show directly.
 pub const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
-/// Where the scene pass writes each pixel's instance id, for picking.
-const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Uint;
+/// Where the scene pass writes each pixel's instance id and depth bits, for
+/// picking (depth textures can't be read a pixel at a time).
+const ID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Uint;
 /// The colour water is drawn with, in linear RGB.
 const WATER_COLOUR: [f32; 4] = [0.03, 0.07, 0.07, 1.0];
 
@@ -63,6 +64,26 @@ pub struct Instance {
 impl Instance {
     pub fn new(transform: Mat4, tint: u32, id: u32) -> Self {
         Self { transform: transform.to_cols_array_2d(), tint: tint as f32, id, _pad: [0; 2] }
+    }
+}
+
+/// A pick on its way back from the GPU.
+pub struct PickRequest {
+    buffer: wgpu::Buffer,
+    ready: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PickRequest {
+    /// The pick, once the GPU has it (polls without waiting).
+    pub fn try_get(&self, ctx: &GpuContext) -> Option<Pick> {
+        let _ = ctx.device.poll(wgpu::PollType::Poll);
+        if !self.ready.load(std::sync::atomic::Ordering::Acquire) {
+            return None;
+        }
+        let mapped = self.buffer.slice(..).get_mapped_range().ok()?;
+        let id = u32::from_le_bytes(mapped[0..4].try_into().unwrap());
+        let depth = f32::from_le_bytes(mapped[4..8].try_into().unwrap());
+        Some(Pick { id, depth })
     }
 }
 
@@ -144,7 +165,6 @@ pub struct RenderTargets {
     pub width: u32,
     pub height: u32,
     hdr: wgpu::TextureView,
-    depth: wgpu::Texture,
     depth_view: wgpu::TextureView,
     ids: wgpu::Texture,
     ids_view: wgpu::TextureView,
@@ -633,7 +653,7 @@ impl Renderer {
         let hdr =
             texture("hdr", HDR_FORMAT, rt | wgpu::TextureUsages::TEXTURE_BINDING).create_view(&Default::default());
         let copy = wgpu::TextureUsages::COPY_SRC;
-        let depth = texture("depth", DEPTH_FORMAT, rt | copy);
+        let depth = texture("depth", DEPTH_FORMAT, rt);
         let depth_view = depth.create_view(&Default::default());
         let ids = texture("ids", ID_FORMAT, rt | copy);
         let ids_view = ids.create_view(&Default::default());
@@ -656,7 +676,6 @@ impl Renderer {
             width,
             height,
             hdr,
-            depth,
             depth_view,
             ids,
             ids_view,
@@ -822,45 +841,46 @@ impl Renderer {
 
     /// What the last frame drew at a pixel of `targets` (waits for the GPU).
     pub fn pick(&self, ctx: &GpuContext, targets: &RenderTargets, x: u32, y: u32) -> Option<Pick> {
+        let request = self.request_pick(ctx, targets, x, y)?;
+        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
+        request.try_get(ctx)
+    }
+
+    /// Starts reading what the last frame drew at a pixel; [`PickRequest::try_get`]
+    /// has it once the GPU is done, without waiting.
+    pub fn request_pick(&self, ctx: &GpuContext, targets: &RenderTargets, x: u32, y: u32) -> Option<PickRequest> {
         if x >= targets.width || y >= targets.height {
             return None;
         }
-        // One row each, 256-byte aligned: the id, then the depth.
         let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pick"),
-            size: 512,
+            size: 256,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         let mut encoder = ctx.device.create_command_encoder(&Default::default());
-        let one = wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 };
-        let at = wgpu::Origin3d { x, y, z: 0 };
-        for (i, (texture, aspect)) in
-            [(&targets.ids, wgpu::TextureAspect::All), (&targets.depth, wgpu::TextureAspect::DepthOnly)]
-                .into_iter()
-                .enumerate()
-        {
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo { texture, mip_level: 0, origin: at, aspect },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: i as u64 * 256,
-                        bytes_per_row: Some(256),
-                        rows_per_image: Some(1),
-                    },
-                },
-                one,
-            );
-        }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &targets.ids,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256), rows_per_image: Some(1) },
+            },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
         ctx.queue.submit([encoder.finish()]);
-        let slice = buffer.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
-        let mapped = slice.get_mapped_range().ok()?;
-        let id = u32::from_le_bytes(mapped[0..4].try_into().unwrap());
-        let depth = f32::from_le_bytes(mapped[256..260].try_into().unwrap());
-        Some(Pick { id, depth })
+        let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = ready.clone();
+        buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
+            if r.is_ok() {
+                flag.store(true, std::sync::atomic::Ordering::Release);
+            }
+        });
+        Some(PickRequest { buffer, ready })
     }
 
     /// Reads the output back as tightly packed RGBA8 (sRGB) rows.

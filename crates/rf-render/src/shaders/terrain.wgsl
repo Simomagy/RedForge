@@ -182,5 +182,5 @@ fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> SceneOut {
     let p = p0 * bf.x + p1 * bf.y + p2 * bf.z + p3 * bf.w;
     // Roughness in green; terrain isn't metal.
     let roughness = clamp(p.g, 0.04, 1.0);
-    return SceneOut(lit(i.world, vec4<f32>(albedo.rgb, 1.0), normal, 0.0, roughness, i.colour0), i.id);
+    return scene_out(lit(i.world, vec4<f32>(albedo.rgb, 1.0), normal, 0.0, roughness, i.colour0), i.id, i.clip);
 }

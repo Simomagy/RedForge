@@ -155,5 +155,5 @@ fn shade(i: VertexOut, front: bool) -> vec4<f32> {
 
 @fragment
 fn fs_main(i: VertexOut, @builtin(front_facing) front: bool) -> SceneOut {
-    return SceneOut(shade(i, front), i.id);
+    return scene_out(shade(i, front), i.id, i.clip);
 }

@@ -21,8 +21,8 @@ pub use context::{GpuContext, wanted_features};
 pub use model::{AlphaMode, DecalMode, GpuModel, MaterialDesc, NoTextures, Slot, TerrainDesc, TextureSource};
 pub use preview::{PreviewMode, PreviewTarget, TexturePreview};
 pub use renderer::{
-    DebugView, DrawBatch, GpuMaterial, Instance, MaterialKind, OUTPUT_FORMAT, Pick, RenderStats, RenderTargets,
-    Renderer, ViewSettings,
+    DebugView, DrawBatch, GpuMaterial, Instance, MaterialKind, OUTPUT_FORMAT, Pick, PickRequest, RenderStats,
+    RenderTargets, Renderer, ViewSettings,
 };
 pub use texture::{GpuTexture, TextureKind};
 

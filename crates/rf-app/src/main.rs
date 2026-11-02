@@ -4,6 +4,7 @@ mod app;
 mod browser;
 mod game;
 mod map;
+mod properties;
 mod settings;
 mod viewers;
 

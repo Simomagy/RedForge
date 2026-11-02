@@ -3704,6 +3704,8 @@ dependencies = [
  "glam 0.34.2",
  "image",
  "log",
+ "mint",
+ "rf-editor",
  "rf-formats",
  "rf-game",
  "rf-render",

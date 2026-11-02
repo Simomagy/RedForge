@@ -4,12 +4,15 @@ use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
 use eframe::egui;
-use egui_dock::{DockArea, DockState, Style, TabViewer};
+use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
+use rf_editor::Editor;
 use rf_render::{GpuContext, Renderer, TexturePreview};
 
 use crate::browser::{Browser, BrowserAction};
 use crate::game::{Game, LoadMessage, is_game_folder, start_loading};
 use crate::map::MapView;
+use crate::map::tools::Tools;
+use crate::properties::Properties;
 use crate::settings::{GAME_FOLDER, Settings};
 use crate::viewers::Gpu;
 use crate::viewers::model::ModelViewer;
@@ -36,6 +39,8 @@ pub enum Tab {
     Texture(Box<TextureViewer>),
     Text(Box<TextViewer>),
     Map(Box<MapView>),
+    /// The selection's properties and the edited ymaps.
+    Properties,
 }
 
 /// For testing without anyone at the screen: opens a file, takes a screenshot
@@ -43,18 +48,24 @@ pub enum Tab {
 ///
 /// `REDFORGE_OPEN` can also be `world`, `world:<place>` or
 /// `world:x,y,z[,yaw,pitch]` for the world map, and
-/// `REDFORGE_SCREENSHOT_DELAY` sets the seconds to wait (6 by default).
+/// `REDFORGE_SCREENSHOT_DELAY` sets the seconds to wait (6 by default), and
+/// `REDFORGE_SELECT_CENTRE=1` selects what's in the middle of the world map
+/// two seconds before, with the Move tool; `REDFORGE_TEST_DRAG=1` then drags
+/// the gizmo's X arrow 100 pixels with made-up mouse events and logs what
+/// happened.
 struct AutoShot {
     open: String,
     out: PathBuf,
     delay: f32,
+    select_centre: bool,
+    drag_test: Option<DragTest>,
     opened: Option<Instant>,
     requested: bool,
 }
 
 /// The world map at an `AutoShot` target (`world:<place>` or `world:x,y,z[,yaw,pitch]`).
-fn world_view(game: &Arc<Game>, gpu: &Gpu, target: &str) -> Option<MapView> {
-    let mut v = MapView::world(game, gpu);
+fn world_view(game: &Arc<Game>, gpu: &Gpu, editor: &Editor, target: &str) -> Option<MapView> {
+    let mut v = MapView::world(game, gpu, editor);
     let Some(at) = target.strip_prefix(':') else { return target.is_empty().then_some(v) };
     let numbers: Vec<f32> = at.split(',').filter_map(|n| n.trim().parse().ok()).collect();
     if numbers.len() >= 3 {
@@ -62,7 +73,7 @@ fn world_view(game: &Arc<Game>, gpu: &Gpu, target: &str) -> Option<MapView> {
         v.set_camera(glam::Vec3::new(numbers[0], numbers[1], numbers[2]), yaw, pitch);
         return Some(v);
     }
-    let (_, p) = v.places().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(at))?;
+    let (_, p) = editor.world.places().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(at))?;
     v.view_place(p.into());
     Some(v)
 }
@@ -74,6 +85,10 @@ pub struct RedForgeApp {
     game: GameState,
     dock: DockState<Tab>,
     browser: Browser,
+    /// The world being edited, from when the world map first opens.
+    editor: Option<Editor>,
+    tools: Tools,
+    properties: Properties,
 }
 
 impl RedForgeApp {
@@ -97,6 +112,8 @@ impl RedForgeApp {
                 open,
                 out: out.into(),
                 delay: std::env::var("REDFORGE_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(6.0),
+                select_centre: std::env::var("REDFORGE_SELECT_CENTRE").is_ok(),
+                drag_test: std::env::var("REDFORGE_TEST_DRAG").is_ok().then(DragTest::default),
                 opened: None,
                 requested: false,
             }),
@@ -109,6 +126,9 @@ impl RedForgeApp {
             game: GameState::NoFolder { input: folder.clone().unwrap_or_default(), error: None },
             dock: DockState::new(vec![Tab::Welcome]),
             browser: Browser::default(),
+            editor: None,
+            tools: Tools::default(),
+            properties: Properties::default(),
         };
         if let Some(f) = folder {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
@@ -151,6 +171,19 @@ impl RedForgeApp {
             }
         };
         self.show_tab(tab);
+    }
+
+    /// The world map, with the editor (made the first time) and Properties
+    /// beside it.
+    fn open_world(&mut self, game: &Arc<Game>, place: Option<&str>) -> bool {
+        let editor =
+            self.editor.get_or_insert_with(|| Editor::new(game.fs.clone(), game.hashes.clone(), game.data.clone()));
+        let Some(view) = world_view(game, &self.gpu, editor, place.unwrap_or_default()) else { return false };
+        self.show_tab(Tab::Map(Box::new(view)));
+        if self.dock.find_tab_from(|t| matches!(t, Tab::Properties)).is_none() {
+            self.dock.main_surface_mut().split_right(NodeIndex::root(), 0.76, vec![Tab::Properties]);
+        }
+        true
     }
 
     fn show_tab(&mut self, tab: Tab) {
@@ -197,7 +230,30 @@ impl RedForgeApp {
     }
 }
 
+/// Made-up mouse events for testing the gizmo.
+#[derive(Default)]
+struct DragTest {
+    /// Where to press, and which way to drag.
+    start: Option<(egui::Pos2, egui::Vec2)>,
+    entity: Option<(rf_editor::EntityId, glam::Vec3)>,
+    step: u32,
+}
+
 impl RedForgeApp {
+    /// After the test drag: what the editor made of it.
+    fn report_drag(&self) {
+        let Some(d) = self.auto.as_ref().and_then(|a| a.drag_test.as_ref()) else { return };
+        let (Some(ed), Some((id, before))) = (&self.editor, d.entity) else {
+            log::warn!("drag test: nothing selected");
+            return;
+        };
+        let after = ed.placement(id).map(|p| p.position);
+        log::info!(
+            "drag test: undo has {:?}, the entity moved from {before:?} to {after:?}",
+            ed.undo_labels().collect::<Vec<_>>()
+        );
+    }
+
     fn auto_shot(&mut self, ctx: &egui::Context, game: &Arc<Game>) {
         let Some(a) = &mut self.auto else { return };
         ctx.request_repaint();
@@ -205,12 +261,10 @@ impl RedForgeApp {
             None => {
                 a.opened = Some(Instant::now());
                 if let Some(target) = a.open.strip_prefix("world") {
-                    match world_view(game, &self.gpu, target) {
-                        Some(v) => self.show_tab(Tab::Map(Box::new(v))),
-                        None => {
-                            log::error!("no place {target}");
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
+                    let target = target.to_owned();
+                    if !self.open_world(game, Some(&target)) {
+                        log::error!("no place {target}");
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     return;
                 }
@@ -219,6 +273,29 @@ impl RedForgeApp {
                     None => {
                         log::error!("{} not found", a.open);
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+            }
+            Some(t) if a.select_centre && t.elapsed().as_secs_f32() > a.delay - 2.0 => {
+                a.select_centre = false;
+                if let Some(ed) = &mut self.editor {
+                    for (_, tab) in self.dock.iter_all_tabs_mut() {
+                        if let Tab::Map(v) = tab
+                            && v.is_world()
+                            && v.select_centre(&self.gpu, ed)
+                        {
+                            self.tools.tool = crate::map::tools::Tool::Move;
+                            // The X arrow: from the entity along world X on screen.
+                            if let (Some(d), Some(id)) = (&mut a.drag_test, ed.selection().first().copied())
+                                && let Some(p) = ed.placement(id)
+                                && let (Some(o), Some(x)) =
+                                    (v.screen_point(p.position), v.screen_point(p.position + glam::Vec3::X))
+                            {
+                                let dir = (x - o).normalized();
+                                d.start = Some((o + dir * 50.0, dir));
+                                d.entity = Some((id, p.position));
+                            }
+                        }
                     }
                 }
             }
@@ -235,6 +312,7 @@ impl RedForgeApp {
             })
         });
         if let Some(img) = shot {
+            self.report_drag();
             let a = self.auto.as_ref().unwrap();
             let [w, h] = img.size;
             let bytes: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
@@ -250,6 +328,9 @@ impl RedForgeApp {
 struct Tabs<'a> {
     gpu: &'a Gpu,
     game: Option<&'a Arc<Game>>,
+    editor: Option<&'a mut Editor>,
+    tools: &'a mut Tools,
+    properties: &'a mut Properties,
 }
 
 impl TabViewer for Tabs<'_> {
@@ -262,6 +343,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Texture(v) => format!("🖼 {}", v.title).into(),
             Tab::Text(v) => format!("📄 {}", v.title).into(),
             Tab::Map(v) => format!("🗺 {}", v.title).into(),
+            Tab::Properties => "Properties".into(),
         }
     }
 
@@ -272,6 +354,7 @@ impl TabViewer for Tabs<'_> {
             Tab::Texture(v) => egui::Id::new(("texture", &v.path)),
             Tab::Text(v) => egui::Id::new(("text", &v.path)),
             Tab::Map(v) => egui::Id::new(("map", &v.path)),
+            Tab::Properties => egui::Id::new("properties"),
         }
     }
 
@@ -292,7 +375,13 @@ impl TabViewer for Tabs<'_> {
             },
             Tab::Texture(v) => v.ui(ui, self.gpu),
             Tab::Text(v) => v.ui(ui),
-            Tab::Map(v) => v.ui(ui, self.gpu),
+            Tab::Map(v) => v.ui(ui, self.gpu, self.editor.as_deref_mut(), self.tools),
+            Tab::Properties => match self.editor.as_deref_mut() {
+                Some(ed) => self.properties.ui(ui, ed, Some(self.tools)),
+                None => {
+                    ui.label("Open the world map (View → World map) to edit.");
+                }
+            },
         }
     }
 
@@ -308,6 +397,26 @@ impl TabViewer for Tabs<'_> {
 }
 
 impl eframe::App for RedForgeApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        let Some(d) = self.auto.as_mut().and_then(|a| a.drag_test.as_mut()) else { return };
+        let Some((start, dir)) = d.start else { return };
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let at = |k: u32| start + dir * (k as f32 * 10.0);
+        match d.step {
+            0 => raw.events.push(egui::Event::PointerMoved(start)),
+            1 => raw.events.push(button(start, true)),
+            2..=11 => raw.events.push(egui::Event::PointerMoved(at(d.step - 1))),
+            12 => raw.events.push(button(at(10), false)),
+            _ => return,
+        }
+        d.step += 1;
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &ui.ctx().clone();
         if let GameState::Loading { rx, status, .. } = &mut self.game {
@@ -317,6 +426,7 @@ impl eframe::App for RedForgeApp {
                     LoadMessage::Done(result) => match *result {
                         Ok(g) => {
                             self.game = GameState::Ready(Arc::new(g));
+                            self.editor = None;
                             break;
                         }
                         Err(e) => {
@@ -335,10 +445,65 @@ impl eframe::App for RedForgeApp {
                     let g = g.clone();
                     ui.menu_button("View", |ui| {
                         if ui.button("World map").clicked() {
-                            self.show_tab(Tab::Map(Box::new(MapView::world(&g, &self.gpu))));
+                            self.open_world(&g, None);
+                            ui.close();
+                        }
+                        if ui.button("Properties").clicked() {
+                            if self.dock.find_tab_from(|t| matches!(t, Tab::Properties)).is_none() {
+                                self.dock.main_surface_mut().split_right(
+                                    NodeIndex::root(),
+                                    0.76,
+                                    vec![Tab::Properties],
+                                );
+                            }
                             ui.close();
                         }
                     });
+                    if let Some(ed) = &mut self.editor {
+                        ui.menu_button("Edit", |ui| {
+                            let undo = ed.undo_labels().next().map(|l| format!("Undo {l}"));
+                            if ui
+                                .add_enabled(
+                                    undo.is_some(),
+                                    egui::Button::new(undo.as_deref().unwrap_or("Undo")).shortcut_text("Ctrl+Z"),
+                                )
+                                .clicked()
+                            {
+                                ed.undo();
+                            }
+                            let redo = ed.redo_labels().next().map(|l| format!("Redo {l}"));
+                            if ui
+                                .add_enabled(
+                                    redo.is_some(),
+                                    egui::Button::new(redo.as_deref().unwrap_or("Redo")).shortcut_text("Ctrl+Y"),
+                                )
+                                .clicked()
+                            {
+                                ed.redo();
+                            }
+                            ui.separator();
+                            let any = !ed.selection().is_empty();
+                            let mut result = Ok(());
+                            if ui.add_enabled(any, egui::Button::new("Copy").shortcut_text("Ctrl+C")).clicked() {
+                                ed.copy();
+                            }
+                            if ui
+                                .add_enabled(ed.can_paste(), egui::Button::new("Paste").shortcut_text("Ctrl+V"))
+                                .clicked()
+                            {
+                                result = ed.paste();
+                            }
+                            if ui.add_enabled(any, egui::Button::new("Duplicate").shortcut_text("Ctrl+D")).clicked() {
+                                result = ed.duplicate_selected();
+                            }
+                            if ui.add_enabled(any, egui::Button::new("Delete").shortcut_text("Del")).clicked() {
+                                result = ed.delete_selected();
+                            }
+                            if let Err(e) = result {
+                                self.tools.say(e);
+                            }
+                        });
+                    }
                 }
                 ui.menu_button("File", |ui| {
                     if ui.button("Game folder…").clicked() {
@@ -395,7 +560,13 @@ impl eframe::App for RedForgeApp {
         }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
-            let mut tabs = Tabs { gpu: &self.gpu, game: game.as_ref() };
+            let mut tabs = Tabs {
+                gpu: &self.gpu,
+                game: game.as_ref(),
+                editor: self.editor.as_mut(),
+                tools: &mut self.tools,
+                properties: &mut self.properties,
+            };
             DockArea::new(&mut self.dock).style(Style::from_egui(ui.style().as_ref())).show_inside(ui, &mut tabs);
         });
 
@@ -406,7 +577,7 @@ impl eframe::App for RedForgeApp {
         // Viewers waiting on a background job need frames to notice it finishing.
         let waiting = self.dock.iter_all_tabs().any(|(_, t)| match t {
             Tab::Model(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Map(_) => true,
-            Tab::Welcome => false,
+            Tab::Welcome | Tab::Properties => false,
         });
         if waiting {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));

@@ -21,7 +21,9 @@ image = "0.25.10"
 log = "0.4.35"
 rf-formats.workspace = true
 rf-render = { path = "../rf-render" }
-rfd = "0.17.2"
+rfd = "0.17"
 rf-game = { path = "../rf-game" }
+rf-editor = { path = "../rf-editor" }
 rf-world = { path = "../rf-world" }
 transform-gizmo-egui = "0.11"
+mint = "0.5"
