@@ -1,5 +1,7 @@
-//! What saving a ymap works out again: its extents and flags, as the C#
-//! RedForge's `RDR2MapData.PreSaveUpdate` does (`UpdateExtents`, `UpdateFlags`).
+//! What saving a ymap works out again: its extents and flags. The extents as
+//! the C# RedForge's `RDR2MapData.PreSaveUpdate` does (`UpdateExtents`), the
+//! flags as the game's own ymaps have them (the C#'s `UpdateFlags` was a guess
+//! from GTA V).
 //!
 //! - **Entities' extents**: each entity's archetype box (`bbMin`, `bbMax`)
 //!   through its transform, each prop and grass batch's `BatchAABB`, and the
@@ -9,11 +11,31 @@
 //!   1.1 × its bounding radius if more), a car generator's by twice its
 //!   `perpendicularLength`.
 //! - **Flags**: the scripted flag and the critical content flag are kept, the
-//!   rest set again from the entities' LOD levels, interiors, batches, physics
-//!   dictionaries, LOD lights and occluders.
+//!   rest set again from what the map holds:
+//!
+//!   | Content flag | When | From |
+//!   |---|---|---|
+//!   | 1 HD | an HD or orphan HD entity (interior instances included) | C#, game for interiors |
+//!   | 2 LOD | a LOD or SLOD1 entity (also sets `flags` 2) | C#, game for SLOD1 |
+//!   | 4 SLOD2+ | an SLOD2, SLOD3 or SLOD4 entity (also sets `flags` 2) | C#, game without 16 |
+//!   | 8 interior | an interior (MLO) instance | C# |
+//!   | 16 block info | `block.name` is set | game |
+//!   | 32 occluders | box occluders or occlude models | C# |
+//!   | 64 physics | `physicsDictionaries`, or prop batches | C#, game for props |
+//!   | 128 LOD lights | `LODLightsSOA` has lights | C# |
+//!   | 256 distant lights | `DistantLODLightsSOA` has lights (also sets `flags` 2) | C# |
+//!   | 1024 batches | prop or grass batches | C# |
+//!   | `0x1000` | an entity with flag `0x200` | game |
+//!
+//!   The C# set 16 for SLOD1 and 4 and 16 for SLOD2+, set nothing more for an
+//!   interior instance or prop batches, and cleared `0x1000`. Each "game" rule
+//!   holds for every one of the game's ymaps it applies to; SLOD1 always comes
+//!   with LODs there, so whether it sets 2 itself can't be told (it's a LOD
+//!   level, so it does here).
 //!
 //! # Differences from the C#
 //!
+//! - The flags, above.
 //! - Box occluders: the C# reads GTA V's fields (`iCenterX`, `iWidth`...),
 //!   which RDR2 doesn't have, so any ymap with one reached the world's origin.
 //!   RDR2's `BoxOccluder` is `CenterXYZ_CosZ` and `SizeXYZ_SinZ`: its centre,
@@ -38,11 +60,9 @@
 //!   game grows each entity's *position* by its `lodDist` (exact for 69% of
 //!   the ymaps of plain entities), not its box; batch ymaps get a round margin
 //!   (mostly 300 to 750 m) and interiors a cube of 25 to 300 m around them.
-//! - Flags match for 74%. The game's rules, which match 98% of its ymaps:
-//!   content flag 16 is "has block info" (`block.name` set), not SLOD1; an
-//!   interior instance also sets its LOD level's flag (HD); prop batches set
-//!   physics (64); an entity with flag `0x200` sets `0x1000`, which the C#
-//!   clears.
+//! - Flags match for 98% (13,291; the C#'s rules: 74%). The others have
+//!   `flags` 2 (LOD) with nothing LOD in them: 279 empty ymaps and 25 of box
+//!   occluders only.
 
 use std::collections::HashMap;
 
@@ -62,14 +82,17 @@ const CF_HD: u32 = 1;
 const CF_LOD: u32 = 2;
 const CF_SLOD2: u32 = 4;
 const CF_INTERIOR: u32 = 8;
-/// SLOD to the C#; the game sets it for block info instead (see above).
-const CF_SLOD: u32 = 16;
+const CF_BLOCK_INFO: u32 = 16;
 const CF_OCCLUDER: u32 = 32;
 const CF_PHYSICS: u32 = 64;
 const CF_LOD_LIGHTS: u32 = 128;
 const CF_DISTANT_LIGHTS: u32 = 256;
 const CF_CRITICAL: u32 = 512;
 const CF_BATCHES: u32 = 1024;
+/// Set when an entity has flag [`ENTITY_FLAG_0X200`]; its meaning is unknown.
+const CF_0X1000: u32 = 0x1000;
+/// An entity flag (unnamed; "Unused10" in the C#'s GTA V list).
+const ENTITY_FLAG_0X200: u32 = 0x200;
 
 /// Works out a `CMapData`'s extents and flags again from its contents, as the
 /// C# RedForge does before saving a ymap.
@@ -187,37 +210,42 @@ fn box_occluder_half_size(size: Vec3, cos_z: f32, sin_z: f32) -> Vec3 {
     Vec3::new(c * size.x + s * size.y, s * size.x + c * size.y, size.z) * 0.5
 }
 
-/// `UpdateFlags`: what the map holds, from its entities and other contents.
-/// The scripted flag and the "critical" content flag are kept.
+/// `UpdateFlags`, with the game's rules: what the map holds, from its entities
+/// and other contents. The scripted flag and the critical content flag are
+/// kept.
 fn flags(map: &DataBag) -> (u32, u32) {
     let mut flags = map.u32("flags") & FLAG_SCRIPTED;
     let mut cf = map.u32("contentFlags") & CF_CRITICAL;
     for e in items(map, "entities") {
         if e.class_name() == MLO_INSTANCE_DEF {
             cf |= CF_INTERIOR;
-            continue;
+        }
+        if e.u32("flags") & ENTITY_FLAG_0X200 != 0 {
+            cf |= CF_0X1000;
         }
         match e.u32("lodLevel") {
             0 | 5 => cf |= CF_HD, // HD, orphan HD
-            1 => {
+            1 | 2 => {
+                // LOD, SLOD1
                 cf |= CF_LOD;
                 flags |= FLAG_LOD;
             }
-            2 => {
-                cf |= CF_SLOD;
-                flags |= FLAG_LOD;
-            }
             3 | 4 | 6 => {
-                cf |= CF_SLOD2 | CF_SLOD;
+                // SLOD2, SLOD3, SLOD4
+                cf |= CF_SLOD2;
                 flags |= FLAG_LOD;
             }
             _ => {}
         }
     }
+    if map.bag("block").and_then(|b| b.string("name")).is_some_and(|n| !n.is_empty()) {
+        cf |= CF_BLOCK_INFO;
+    }
     if batches(map).next().is_some() {
         cf |= CF_BATCHES;
     }
-    if has_items(map.object("physicsDictionaries")) {
+    let props = map.bag("instancedData").is_some_and(|d| items(d, "PropInstanceList").next().is_some());
+    if props || has_items(map.object("physicsDictionaries")) {
         cf |= CF_PHYSICS;
     }
     if has_items(map.bag("LODLightsSOA").and_then(|l| l.object("direction"))) {
@@ -461,12 +489,50 @@ mod tests {
         assert_eq!(read(&m), [[0.0; 3]; 4]);
         assert_eq!((m.u32("flags"), m.u32("contentFlags")), (0, 0));
 
-        let lods = [(0, CF_HD, 0), (5, CF_HD, 0), (2, CF_SLOD, FLAG_LOD), (6, CF_SLOD | CF_SLOD2, FLAG_LOD)];
+        let lods =
+            [(0, CF_HD, 0), (5, CF_HD, 0), (1, CF_LOD, FLAG_LOD), (2, CF_LOD, FLAG_LOD), (6, CF_SLOD2, FLAG_LOD)];
         for (level, cf, flags) in lods {
             let mut m = map("entities", vec![entity("CEntityDef", "x", [0.0; 3], [0.0, 0.0, 0.0, 1.0], (1.0, level))]);
             m.set_object("physicsDictionaries", Some(Value::Hashes(vec![1])));
             update_map(&mut m, &HashMap::new());
             assert_eq!((m.u32("flags"), m.u32("contentFlags")), (flags, cf | CF_PHYSICS), "lodLevel {level}");
+        }
+    }
+
+    #[test]
+    fn flags_from_the_game() {
+        let flags = |mut m: DataBag| {
+            update_map(&mut m, &HashMap::new());
+            (m.u32("flags"), m.u32("contentFlags"))
+        };
+        // An interior instance is also HD.
+        let int = entity("CMloInstanceDef", "int", [0.0; 3], [0.0, 0.0, 0.0, 1.0], (25.0, 0));
+        assert_eq!(flags(map("entities", vec![int])), (0, CF_INTERIOR | CF_HD));
+
+        // An entity with flag 0x200.
+        let mut e = entity("CEntityDef", "x", [0.0; 3], [0.0, 0.0, 0.0, 1.0], (1.0, 0));
+        e.set_u32("flags", ENTITY_FLAG_0X200 | 1);
+        assert_eq!(flags(map("entities", vec![e])), (0, CF_HD | CF_0X1000));
+
+        // Block info, with a name.
+        let mut m = Meta::create("CMapData").unwrap();
+        let mut block = Meta::create("CBlockDesc").unwrap();
+        block.set_string("name", "");
+        m.set_bag("block", Some(block.clone()));
+        assert_eq!(flags(m.clone()), (0, 0));
+        block.set_string("name", "val_01");
+        m.set_bag("block", Some(block));
+        assert_eq!(flags(m), (0, CF_BLOCK_INFO));
+
+        // Prop batches use physics, grass batches don't.
+        for (list, cf) in [("PropInstanceList", CF_BATCHES | CF_PHYSICS), ("GrassInstanceList", CF_BATCHES)] {
+            let class =
+                if list.starts_with('P') { "rage__fwPropInstanceListDef" } else { "rage__fwGrassInstanceListDef" };
+            let mut data = Meta::create("rage__fwInstancedMapData").unwrap();
+            data.set_object(list, Some(Value::Bags(vec![Some(Meta::create(class).unwrap())])));
+            let mut m = Meta::create("CMapData").unwrap();
+            m.set_bag("instancedData", Some(data));
+            assert_eq!(flags(m), (0, cf), "{list}");
         }
     }
 }

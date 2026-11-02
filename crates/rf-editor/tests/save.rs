@@ -123,6 +123,10 @@ fn recomputes_the_game_ymaps() {
         let strm = box_diff([gmin, gmax], [omin, omax]);
         let wider = (0..3).all(|i| omin[i] <= gmin[i] + 0.01 && omax[i] >= gmax[i] - 0.01);
         let flags = |b: &DataBag| (b.u32("flags"), b.u32("contentFlags"));
+        // The game's LOD flag on ymaps with nothing LOD in them can't be
+        // worked out; any other difference is a wrong rule.
+        let (g, o) = (flags(&game), flags(&ours));
+        assert!(g == o || (g.0 == o.0 | 2 && g.1 == o.1), "{path}: flags {g:?}, worked out {o:?}");
         let k = kind(&game);
         for t in [tally.entry(k).or_default(), &mut total] {
             t.n += 1;
@@ -166,8 +170,8 @@ fn recomputes_the_game_ymaps() {
     // position, so these mostly hold the game's.
     let streaming = total.streaming_exact + total.streaming_wider;
     assert!(streaming as f32 > 0.6 * n, "streaming extents exact or wider for {streaming}");
-    // The C#'s flag rules, which differ from the game's in places.
-    assert!(total.flags as f32 > 0.65 * n, "flags exact for {}", total.flags);
+    // The flags follow the game's rules.
+    assert!(total.flags as f32 > 0.9 * n, "flags exact for {}", total.flags);
     // Box occluders turned by their angle about Z.
     let boxes = &tally["box occluders"];
     assert!(
