@@ -29,6 +29,7 @@ pub use camera::{CameraView, FlyCamera, Frustum, OrbitCamera, Ray};
 pub use context::{GpuContext, wanted_features};
 pub use model::{
     AlphaMode, DecalMode, GpuModel, MaterialDesc, ModelOptions, NoTextures, Slot, TerrainDesc, TextureSource,
+    WaterDesc, WaterParams,
 };
 pub use post::{Post, PostSettings, PostTargets, Tonemap};
 pub use preview::{PreviewMode, PreviewTarget, TexturePreview};

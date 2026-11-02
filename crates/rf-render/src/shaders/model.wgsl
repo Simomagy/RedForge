@@ -19,8 +19,7 @@ struct Material {
     // z: two layers, w: the channel of colour1 that blends them
     modes: vec4<u32>,
     // x: normal map (0 tangent-space XY, 1 the normal in RGB),
-    // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R),
-    // z: water (glossy)
+    // y: material map (0 metal R + roughness G, 1 smoothness G, 2 roughness R)
     config: vec4<u32>,
     // x: emission (0-1)
     extra: vec4<f32>,
@@ -226,9 +225,6 @@ fn fragment(i: VertexOut, front: bool) -> Fragment {
                 smoothness = 1.0 - p.g;
             }
         }
-    }
-    if material.config.z == 1u {
-        smoothness = 0.9;
     }
     if frame.options.x == 4u {
         albedo_s = vec4<f32>(i.colour0.rgb, albedo_s.a);

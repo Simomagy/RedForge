@@ -102,8 +102,6 @@ pub struct MaterialDesc<'a> {
     pub two_layer: Option<u8>,
     pub normal_map: NormalMap,
     pub material_map: MaterialMap,
-    /// Water, drawn as a flat glossy colour until there's a water shader.
-    pub water: bool,
     /// A ped part's palette tinting (the C#'s `ColourTintMode` 2): the diffuse's
     /// red, green and blue weigh three colours of the tint palette, at these
     /// columns (0-255) and this row (0-1, in w).
@@ -369,6 +367,7 @@ mod names {
         0xa956b9cc, // water_river_alpha
         0x5013be81, // water_bath
     ];
+    pub const WATERFALL: u32 = 0x3d79b35e;
 }
 
 /// Textures the C# RedForge doesn't map onto its default shader.
@@ -496,10 +495,6 @@ impl<'a> MaterialDesc<'a> {
         } else if name == names::DECAL_DIRT {
             d.decal = DecalMode::Dirt;
         }
-        if names::WATER.contains(&name) || shader.draw_bucket & 0x7F == 6 {
-            d.water = true;
-            d.textures = [None; 7];
-        }
         if names::TERRAIN_LOD.contains(&name) {
             (d.normal_map, d.material_map) = (NormalMap::Direct, MaterialMap::Smoothness);
         } else if name == names::TERRAIN_SLOD {
@@ -510,6 +505,117 @@ impl<'a> MaterialDesc<'a> {
 
     pub fn texture(&self, slot: Slot) -> Option<&'a ShaderTexture> {
         self.textures[slot as usize]
+    }
+}
+
+/// The constants of RDR2's river and lake shaders ("water_river",
+/// "water_riverwithfoam"...).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WaterParams {
+    /// x: "ripplebumpiness", y: "ripplescale" (per metre), z:
+    /// "riverfoamtexturescale" (per metre), w: flags (1 foam, 2 pollen,
+    /// 4 waterfall).
+    pub ripples: [f32; 4],
+    /// "fogandopacityoverride": a fog colour instead of the fog texture's
+    /// (when not black), and the opacity.
+    pub fog_override: [f32; 4],
+    /// "pollenlayer1-3": the floating pollen's colours.
+    pub pollen: [[f32; 4]; 3],
+    /// "pollenexistence": where the pollen placement map lies in the world
+    /// (x, y, width, height).
+    pub pollen_area: [f32; 4],
+}
+
+impl Default for WaterParams {
+    fn default() -> Self {
+        Self {
+            ripples: [1.0, 0.05, 0.05, 0.0],
+            fog_override: [0.0, 0.0, 0.0, 1.0],
+            pollen: [[0.0; 4]; 3],
+            pollen_area: [0.0, 0.0, 1.0, 1.0],
+        }
+    }
+}
+
+/// Water texture slots.
+pub mod water_slot {
+    /// "flowtexture": the flow's direction in red and green (0.5 still), foam in alpha.
+    pub const FLOW: usize = 0;
+    /// "fogtexture": the water's colour.
+    pub const FOG: usize = 1;
+    /// The rapids' foam.
+    pub const FOAM: usize = 2;
+    /// "pollenlayer": three pollen masks; "pollenlayerplacement": where each floats.
+    pub const POLLEN: usize = 3;
+    pub const POLLEN_PLACEMENT: usize = 4;
+    pub const COUNT: usize = 5;
+}
+
+/// A water shader's textures and constants.
+pub struct WaterDesc<'a> {
+    pub shader_name: String,
+    pub textures: [Option<&'a ShaderTexture>; water_slot::COUNT],
+    pub params: WaterParams,
+}
+
+impl<'a> WaterDesc<'a> {
+    /// The water description of a shader, if it's a water shader (by name, or
+    /// its draw bucket).
+    pub fn from_shader(shader: &'a Shader, shader_name: String) -> Option<Self> {
+        if !names::WATER.contains(&shader.name_hash) && shader.draw_bucket & 0x7F != 6 {
+            return None;
+        }
+        let mut d = WaterDesc { shader_name, textures: [None; water_slot::COUNT], params: WaterParams::default() };
+        let mut flags = 0u32;
+        if names::WATERFALL == shader.name_hash {
+            flags |= 4;
+        }
+        for p in shader.parameters.as_ref().and_then(|p| p.params.as_deref()).unwrap_or(&[]) {
+            match p.info.param_type() {
+                ShaderParamType::Texture => {
+                    let slot = match p.info.name {
+                        0x8fc59620 => water_slot::FLOW, // flowtexture
+                        0x85261019 => water_slot::FOG,  // fogtexture
+                        0x87c3e3a9 => {
+                            flags |= 1;
+                            water_slot::FOAM
+                        }
+                        0xd2b459c8 => {
+                            flags |= 2;
+                            water_slot::POLLEN // pollenlayer
+                        }
+                        0x03884d2f => water_slot::POLLEN_PLACEMENT, // pollenlayerplacement
+                        _ => continue,
+                    };
+                    d.textures[slot] = p.texture.as_ref();
+                }
+                ShaderParamType::CBuffer => {
+                    let t = &mut d.params;
+                    match p.info.name {
+                        0xb9470b30 => t.ripples[0] = p.vector[0], // ripplebumpiness
+                        0xd3cd3e65 => t.ripples[1] = p.vector[0], // ripplescale
+                        0xa72163ba => t.ripples[2] = p.vector[0], // riverfoamtexturescale
+                        0x4bd435a8 => t.fog_override = p.vector,  // fogandopacityoverride
+                        0xe0e3749e => t.pollen[0] = p.vector,     // pollenlayer1
+                        0x1a0066d7 => t.pollen[1] = p.vector,
+                        0xec3e0b53 => t.pollen[2] = p.vector,
+                        0x189e02fe => t.pollen_area = p.vector, // pollenexistence
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Foam and pollen only with their textures.
+        if d.textures[water_slot::FOAM].is_none() {
+            flags &= !1;
+        }
+        if d.textures[water_slot::POLLEN].is_none() || d.textures[water_slot::POLLEN_PLACEMENT].is_none() {
+            flags &= !2;
+        }
+        d.params.ripples[3] = flags as f32;
+        Some(d)
     }
 }
 
@@ -717,12 +823,17 @@ impl GpuModel {
                         Some(s) => {
                             if materials[si].is_none() {
                                 let name = hashes.name(s.name_hash);
-                                let m = match TerrainDesc::from_shader(s, name.clone()) {
-                                    Some(t) => {
+                                let water = WaterDesc::from_shader(s, name.clone());
+                                let m = match (water, TerrainDesc::from_shader(s, name.clone())) {
+                                    (Some(w), _) => {
+                                        let textures = w.textures.map(|t| resolver.resolve(t));
+                                        Some(renderer.create_water_material(ctx, &w, textures))
+                                    }
+                                    (None, Some(t)) => {
                                         let textures = t.textures.map(|t| resolver.resolve(t));
                                         Some(renderer.create_terrain_material(ctx, &t, textures))
                                     }
-                                    None => {
+                                    (None, None) => {
                                         let mut desc = MaterialDesc::from_shader(s, name);
                                         let mut textures = desc.textures.map(|t| resolver.resolve(t));
                                         let slots = [Slot::Diffuse, Slot::Normal, Slot::Material];

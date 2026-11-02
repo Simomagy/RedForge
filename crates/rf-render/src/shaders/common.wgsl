@@ -35,6 +35,8 @@ struct Frame {
     options: vec4<u32>,
     // xy: the view's size in pixels, zw: one over it.
     viewport: vec4<f32>,
+    // x: seconds, for what moves (water).
+    time: vec4<f32>,
     shadows: Shadows,
 };
 

@@ -15,7 +15,7 @@ use crate::camera::{CameraView, OrbitCamera};
 use crate::mesh::{Vertex, VertexExtra, VertexSkin};
 use crate::model::{
     AlphaMode, DecalMode, GpuDraw, GpuModel, MaterialDesc, MaterialMap, NormalMap, Slot, TerrainDesc, TerrainParams,
-    terrain_slot,
+    WaterDesc, terrain_slot, water_slot,
 };
 use crate::post::{Post, PostSettings, Tonemap};
 use crate::shadows::{CASCADES, Cascades, SHADOW_SIZE};
@@ -25,8 +25,6 @@ use crate::texture::GpuTexture;
 
 pub use crate::targets::RenderTargets;
 
-/// The colour water is drawn with, in linear RGB.
-const WATER_COLOUR: [f32; 4] = [0.03, 0.07, 0.07, 1.0];
 /// The ambient light's second channel, facing down and up (the C#'s
 /// `CreateEarthScene` ambient light's Colour3 and Colour4).
 const AMBIENT2: [[f32; 4]; 2] = [[0.002, 0.002, 0.001, 0.0], [0.008, 0.008, 0.004, 0.0]];
@@ -65,6 +63,7 @@ struct FrameUniform {
     background: [f32; 4],
     options: [u32; 4],
     viewport: [f32; 4],
+    time: [f32; 4],
     shadows: ShadowsUniform,
 }
 
@@ -230,6 +229,8 @@ pub enum MaterialKind {
     Standard,
     /// The terrain shader: four layers blended by masks and heights.
     Terrain,
+    /// Rivers and lakes, drawn over the lit scene before the sky.
+    Water,
 }
 
 /// A GPU material: its constants and textures.
@@ -354,6 +355,8 @@ enum Pass {
     /// Into the G-buffer: opaque and cut-out draws, then decals over them.
     Opaque,
     Decal,
+    /// Over the lit G-buffer, before the sky.
+    Water,
     /// Over the finished image, lit as they're drawn.
     Blend,
 }
@@ -366,6 +369,13 @@ pub struct Renderer {
     bones_layout: wgpu::BindGroupLayout,
     material_layout: wgpu::BindGroupLayout,
     terrain_layout: wgpu::BindGroupLayout,
+    water_layout: wgpu::BindGroupLayout,
+    water_view_layout: wgpu::BindGroupLayout,
+    /// The ripples' normal maps ("waterbump2"), once the app has them.
+    water_bump: std::sync::Mutex<Arc<GpuTexture>>,
+    clamp_sampler: wgpu::Sampler,
+    /// When the renderer started, for the frame's time.
+    start: std::time::Instant,
     view_layouts: ViewLayouts,
     frame_buffer: wgpu::Buffer,
     frame_group: wgpu::BindGroup,
@@ -409,6 +419,7 @@ struct Pipelines {
     lighting: wgpu::RenderPipeline,
     background: wgpu::RenderPipeline,
     lights: wgpu::RenderPipeline,
+    water: wgpu::RenderPipeline,
 }
 
 fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -471,7 +482,10 @@ fn draw_phase(draw: &GpuDraw) -> AlphaMode {
 /// (decals and lines cast none).
 fn in_pass(draw: &GpuDraw, pass: Pass) -> Option<bool> {
     let phase = draw_phase(draw);
+    let water = draw.material.kind == MaterialKind::Water;
     match pass {
+        Pass::Water => water.then_some(false),
+        _ if water => None,
         Pass::Shadow(_) => (!draw.mesh.lines && phase != AlphaMode::Decal)
             .then_some(draw.alpha != AlphaMode::Opaque && draw.material.kind != MaterialKind::Terrain),
         Pass::Opaque => (phase == AlphaMode::Opaque).then_some(false),
@@ -528,6 +542,22 @@ impl Renderer {
         let terrain_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("terrain"),
             entries: &terrain_entries,
+        });
+        let mut water_entries = vec![uniform_entry(0, wgpu::ShaderStages::FRAGMENT)];
+        water_entries.extend((0..water_slot::COUNT as u32).map(|i| texture_entry(1 + i, true)));
+        water_entries.push(sampler_entry(1 + water_slot::COUNT as u32, wgpu::SamplerBindingType::Filtering));
+        let water_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("water"),
+            entries: &water_entries,
+        });
+        let water_view_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("water view"),
+            entries: &[
+                texture_entry(0, true),
+                texture_entry_of(1, wgpu::TextureSampleType::Depth, wgpu::TextureViewDimension::D2),
+                texture_entry(2, true),
+                sampler_entry(3, wgpu::SamplerBindingType::Filtering),
+            ],
         });
         let bones_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("bones"),
@@ -636,6 +666,12 @@ impl Renderer {
             anisotropy_clamp: 16,
             ..Default::default()
         });
+        let clamp_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("clamp"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let point_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("point"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -655,6 +691,7 @@ impl Renderer {
         let deferred_shader =
             module("deferred.wgsl", [common, lighting, include_str!("shaders/deferred.wgsl")].concat());
         let ssao_shader = module("ssao.wgsl", [common, include_str!("shaders/ssao.wgsl")].concat());
+        let water_shader = module("water.wgsl", [common, lighting, include_str!("shaders/water.wgsl")].concat());
         let lights_shader = module(
             "lights.wgsl",
             [common, lighting, include_str!("shaders/deferred.wgsl"), include_str!("shaders/lights.wgsl")].concat(),
@@ -785,6 +822,10 @@ impl Renderer {
         let background_pl = pipeline_layout("background", &[Some(&frame_layout), Some(&view_layouts.background)]);
         let lights_pl =
             pipeline_layout("lights", &[Some(&frame_layout), Some(&view_layouts.lighting), Some(&lights_layout)]);
+        let water_pl = pipeline_layout(
+            "water",
+            &[Some(&frame_layout), Some(&water_layout), Some(&water_view_layout), Some(env_layout)],
+        );
         let add = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
             dst_factor: wgpu::BlendFactor::One,
@@ -885,6 +926,17 @@ impl Renderer {
             lighting: fullscreen("lighting", &lighting_pl, &deferred_shader, "fs_lighting", HDR_FORMAT),
             background: fullscreen("background", &background_pl, &deferred_shader, "fs_background", HDR_FORMAT),
             lights,
+            water: make(Desc {
+                label: "water",
+                layout: &water_pl,
+                module: &water_shader,
+                vs: "vs_water",
+                fs: Some("fs_water"),
+                buffers: &plain,
+                targets: &[target(HDR_FORMAT, None)],
+                depth: Some(depth(true, 0)),
+                topology: tri,
+            }),
         };
 
         let white = Arc::new(GpuTexture::solid(ctx, "white", [255, 255, 255, 255]));
@@ -898,6 +950,11 @@ impl Renderer {
             bones_layout,
             material_layout,
             terrain_layout,
+            water_layout,
+            water_view_layout,
+            water_bump: std::sync::Mutex::new(Arc::new(GpuTexture::solid(ctx, "water bump", [128, 128, 128, 128]))),
+            clamp_sampler,
+            start: std::time::Instant::now(),
             view_layouts,
             frame_buffer,
             frame_group,
@@ -941,7 +998,7 @@ impl Renderer {
         };
         let has = |slot: Slot| textures[slot as usize].is_some();
         let u = MaterialUniform {
-            tint: if desc.water { WATER_COLOUR } else { [1.0; 4] },
+            tint: [1.0; 4],
             params: [
                 desc.bumpiness,
                 cutoff,
@@ -969,7 +1026,7 @@ impl Renderer {
                     MaterialMap::Smoothness => 1,
                     MaterialMap::Roughness => 2,
                 },
-                desc.water as u32,
+                0,
                 0,
             ],
             extra: [desc.emissive, 0.0, 0.0, 0.0],
@@ -1071,6 +1128,53 @@ impl Renderer {
         ];
         let textures = LABELS.iter().zip(textures).filter_map(|(l, t)| Some((*l, t?))).collect();
         GpuMaterial { name: desc.shader_name.clone(), kind: MaterialKind::Terrain, bind_group, textures }
+    }
+
+    /// A material for the water shaders; `textures` by [`water_slot`].
+    pub fn create_water_material(
+        &self,
+        ctx: &GpuContext,
+        desc: &WaterDesc,
+        textures: [Option<Arc<GpuTexture>>; water_slot::COUNT],
+    ) -> GpuMaterial {
+        let buffer = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&desc.shader_name),
+            contents: bytemuck::bytes_of(&desc.params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        // Without its maps: still water of a murky colour, no foam or pollen.
+        let fallback = |slot: usize| match slot {
+            water_slot::FLOW => GpuTexture::solid(ctx, "still water", [128, 128, 128, 0]),
+            water_slot::FOG => GpuTexture::solid(ctx, "water colour", [40, 52, 46, 255]),
+            _ => GpuTexture::solid(ctx, "no water layer", [0, 0, 0, 0]),
+        };
+        let owned: Vec<Arc<GpuTexture>> =
+            textures.iter().enumerate().map(|(i, t)| t.clone().unwrap_or_else(|| Arc::new(fallback(i)))).collect();
+        let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }];
+        for (i, t) in owned.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 1 + i as u32,
+                resource: wgpu::BindingResource::TextureView(&t.view_2d),
+            });
+        }
+        entries.push(wgpu::BindGroupEntry {
+            binding: 1 + water_slot::COUNT as u32,
+            resource: wgpu::BindingResource::Sampler(&self.sampler),
+        });
+        let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&desc.shader_name),
+            layout: &self.water_layout,
+            entries: &entries,
+        });
+        const LABELS: [&str; water_slot::COUNT] = ["Flow", "Fog", "Foam", "Pollen", "Pollen placement"];
+        let textures = LABELS.iter().zip(textures).filter_map(|(l, t)| Some((*l, t?))).collect();
+        GpuMaterial { name: desc.shader_name.clone(), kind: MaterialKind::Water, bind_group, textures }
+    }
+
+    /// The ripples' normal maps the water shaders use (the game's
+    /// "waterbump2", in `graphics.ytd`).
+    pub fn set_water_bump(&self, texture: Arc<GpuTexture>) {
+        *self.water_bump.lock().unwrap() = texture;
     }
 
     pub fn create_targets(&self, ctx: &GpuContext, width: u32, height: u32) -> RenderTargets {
@@ -1227,7 +1331,7 @@ impl Renderer {
                             match pass {
                                 Pass::Shadow(_) if alpha => &p.skinned_shadow_alpha,
                                 Pass::Shadow(_) => &p.skinned_shadow,
-                                Pass::Blend => &p.skinned_blend,
+                                Pass::Blend | Pass::Water => &p.skinned_blend,
                                 Pass::Decal => &p.skinned_decal,
                                 Pass::Opaque => &p.skinned_opaque,
                             }
@@ -1276,6 +1380,7 @@ impl Renderer {
         Some(match (pass, draw.material.kind, draw.mesh.lines) {
             (Pass::Shadow(_), ..) if alpha => &p.shadow_alpha,
             (Pass::Shadow(_), ..) => &p.shadow,
+            (Pass::Water, ..) => &p.water,
             (_, MaterialKind::Terrain, _) => {
                 rp.set_vertex_buffer(2, draw.mesh.extra.as_ref()?.slice(..));
                 &p.terrain
@@ -1378,6 +1483,7 @@ impl Renderer {
             background: [r, g, b, 1.0],
             options: [settings.debug as u32, settings.ssao as u32, 0, 0],
             viewport: [w, h, 1.0 / w, 1.0 / h],
+            time: [self.start.elapsed().as_secs_f32() % 4096.0, 0.0, 0.0, 0.0],
             shadows,
         }
     }
@@ -1548,6 +1654,43 @@ impl Renderer {
             rp.set_bind_group(1, &targets.lighting_group, &[]);
             rp.set_bind_group(2, group, &[]);
             rp.draw(0..36, 0..lights.len() as u32);
+        }
+        // Water over the lit scene, which shows through it: copies of the
+        // image and depth under it, then the water's own colour and depth.
+        {
+            let copy = |from: &wgpu::Texture, to: &wgpu::Texture, encoder: &mut wgpu::CommandEncoder| {
+                encoder.copy_texture_to_texture(from.as_image_copy(), to.as_image_copy(), from.size());
+            };
+            copy(&targets.lit_texture, &targets.under_texture, &mut encoder);
+            copy(&targets.depth_texture, &targets.under_depth_texture, &mut encoder);
+            let bump = self.water_bump.lock().unwrap().clone();
+            let water_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("water view"),
+                layout: &self.water_view_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&targets.under) },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&targets.under_depth),
+                    },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&bump.view_2d) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.clamp_sampler) },
+                ],
+            });
+            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("water"),
+                color_attachments: &[colour(&targets.lit, wgpu::LoadOp::Load)],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &targets.depth_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            rp.set_bind_group(0, &self.frame_group, &[]);
+            rp.set_bind_group(2, &water_group, &[]);
+            rp.set_bind_group(3, sky.env_group(), &[]);
+            models_pass(&mut rp, draw, Pass::Water);
         }
         match &settings.sky {
             Some(lights) => sky.draw(ctx, &mut encoder, &targets.sky, &targets.hdr, camera, lights),

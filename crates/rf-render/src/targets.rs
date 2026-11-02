@@ -86,13 +86,21 @@ pub struct RenderTargets {
     pub width: u32,
     pub height: u32,
     pub(crate) gbuffer: [wgpu::TextureView; 3],
+    pub(crate) depth_texture: wgpu::Texture,
     pub(crate) depth_view: wgpu::TextureView,
     pub(crate) ids: wgpu::Texture,
     pub(crate) ids_view: wgpu::TextureView,
     pub(crate) ssao_raw: wgpu::TextureView,
     pub(crate) ssao: wgpu::TextureView,
     /// The G-buffer lit, before the background (or sky) and blended draws.
+    pub(crate) lit_texture: wgpu::Texture,
     pub(crate) lit: wgpu::TextureView,
+    /// Copies of the lit image and the depth, for the water to show what's
+    /// under it.
+    pub(crate) under_texture: wgpu::Texture,
+    pub(crate) under: wgpu::TextureView,
+    pub(crate) under_depth_texture: wgpu::Texture,
+    pub(crate) under_depth: wgpu::TextureView,
     /// The finished HDR image.
     pub(crate) hdr: wgpu::TextureView,
     pub output: wgpu::Texture,
@@ -146,12 +154,20 @@ impl RenderTargets {
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
-        let depth_view = view(texture("depth", DEPTH_FORMAT, sampled));
+        let copied = sampled | wgpu::TextureUsages::COPY_SRC;
+        let depth_texture = texture("depth", DEPTH_FORMAT, copied);
+        let depth_view = depth_texture.create_view(&Default::default());
+        let under_usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST;
+        let under_depth_texture = texture("under depth", DEPTH_FORMAT, under_usage);
+        let under_depth = under_depth_texture.create_view(&Default::default());
+        let under_texture = texture("under", HDR_FORMAT, under_usage);
+        let under = under_texture.create_view(&Default::default());
         let ids = texture("ids", ID_FORMAT, rt | wgpu::TextureUsages::COPY_SRC);
         let ids_view = ids.create_view(&Default::default());
         let ssao_raw = view(texture("ssao raw", SSAO_FORMAT, sampled));
         let ssao = view(texture("ssao", SSAO_FORMAT, sampled));
-        let lit = view(texture("lit", HDR_FORMAT, sampled));
+        let lit_texture = texture("lit", HDR_FORMAT, copied);
+        let lit = lit_texture.create_view(&Default::default());
         let hdr = view(texture("hdr", HDR_FORMAT, sampled));
         let output = texture("output", OUTPUT_FORMAT, sampled | wgpu::TextureUsages::COPY_SRC);
         let output_view = output.create_view(&Default::default());
@@ -186,12 +202,18 @@ impl RenderTargets {
             width,
             height,
             gbuffer,
+            depth_texture,
             depth_view,
             ids,
             ids_view,
             ssao_raw,
             ssao,
+            lit_texture,
             lit,
+            under_texture,
+            under,
+            under_depth_texture,
+            under_depth,
             hdr,
             output,
             output_view,
