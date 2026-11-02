@@ -197,16 +197,19 @@ fn composite(dir: vec3<f32>, dist: f32, colour: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_scene(i: FaceOut) -> @location(0) vec4<f32> {
     let px = vec2<i32>(i.clip.xy);
-    let lit = textureLoad(t_lit, px, 0).rgb;
+    var lit = textureLoad(t_lit, px, 0).rgb;
     let depth = textureLoad(t_depth, px, 0);
     let ndc = vec2<f32>(i.uv.x * 2.0 - 1.0, 1.0 - i.uv.y * 2.0);
     // Reversed Z: depth 1 is the near plane.
     let near = atmo.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
     let dir = normalize(near.xyz / near.w);
+    let pixel = max(length(dpdx(dir)), length(dpdy(dir)));
     var dist = 0.0;
     if depth > 0.0 {
         let p = atmo.inv_view_proj * vec4<f32>(ndc, depth, 1.0);
         dist = length(p.xyz / p.w);
+    } else {
+        lit += celestial(dir, pixel);
     }
     return vec4<f32>(composite(dir, dist, lit), 1.0);
 }
