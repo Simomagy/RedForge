@@ -98,6 +98,9 @@ pub struct RenderTargets {
     depth: wgpu::TextureView,
     pub output: wgpu::Texture,
     pub output_view: wgpu::TextureView,
+    /// The output seen as plain UNORM: the sRGB-encoded bytes as they are, which
+    /// is what egui expects of a texture.
+    pub display_view: wgpu::TextureView,
     tonemap_group: wgpu::BindGroup,
 }
 
@@ -372,7 +375,7 @@ impl Renderer {
 
     pub fn create_targets(&self, ctx: &GpuContext, width: u32, height: u32) -> RenderTargets {
         let (width, height) = (width.max(1), height.max(1));
-        let texture = |label, format, usage| {
+        let texture = |label, format: wgpu::TextureFormat, usage| {
             ctx.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -381,7 +384,7 @@ impl Renderer {
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage,
-                view_formats: &[],
+                view_formats: &[format.remove_srgb_suffix()],
             })
         };
         let rt = wgpu::TextureUsages::RENDER_ATTACHMENT;
@@ -391,6 +394,10 @@ impl Renderer {
         let output =
             texture("output", OUTPUT_FORMAT, rt | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC);
         let output_view = output.create_view(&Default::default());
+        let display_view = output.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(OUTPUT_FORMAT.remove_srgb_suffix()),
+            ..Default::default()
+        });
         let tonemap_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("tonemap"),
             layout: &self.tonemap_layout,
@@ -399,7 +406,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 1, resource: self.tonemap_buffer.as_entire_binding() },
             ],
         });
-        RenderTargets { width, height, hdr, depth, output, output_view, tonemap_group }
+        RenderTargets { width, height, hdr, depth, output, output_view, display_view, tonemap_group }
     }
 
     /// Draws `models` (with their transforms) into `targets.output`.

@@ -70,9 +70,13 @@ pub fn read_model(path: &str, loose: &[u8], hashes: &HashIndex) -> rf_formats::R
             }
         }
         "yft" => {
+            // The main drawable first, then the others (damaged parts, physics
+            // groups, cloth); a few fragments' main drawable is a placeholder.
             let frag = yft::read(loose, &cx)?;
-            if let Some(d) = frag.drawables().next() {
-                drawables.push((stem(path).to_owned(), d.base.clone()));
+            let name = stem(path);
+            for (i, d) in frag.drawables().enumerate() {
+                let label = if i == 0 { name.to_owned() } else { format!("{name} [{i}]") };
+                drawables.push((label, d.base.clone()));
             }
         }
         _ => return Err(rf_formats::Error::Unsupported(format!("{path}: not a model file"))),

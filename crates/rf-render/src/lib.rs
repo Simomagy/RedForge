@@ -12,12 +12,14 @@ mod camera;
 mod context;
 pub mod mesh;
 pub mod model;
+pub mod preview;
 mod renderer;
 pub mod texture;
 
 pub use camera::OrbitCamera;
 pub use context::{GpuContext, wanted_features};
 pub use model::{AlphaMode, GpuModel, MaterialDesc, NoTextures, TextureSource};
+pub use preview::{PreviewMode, PreviewTarget, TexturePreview};
 pub use renderer::{DebugView, GpuMaterial, OUTPUT_FORMAT, RenderTargets, Renderer, ViewSettings};
 pub use texture::{GpuTexture, TextureKind};
 

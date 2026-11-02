@@ -21,6 +21,9 @@ pub struct GpuTexture {
     pub view: wgpu::TextureView,
     /// Layer 0 as a plain 2D view, for materials.
     pub view_2d: wgpu::TextureView,
+    /// Every layer as a 2D array, with sRGB formats seen as plain UNORM so the
+    /// stored values come back unchanged (for previews).
+    pub view_raw: wgpu::TextureView,
     pub kind: TextureKind,
     pub width: u32,
     pub height: u32,
@@ -155,7 +158,7 @@ impl GpuTexture {
             dimension: wgpu::TextureDimension::D2,
             format: gpu_format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
+            view_formats: &[gpu_format.remove_srgb_suffix()],
         });
 
         // The data is each layer, each mip; sizes as the game computes them.
@@ -228,11 +231,17 @@ impl GpuTexture {
             array_layer_count: Some(1),
             ..Default::default()
         });
+        let view_raw = texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(gpu_format.remove_srgb_suffix()),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
         Ok(Self {
             name,
             texture,
             view,
             view_2d,
+            view_raw,
             kind,
             width,
             height,
@@ -263,11 +272,16 @@ impl GpuTexture {
         );
         let view = texture.create_view(&Default::default());
         let view_2d = texture.create_view(&Default::default());
+        let view_raw = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
         Self {
             name: name.to_owned(),
             texture,
             view,
             view_2d,
+            view_raw,
             kind: TextureKind::D2,
             width: 1,
             height: 1,

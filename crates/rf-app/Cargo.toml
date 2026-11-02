@@ -1,0 +1,24 @@
+[package]
+name = "rf-app"
+description = "RedForge: a map editor for RedM"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "redforge"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+dirs = "7.0.0"
+eframe = "0.36"
+egui_dock = "0.21"
+env_logger = "0.11.11"
+glam = "0.34.2"
+image = "0.25.10"
+log = "0.4.35"
+rf-formats.workspace = true
+rf-render = { path = "../rf-render" }
+rfd = "0.17.2"
