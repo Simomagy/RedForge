@@ -17,6 +17,7 @@ pub mod mesh;
 pub mod model;
 pub mod preview;
 mod renderer;
+pub mod sky;
 pub mod texture;
 
 pub use anim::Pose;
@@ -30,6 +31,7 @@ pub use renderer::{
     DebugView, DrawBatch, GpuMaterial, Instance, MaterialKind, OUTPUT_FORMAT, Pick, PickRequest, PosedModel,
     RenderStats, RenderTargets, Renderer, ViewSettings,
 };
+pub use sky::{Sky, SkyLights, SkyTargets};
 pub use texture::{GpuTexture, TextureKind};
 
 #[derive(Debug, thiserror::Error)]
