@@ -295,3 +295,62 @@ fn custom_props_from_a_project() {
     ed.close_project();
     assert!(!ed.data().archetypes.contains_key(&name));
 }
+
+#[test]
+fn batch_instances() {
+    let Some(mut ed) = editor() else { return };
+    let val = ed.world.places().into_iter().find(|(n, _)| n == "Valentine").unwrap().1;
+    settle(&mut ed, val);
+
+    // A prop batch's instance (a tree, bush or rock near Valentine).
+    let vb = ed.world.visible_batches().iter().find(|b| !b.batch.grass && b.batch.len() > 3).unwrap().clone();
+    let id = EntityId::instance(vb.key.0, false, vb.batch.list_index, vb.batch.source_index(1));
+    ed.select(vec![id]);
+    assert!(ed.is_editable(id));
+    let before = ed.placement(id).unwrap();
+    assert!((before.position - position(&ed, id)).length() < 1e-3);
+
+    // Moved: the ymap's instance and the world's.
+    let moved = Placement { position: before.position + Vec3::new(3.0, 0.0, 0.0), ..before };
+    ed.set_placements("Move", &[(id, moved)]);
+    ed.world.update(val, 12.0);
+    assert!((position(&ed, id) - moved.position).length() < 1e-3);
+    assert!((ed.placement(id).unwrap().position - moved.position).length() < 1e-3);
+    assert!(ed.map(id.node).unwrap().is_edited());
+    ed.undo();
+    ed.world.update(val, 12.0);
+    assert!((position(&ed, id) - before.position).length() < 1e-3);
+
+    // Duplicated in its batch, then the copy deleted.
+    let count = rf_world::read_batches(&ed.map(id.node).unwrap().root)
+        .iter()
+        .find(|b| !b.grass && b.list_index == vb.batch.list_index)
+        .unwrap()
+        .len();
+    ed.duplicate_selected().unwrap();
+    let copy = ed.selection()[0];
+    assert_eq!(copy.batch_instance(), Some((false, vb.batch.list_index, count as u32)));
+    assert!((ed.placement(copy).unwrap().position - before.position).length() < 1e-3);
+    ed.delete_selected().unwrap();
+    let after = rf_world::read_batches(&ed.map(id.node).unwrap().root);
+    assert_eq!(after.iter().find(|b| !b.grass && b.list_index == vb.batch.list_index).unwrap().len(), count);
+
+    // Copied, it pastes as an entity of its archetype.
+    ed.select(vec![id]);
+    ed.copy();
+    assert!(ed.can_paste());
+
+    // Saved and read back, the moved instance is where it was put.
+    ed.select(vec![id]);
+    ed.set_placements("Move", &[(id, moved)]);
+    let dir = std::env::temp_dir().join(format!("rf-batches-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("moved.ymap");
+    ed.save_map(id.node, &file).unwrap();
+    let meta = Meta::read(&std::fs::read(&file).unwrap()).unwrap();
+    let batches = rf_world::read_batches(meta.root.as_ref().unwrap());
+    let b = batches.iter().find(|b| !b.grass && b.list_index == vb.batch.list_index).unwrap();
+    let t = b.transform(b.index_of(id.batch_instance().unwrap().2).unwrap());
+    assert!((Vec3::new(t[12], t[13], t[14]) - moved.position).length() < 1e-3);
+    std::fs::remove_dir_all(&dir).ok();
+}

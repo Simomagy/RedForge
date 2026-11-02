@@ -8,6 +8,7 @@ use std::time::Instant;
 use rf_formats::formats::databag::DataBag;
 use rf_formats::rpf8::FileRef;
 
+use crate::batch::InstanceBatch;
 use crate::map::{Entity, InteriorDef, MapData};
 use crate::math::{self, Aabb};
 use crate::nodes::Node;
@@ -204,6 +205,14 @@ impl World {
 
     /// An entity of a loaded map, as placed.
     pub fn entity(&self, id: EntityId) -> Option<EntityInfo> {
+        if let Some((batch, i)) = self.find_instance(id) {
+            return Some(EntityInfo {
+                archetype: batch.archetype,
+                transform: batch.transform(i),
+                lod_level: 0,
+                is_interior: false,
+            });
+        }
         let e = self.find(id)?;
         Some(EntityInfo {
             archetype: e.archetype,
@@ -217,6 +226,16 @@ impl World {
     /// dragging, without rebuilding the map every frame).
     pub fn preview_transform(&mut self, id: EntityId, transform: [f32; 16]) {
         let Some(&node) = self.by_name.get(&id.node) else { return };
+        if let Some((grass, list, instance)) = id.batch_instance() {
+            let Some(l) = self.loaded.get_mut(&node) else { return };
+            if let Some(b) = l.map.batches.iter_mut().find(|b| b.grass == grass && b.list_index == list)
+                && let Some(i) = b.index_of(instance)
+            {
+                std::sync::Arc::make_mut(b).set_transform(i, &transform);
+                self.rewalk = true;
+            }
+            return;
+        }
         let archetypes = &self.loader.src.data.archetypes;
         let Some(e) = self.loaded.get_mut(&node).and_then(|l| find_mut(&mut l.map, id)) else { return };
         e.transform = transform;
@@ -230,6 +249,14 @@ impl World {
             e.bounds = b;
         }
         self.rewalk = true;
+    }
+
+    /// A batch's instance: the batch and the instance's index in it.
+    fn find_instance(&self, id: EntityId) -> Option<(&InstanceBatch, usize)> {
+        let (grass, list, instance) = id.batch_instance()?;
+        let l = self.loaded.get(self.by_name.get(&id.node)?)?;
+        let b = l.map.batches.iter().find(|b| b.grass == grass && b.list_index == list)?;
+        Some((b, b.index_of(instance)?))
     }
 
     fn find(&self, id: EntityId) -> Option<&Entity> {

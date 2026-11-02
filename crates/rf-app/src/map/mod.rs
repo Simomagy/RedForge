@@ -104,8 +104,8 @@ pub struct MapView {
     frame_ms: f32,
     stats: RenderStats,
     last_evict: Instant,
-    /// The entity drawn with each instance id (id - 1), last frame.
-    drawn: Arc<Vec<EntityId>>,
+    /// What each instance id stands for, last frame.
+    drawn: Arc<batches::Picks>,
     /// The last frame's camera and where the view was on screen.
     last_view: Option<(rf_render::CameraView, egui::Rect)>,
 }
@@ -231,7 +231,7 @@ impl MapView {
             frame_ms: 0.0,
             stats: RenderStats::default(),
             last_evict: Instant::now(),
-            drawn: Arc::new(Vec::new()),
+            drawn: Arc::default(),
             last_view: None,
         }
     }
@@ -333,7 +333,7 @@ impl MapView {
     pub fn select_centre(&mut self, gpu: &Gpu, editor: &mut Editor) -> bool {
         let Some(t) = &self.targets else { return false };
         let pick = gpu.renderer.pick(&gpu.ctx, t, t.width / 2, t.height / 2);
-        let hit = pick.and_then(|p| p.id.checked_sub(1)).and_then(|i| self.drawn.get(i as usize)).copied();
+        let hit = pick.and_then(|p| self.drawn.get(p.id));
         if let Some(id) = hit {
             editor.select(vec![id]);
         }
@@ -554,7 +554,7 @@ impl MapView {
             let id = drawn.len() as u32;
             groups.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint, id));
         }
-        self.drawn = Arc::new(drawn);
+        self.drawn = Arc::new(self.batch_buffers.picks(drawn));
         let mut instances = Vec::new();
         let mut ranges = |groups: &Groups| {
             let mut out = Vec::new();
@@ -583,7 +583,7 @@ impl MapView {
         }
         let mut drawn_batch_instances = 0;
         for (vb, model, lod_dist) in &batch_models {
-            let Some(buffer) = self.batch_buffers.buffer(vb.key) else { continue };
+            let Some(buffer) = self.batch_buffers.buffer(vb) else { continue };
             let dists = batches::lod_dists(&vb.batch, model, *lod_dist);
             let eye = camera.eye;
             let seen = |c: Vec3, r: f32| frustum.sphere_visible(c, r);
@@ -710,7 +710,7 @@ impl MapView {
             } else if tools.tool == Tool::Place {
                 tools.tool = Tool::Select; // a right click leaves placing, as in the C#
             } else {
-                let hit = pick.and_then(|p| p.id.checked_sub(1)).and_then(|i| self.drawn.get(i as usize)).copied();
+                let hit = pick.and_then(|p| self.drawn.get(p.id));
                 let add = ui.input(|i| i.modifiers.command);
                 match (hit, add) {
                     (Some(id), true) => editor.toggle(id),

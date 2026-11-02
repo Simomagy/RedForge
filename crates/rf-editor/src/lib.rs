@@ -19,6 +19,7 @@
 //!   the ytyp, and the world places every instance again. Rooms, portals and
 //!   entity sets point at them by index, which deletes keep right.
 
+pub mod batches;
 pub mod interior;
 pub mod lod;
 pub mod placement;
@@ -849,7 +850,7 @@ impl Editor {
 
     /// Where an interior entity is defined (its ytyp must be open).
     fn interior_ref(&self, id: EntityId) -> Option<InteriorRef> {
-        if id.interior_entity == u32::MAX {
+        if id.interior_entity == u32::MAX || id.batch_instance().is_some() {
             return None;
         }
         let def = lod::entities(&self.map(id.node)?.root).get(id.entity as usize)?.as_ref()?;
@@ -862,6 +863,9 @@ impl Editor {
     /// The interior archetype (`CMloArchetypeDef`) an entity is in, or that an
     /// interior instance places; its ytyp must be open (selecting opens it).
     pub fn interior_archetype(&self, id: EntityId) -> Option<&DataBag> {
+        if id.batch_instance().is_some() {
+            return None;
+        }
         let def = lod::entities(&self.map(id.node)?.root).get(id.entity as usize)?.as_ref()?;
         if id.interior_entity == u32::MAX && !placement::is_mlo_instance(def) {
             return None;
@@ -890,6 +894,9 @@ impl Editor {
     /// An entity's definition: a ymap's `CEntityDef` or `CMloInstanceDef`, or
     /// an interior's `CEntityDef` (placed in the interior's space).
     pub fn entity_def(&self, id: EntityId) -> Option<&DataBag> {
+        if let Some(r) = id.batch_instance() {
+            return batches::instance(&self.map(id.node)?.root, r).map(|(_, item)| item);
+        }
         if id.interior_entity != u32::MAX {
             return self.interior_def(&self.interior_ref(id)?);
         }
@@ -898,6 +905,17 @@ impl Editor {
 
     /// Where an entity is in the world.
     pub fn placement(&self, id: EntityId) -> Option<Placement> {
+        if let Some(r) = id.batch_instance() {
+            return match self.map(id.node) {
+                Some(doc) => batches::placement(&doc.root, r),
+                None => {
+                    let e = self.world.entity(id)?;
+                    let (scale, orientation, position) =
+                        glam::Mat4::from_cols_array(&e.transform).to_scale_rotation_translation();
+                    Some(Placement { position, orientation, scale })
+                }
+            };
+        }
         if let Some(r) = self.interior_ref(id) {
             let local = Placement::of_entity(self.interior_def(&r)?);
             let mlo = r.instance;
@@ -942,19 +960,35 @@ impl Editor {
 
     /// Moves entities: one step.
     pub fn set_placements(&mut self, label: &str, items: &[(EntityId, Placement)]) {
+        // Instances of batches: their batches' maps changed first.
+        let mut seed: HashMap<DocKey, DataBag> = HashMap::new();
+        let instances: Vec<(EntityId, Placement)> =
+            items.iter().copied().filter(|(id, _)| id.batch_instance().is_some() && self.is_editable(*id)).collect();
+        for (id, p) in &instances {
+            let key = DocKey::Map(id.node);
+            let Some(base) = self.root(key) else { continue };
+            let root = seed.entry(key).or_insert_with(|| (**base).clone());
+            let bounds = self.batch_bounds();
+            batches::set(root, &[(id.batch_instance().unwrap(), *p)], &bounds);
+        }
         let edits: Vec<(EntityId, Placement)> = items
             .iter()
-            .filter(|(id, _)| self.is_editable(*id))
+            .filter(|(id, _)| id.batch_instance().is_none() && self.is_editable(*id))
             .map(|&(id, p)| match self.interior_ref(id) {
                 Some(r) => (id, Self::to_interior(&r, p)),
                 None => (id, p),
             })
             .collect();
-        self.change_entities(label, edits.iter().map(|(id, _)| *id), |id, def| {
+        self.change_entities_into(seed, label, edits.iter().map(|(id, _)| *id), |id, def| {
             if let Some((_, p)) = edits.iter().find(|(i, _)| *i == id) {
                 p.write_entity(def);
             }
         });
+    }
+
+    /// The archetype's box and radius of a batch's bag, for refitting it.
+    fn batch_bounds(&self) -> impl Fn(&DataBag) -> Option<batches::Bounds> + '_ {
+        |batch: &DataBag| self.data.archetypes.get(&batch.hash(0xA023_A02C)).map(batches::Bounds::of)
     }
 
     /// Changes the selected entities' definitions with `f`: one step.
@@ -967,10 +1001,34 @@ impl Editor {
         &mut self,
         label: &str,
         ids: impl Iterator<Item = EntityId>,
+        f: impl FnMut(EntityId, &mut DataBag),
+    ) {
+        self.change_entities_into(HashMap::new(), label, ids, f);
+    }
+
+    /// [`Editor::change_entities`], over files already changed (`roots`).
+    fn change_entities_into(
+        &mut self,
+        mut roots: HashMap<DocKey, DataBag>,
+        label: &str,
+        ids: impl Iterator<Item = EntityId>,
         mut f: impl FnMut(EntityId, &mut DataBag),
     ) {
-        let mut roots: HashMap<DocKey, DataBag> = HashMap::new();
         for id in ids {
+            if let Some((grass, b, i)) = id.batch_instance() {
+                let key = DocKey::Map(id.node);
+                let Some(base) = self.root(key) else { continue };
+                let root = roots.entry(key).or_insert_with(|| (**base).clone());
+                if let Some(Some(item)) = rf_world::batch::batch_list_mut(root, grass)
+                    .and_then(|l| l.get_mut(b as usize))
+                    .and_then(Option::as_mut)
+                    .and_then(rf_world::batch::instance_list_mut)
+                    .and_then(|l| l.get_mut(i as usize))
+                {
+                    f(id, item);
+                }
+                continue;
+            }
             match self.interior_ref(id) {
                 Some(r) => {
                     let key = DocKey::Types(r.ytyp);
@@ -1029,9 +1087,14 @@ impl Editor {
     pub fn delete_selected(&mut self) -> Result<(), String> {
         let mut by_map: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut by_interior: HashMap<(FileRef, usize), Vec<interior::Slot>> = HashMap::new();
+        let mut instances: HashMap<u32, Vec<batches::InstanceRef>> = HashMap::new();
         for id in &self.selection {
             if !self.is_editable(*id) {
                 return Err("something selected can't be edited".into());
+            }
+            if let Some(r) = id.batch_instance() {
+                instances.entry(id.node).or_default().push(r);
+                continue;
             }
             match self.interior_ref(*id) {
                 Some(r) => by_interior.entry((r.ytyp, r.archetype)).or_default().push(r.slot),
@@ -1046,6 +1109,11 @@ impl Editor {
             }
         }
         let mut roots: HashMap<u32, DataBag> = HashMap::new();
+        for (name, refs) in instances {
+            let mut root = (*self.maps[&name].root).clone();
+            batches::remove(&mut root, &refs, &self.batch_bounds());
+            roots.insert(name, root);
+        }
         for (name, mut removed) in by_map {
             removed.sort_unstable();
             removed.dedup();
@@ -1110,6 +1178,14 @@ impl Editor {
         let mut interior_copies = Vec::new();
         let mut copies = Vec::new();
         for id in self.selection.clone() {
+            if let Some(r) = id.batch_instance() {
+                let key = DocKey::Map(id.node);
+                let root = roots.entry(key).or_insert_with(|| (*self.maps[&id.node].root).clone());
+                for (grass, b, i) in batches::duplicate(root, &[r], &self.batch_bounds()) {
+                    copies.push(EntityId::instance(id.node, grass, b, i));
+                }
+                continue;
+            }
             let def = self.entity_def(id).ok_or("something selected can't be edited")?;
             let copy = Self::detached(def);
             match self.interior_ref(id) {
@@ -1152,6 +1228,9 @@ impl Editor {
             .selection
             .iter()
             .filter_map(|id| {
+                if id.batch_instance().is_some() {
+                    return self.instance_as_entity(*id);
+                }
                 let mut def = Self::detached(self.entity_def(*id)?);
                 if id.interior_entity != u32::MAX {
                     self.placement(*id)?.write_entity(&mut def);
@@ -1159,6 +1238,24 @@ impl Editor {
                 Some(def)
             })
             .collect();
+    }
+
+    /// A batch's instance as a standalone entity of its archetype, where it is.
+    fn instance_as_entity(&self, id: EntityId) -> Option<DataBag> {
+        let (grass, b, _) = id.batch_instance()?;
+        let archetype = batches::batch(&self.map(id.node)?.root, grass, b)?.hash(0xA023_A02C);
+        let arch = self.data.archetypes.get(&archetype)?;
+        let mut def = Meta::create("CEntityDef")?;
+        def.set_hash("archetypeName", archetype);
+        def.set_i32("parentIndex", -1);
+        def.set_f32("lodDist", arch.lod_dist);
+        def.set_enum_value("lodLevel", lod_level::ORPHAN_HD);
+        def.set_u8("blendAgeLayer", 255);
+        def.set_u8("blendAgeDirt", 255);
+        let mut p = self.placement(id)?;
+        p.scale.y = p.scale.x;
+        p.write_entity(&mut def);
+        Some(def)
     }
 
     pub fn can_paste(&self) -> bool {

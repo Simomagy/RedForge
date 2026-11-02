@@ -107,6 +107,12 @@ animal, put together from its metaped as the game does (the C#'s default
 `mp_male`, or the animal a creature's clips name), with play/pause, a time
 slider, speed and loop.
 
+The instanced trees, bushes, rocks and grass are selected like entities: they
+move, turn and scale with the gizmo or in Properties (grass only along its
+batch's box, about Z and evenly, as the game stores it), duplicate into their
+batch, delete, and copy as entities of their archetype. Their batch's box and
+population grid follow, as the C# rebuilds them before saving.
+
 Editing an entity of a game ymap makes that ymap edited: the map shows the
 edited data from then on. Deleting fixes the LOD indices (`parentIndex`,
 `numChildren`) in the ymap, its parent and its children, and refuses entities

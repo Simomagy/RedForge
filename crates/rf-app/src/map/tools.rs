@@ -66,7 +66,7 @@ struct Drag {
 /// A hover pick on its way back from the GPU, with what was drawn then.
 struct Pending {
     request: PickRequest,
-    drawn: Arc<Vec<EntityId>>,
+    drawn: Arc<super::batches::Picks>,
     view: CameraView,
     ndc: Vec2,
 }
@@ -284,14 +284,14 @@ impl Tools {
         &mut self,
         gpu: &crate::viewers::Gpu,
         targets: &rf_render::RenderTargets,
-        drawn: &Arc<Vec<EntityId>>,
+        drawn: &Arc<super::batches::Picks>,
         view: &CameraView,
         mouse: Option<(Pos2, Rect)>,
     ) {
         if let Some(p) = &self.pending
             && let Some(pick) = p.request.try_get(&gpu.ctx)
         {
-            self.hover = pick.id.checked_sub(1).and_then(|i| p.drawn.get(i as usize)).copied();
+            self.hover = p.drawn.get(pick.id);
             self.hover_point = (pick.depth > 0.0).then(|| p.view.unproject(p.ndc, pick.depth));
             self.pending = None;
         }

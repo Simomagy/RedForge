@@ -88,7 +88,7 @@
 //! - A ymap's parents are streamed with it even when disabled, as in the C#, so
 //!   a disabled parent of a streamed ymap still shows.
 
-mod batch;
+pub mod batch;
 mod edit;
 mod map;
 mod math;
@@ -153,7 +153,31 @@ pub struct EntityId {
     pub entity: u32,
     /// For an entity of an interior (MLO): its index there, else `u32::MAX`.
     /// The interior archetype's `entities` come first, then each entity set's.
+    /// For an instance of a batch ([`EntityId::instance`]), its index in the
+    /// batch's `InstanceList`.
     pub interior_entity: u32,
+}
+
+/// `EntityId::entity`'s bit for an instance of a batch, and for a grass one.
+const BATCH_INSTANCE: u32 = 1 << 31;
+const GRASS_BATCH: u32 = 1 << 30;
+
+impl EntityId {
+    /// An instance of one of a ymap's batches: the batch's place in its list
+    /// (grass or props), and the instance's in the batch's `InstanceList`.
+    pub fn instance(node: u32, grass: bool, batch: u32, instance: u32) -> Self {
+        EntityId { node, entity: BATCH_INSTANCE | (grass as u32) << 30 | batch, interior_entity: instance }
+    }
+
+    /// For a batch's instance: whether it's grass, the batch's place in its
+    /// list and the instance's in the batch.
+    pub fn batch_instance(&self) -> Option<(bool, u32, u32)> {
+        (self.entity & BATCH_INSTANCE != 0).then_some((
+            self.entity & GRASS_BATCH != 0,
+            self.entity & (GRASS_BATCH - 1),
+            self.interior_entity,
+        ))
+    }
 }
 
 #[derive(Clone, Debug, Default)]

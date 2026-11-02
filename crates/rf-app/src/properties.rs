@@ -91,6 +91,38 @@ impl Properties {
                 ui.label(RichText::new("edited").color(egui::Color32::from_rgb(255, 160, 40)));
             }
         });
+        if let Some((grass, batch, instance)) = id.batch_instance() {
+            let kind = if grass { "grass" } else { "props" };
+            ui.label(format!("Instance {instance} of the {kind} batch {batch}"));
+            let name = info.map(|e| hashes.name(e.archetype)).unwrap_or_default();
+            ui.horizontal(|ui| {
+                ui.label("Archetype");
+                ui.label(RichText::new(name).strong());
+            });
+            ui.label(
+                RichText::new(if grass {
+                    "Instanced grass moves within its batch's box, turns about Z and scales evenly."
+                } else {
+                    "An instance of its batch: its archetype is the batch's."
+                })
+                .weak(),
+            );
+            self.placement_ui(ui, editor, id);
+            let Some(def) = editor.entity_def(id).cloned() else { return };
+            ui.add_space(4.0);
+            egui::Grid::new("fields").num_columns(2).striped(true).show(ui, |ui| {
+                for f in def.class.fields().to_vec() {
+                    let name = editor.hashes().name(f.name);
+                    if f.name == 0x100 || ["InstMat", "Position"].contains(&name.as_str()) {
+                        continue;
+                    }
+                    if self.field_ui(ui, editor, &def, &f, &name) {
+                        ui.end_row();
+                    }
+                }
+            });
+            return;
+        }
         if id.interior_entity != u32::MAX {
             let mlo = editor.entity_def(rf_editor::EntityId { interior_entity: u32::MAX, ..id });
             let name = mlo.map(|d| hashes.name(d.hash("archetypeName"))).unwrap_or_default();
