@@ -10,9 +10,12 @@ It is early work. Today:
   from XML, matching the C# RedForge;
 - the app opens the game, browses its files and shows models, textures and XML;
 - the world map streams the game's map around a free camera (View → World map),
-  with its LODs, interiors, terrain and time of day; a ymap opens on its own.
+  with its LODs, interiors, terrain and time of day; a ymap opens on its own;
+- entities can be selected, moved, rotated, scaled, edited in Properties,
+  duplicated, copied, deleted and placed, with undo; edited ymaps and ytyps
+  are saved with "Save as…" in Properties.
 
-The editor comes in later milestones.
+Projects (`.rfproj`), RedM export and the other panes come in later milestones.
 
 ## Running it
 
@@ -23,8 +26,27 @@ cargo run --release -p rf-app
 It asks for the game folder the first time (or takes `REDFORGE_GAME_DIR`), and
 keeps it in `RedForge.Settings.ini` in the user's config folder.
 
-In the map: drag with a mouse button to look around, WASD to move, Q/E for
-down/up, Shift to go faster, the wheel to change speed. "Go to…" jumps to a town.
+In the map: drag with the mouse to look around, WASD to move, R/F for up/down,
+Shift to go faster, the wheel to change speed. "Go to…" jumps to a town.
+
+Editing (the keys are the C# RedForge's):
+
+| | |
+|---|---|
+| Right click (or click) | Select what's under the mouse; with Ctrl, add or remove it |
+| Q, E, toolbar | Move, rotate (Scale and Place are in the toolbar); V back to selecting |
+| `.` | Gizmo along the world's or the object's axes |
+| Shift at the start of a gizmo drag | Drag copies |
+| Delete, Ctrl+D, Ctrl+C, Ctrl+V | Delete, duplicate, copy, paste (into the ymap chosen in Properties) |
+| Ctrl+Z, Ctrl+Y | Undo, redo |
+| Home | Look at the selection |
+| Esc | Clear the selection; leave the Place tool |
+
+Editing an entity of a game ymap makes that ymap edited: the map shows the
+edited data from then on. Deleting fixes the LOD indices (`parentIndex`,
+`numChildren`) in the ymap, its parent and its children, and refuses entities
+that still have LOD children. Interior entities are edited in their interior's
+ytyp, so every placement of that interior changes.
 
 For checking the app without a screen, it can open something, take a screenshot
 of its window and quit:
@@ -35,7 +57,9 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 ```
 
 `REDFORGE_OPEN` is a game path (a model, texture or ymap), `world`,
-`world:<place>` or `world:x,y,z[,yaw,pitch]`.
+`world:<place>` or `world:x,y,z[,yaw,pitch]`. `REDFORGE_SELECT_CENTRE=1`
+selects what's in the middle of the world map before the screenshot, and
+`REDFORGE_TEST_DRAG=1` then drags the gizmo with made-up mouse events.
 
 ## Crates
 
@@ -44,6 +68,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | `rf-formats` | The game's file formats as plain data: RPF8 archives; RSC8 resources (ydr, ydd, yft, ytd, ybn, ycd, yad, yld, yed, ynv, yfd, ypmd, yldb, yvr, ywr); metadata (ymap, ytyp, ymt, PSO, RBF); fxdb; DDS. No rendering, no UI. |
 | `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes, texture dictionary relationships (GTXD, HD bindings). |
 | `rf-world` | The world: map nodes, ymaps and their entities, the LOD tree, interiors, cull boxes and map states, streamed around a camera. |
+| `rf-editor` | The editor: the ymaps and ytyps being edited, the selection, undo and redo, LOD-safe deletes, saving. No UI. |
 | `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain). |
 | `rf-app` | The `redforge` app: egui, with Game Files, the model, texture and XML viewers, and the map. |
 | `rf-cli` | The `rf` command: list, extract and check game files. |
