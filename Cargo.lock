@@ -3721,6 +3721,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rf-bridge"
+version = "0.1.0"
+dependencies = [
+ "glam 0.34.2",
+ "log",
+ "rf-formats",
+ "rf-game",
+ "rf-world",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rf-cli"
 version = "0.1.0"
 dependencies = [
