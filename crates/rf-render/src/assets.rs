@@ -125,8 +125,15 @@ impl DictionaryTextures {
         hashes: &HashIndex,
         model_path: &str,
     ) -> Self {
+        Self::from_files(ctx, fs, hashes, &related_dictionaries(fs, index, model_path))
+    }
+
+    /// Loads texture dictionaries, best first: a texture is taken from the first
+    /// that has it. For the ones the game uses for a model, see `rf_game`'s
+    /// `GameData::txds_for_piece`.
+    pub fn from_files(ctx: GpuContext, fs: &Rpf8FileSystem, hashes: &HashIndex, files: &[FileRef]) -> Self {
         let mut dicts = Vec::new();
-        for f in related_dictionaries(fs, index, model_path) {
+        for &f in files {
             match fs.extract_loose(f).map_err(rf_formats::Error::from).and_then(|d| read_texture_dictionary(&d, hashes))
             {
                 Ok(d) => dicts.push(d),

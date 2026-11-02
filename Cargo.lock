@@ -1889,6 +1889,7 @@ dependencies = [
  "log",
  "pollster",
  "rf-formats",
+ "rf-game",
  "thiserror",
  "wgpu",
 ]
