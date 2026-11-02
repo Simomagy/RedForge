@@ -3711,6 +3711,7 @@ dependencies = [
  "image",
  "log",
  "mint",
+ "rf-bridge",
  "rf-editor",
  "rf-formats",
  "rf-game",

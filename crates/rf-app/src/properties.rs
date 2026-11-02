@@ -52,9 +52,6 @@ pub struct Properties {
     pending_field: Option<(u32, f64)>,
     archetype_text: String,
     archetype_for: Option<EntityId>,
-    search: String,
-    /// Archetype names, sorted, once asked for.
-    archetypes: Option<Vec<(String, u32)>>,
     error: Option<String>,
 }
 
@@ -329,41 +326,17 @@ impl Properties {
         }
     }
 
-    /// The archetype the Place tool places, found by name.
+    /// The archetype the Place tool places (chosen in Objects).
     fn place_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools) {
         ui.heading("Place");
-        let current = tools.place_archetype.map(|a| editor.hashes().name(a));
-        ui.label(match &current {
-            Some(n) => format!("Archetype: {n}"),
-            None => "Choose an archetype, then the Place tool and click in the map.".into(),
-        });
-        ui.horizontal(|ui| {
-            ui.label("Find");
-            ui.text_edit_singleline(&mut self.search);
-        });
-        let search = self.search.trim().to_lowercase();
-        if search.len() < 2 {
-            return;
-        }
-        let list = self.archetypes.get_or_insert_with(|| {
-            let mut v: Vec<(String, u32)> = editor
-                .data()
-                .archetypes
-                .keys()
-                .map(|&h| (editor.hashes().name(h).to_lowercase(), h))
-                .filter(|(n, _)| !n.starts_with("0x"))
-                .collect();
-            v.sort();
-            v
-        });
-        for (shown, (name, h)) in list.iter().filter(|(n, _)| n.contains(&search)).enumerate() {
-            if shown == 30 {
-                ui.label(RichText::new("…").weak());
-                break;
+        match tools.place_archetype {
+            Some(a) => {
+                ui.label(format!("Archetype: {}", editor.hashes().name(a)));
             }
-            if ui.selectable_label(tools.place_archetype == Some(*h), name).clicked() {
-                tools.place_archetype = Some(*h);
-                tools.tool = crate::map::tools::Tool::Place;
+            None => {
+                ui.label(
+                    RichText::new("Choose an archetype in Objects (View → Objects), then click in the map.").weak(),
+                );
             }
         }
     }

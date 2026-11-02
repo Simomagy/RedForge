@@ -291,7 +291,7 @@ impl MapView {
                         (Tool::Move, "Move", "Move the selection (Q)"),
                         (Tool::Rotate, "Rotate", "Rotate the selection (E)"),
                         (Tool::Scale, "Scale", "Scale the selection"),
-                        (Tool::Place, "Place", "Place the archetype chosen in Properties"),
+                        (Tool::Place, "Place", "Place the archetype chosen in Objects"),
                     ] {
                         if ui.selectable_label(tools.tool == tool, label).on_hover_text(tip).clicked() {
                             tools.tool = tool;
@@ -556,7 +556,7 @@ impl MapView {
                         tools.say(e);
                     }
                 } else {
-                    tools.say("Choose an archetype to place in Properties");
+                    tools.say("Choose an archetype to place in Objects");
                 }
             } else if tools.tool == Tool::Place {
                 tools.tool = Tool::Select; // a right click leaves placing, as in the C#

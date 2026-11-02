@@ -6,6 +6,7 @@ mod browser;
 mod game;
 mod hierarchy;
 mod map;
+mod objects;
 mod project_pane;
 mod properties;
 mod settings;
