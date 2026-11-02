@@ -1,0 +1,19 @@
+[package]
+name = "rf-cli"
+description = "Command-line tools for RedForge: list, extract and inspect RDR2 game files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "rf"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+env_logger = "0.11.11"
+log = "0.4.35"
+rayon = "1.12.0"
+rf-formats.workspace = true

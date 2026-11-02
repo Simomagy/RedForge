@@ -1,0 +1,16 @@
+[package]
+name = "rf-formats"
+description = "RDR2 game file formats: RPF8 archives, RSC8 resources and metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+aes = "0.9.3"
+flate2 = "1.1.10"
+log = "0.4.35"
+oozextract = "0.5.7"
+rayon = "1.12.0"
+sha1 = "0.11.0"
+thiserror = "2.0.21"
