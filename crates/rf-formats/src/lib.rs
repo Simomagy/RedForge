@@ -4,5 +4,11 @@
 //! the game's files as plain data.
 
 pub mod dotnet;
+mod error;
+pub mod formats;
 pub mod hash;
 pub mod rpf8;
+pub mod rsc8;
+pub mod xml;
+
+pub use error::{Error, Result};

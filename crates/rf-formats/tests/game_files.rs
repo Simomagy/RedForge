@@ -15,7 +15,7 @@ fn file_system() -> Option<&'static Rpf8FileSystem> {
     static FS: OnceLock<Option<Rpf8FileSystem>> = OnceLock::new();
     FS.get_or_init(|| {
         let game = game_dir()?;
-        let mut strings = HashIndex::new();
+        let strings = HashIndex::new();
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/rdr2/strings.txt");
         strings.load_file(&path).expect("strings.txt");
         let keys = Rpf8Keys::from_game_folder(&game).expect("keys");

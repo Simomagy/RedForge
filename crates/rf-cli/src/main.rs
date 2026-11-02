@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+mod compare;
+
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
@@ -51,6 +53,10 @@ enum Command {
         /// loads them from a stream folder, instead of their decompressed data.
         #[arg(long)]
         loose: bool,
+        /// With --loose, recompress resources with deflate (as RedForge saves them)
+        /// instead of keeping the game's Oodle data.
+        #[arg(long, requires = "loose")]
+        deflate: bool,
         /// Keep the archive folder structure under the output folder.
         #[arg(long)]
         tree: bool,
@@ -70,6 +76,43 @@ enum Command {
     },
     /// Print the joaat hash of each string.
     Hash { strings: Vec<String> },
+    /// Convert loose game files to XML (textures go to a folder next to the XML).
+    Xml {
+        files: Vec<PathBuf>,
+        /// Output folder (default: next to each file).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+    /// Convert XML files (foo.ydr.xml, foo.ymap.rsc.xml, ...) back to game files.
+    FromXml {
+        files: Vec<PathBuf>,
+        /// Output folder (default: next to each file).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
+    /// Convert game files with both this port and the C# RedForge (rf-oracle) and
+    /// report every difference.
+    Compare {
+        /// File extension, e.g. ytd, ydr, ymap.
+        ext: String,
+        /// Only paths containing this text.
+        #[arg(long)]
+        filter: Option<String>,
+        /// How many files (spread over all of them).
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        /// Working folder (emptied first).
+        #[arg(long, default_value = "target/compare")]
+        work: PathBuf,
+        /// Also check writing: XML → game file, read back by the C#.
+        #[arg(long)]
+        write: bool,
+        /// The rf-oracle executable (default: built next to this one, or $REDFORGE_ORACLE).
+        #[arg(long)]
+        oracle: Option<PathBuf>,
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -91,6 +134,28 @@ fn main() -> Result<()> {
             println!("AES key found and keys decoded in {:.2?}", t.elapsed());
             println!("AES key SHA-1 verified; first bytes {:02X?}...", &keys.aes_key[..4]);
             Ok(())
+        }
+        Command::Xml { files, out } => {
+            let strings = load_strings(&cli)?;
+            convert_files(files, out.as_deref(), &strings, true)
+        }
+        Command::FromXml { files, out } => {
+            let strings = load_strings(&cli)?;
+            convert_files(files, out.as_deref(), &strings, false)
+        }
+        Command::Compare { ext, filter, limit, work, write, oracle, verbose } => {
+            let strings = load_strings(&cli)?;
+            let fs = open_fs_with(&cli, &strings)?;
+            let o = compare::Options {
+                ext: ext.clone(),
+                filter: filter.clone(),
+                limit: *limit,
+                work: work.clone(),
+                write: *write,
+                oracle: oracle.clone(),
+                verbose: *verbose,
+            };
+            compare::run(&fs, &strings, &o)
         }
         _ => {
             let fs = open_fs(&cli)?;
@@ -136,7 +201,7 @@ fn run_fs_command(cmd: &Command, fs: &Rpf8FileSystem) -> Result<()> {
             eprintln!("{} files", files.len());
             Ok(())
         }
-        Command::Extract { paths, filter, out, loose, tree } => {
+        Command::Extract { paths, filter, out, loose, deflate, tree } => {
             let mut targets: Vec<FileRef> = Vec::new();
             for p in paths {
                 targets.push(fs.find(p).with_context(|| format!("not found: {p}"))?);
@@ -168,7 +233,11 @@ fn run_fs_command(cmd: &Command, fs: &Rpf8FileSystem) -> Result<()> {
                 let path = fs.path(f);
                 let rel = if *tree { path.clone() } else { path.rsplit('/').next().unwrap_or(&path).to_owned() };
                 let dest = out.join(&rel);
-                let result = if *loose { fs.extract_loose(f) } else { fs.extract(f) };
+                let result = match (*loose, *deflate) {
+                    (true, true) => fs.extract_loose_deflate(f),
+                    (true, false) => fs.extract_loose(f),
+                    _ => fs.extract(f),
+                };
                 let result = result.map_err(anyhow::Error::from).and_then(|data| {
                     if let Some(parent) = dest.parent() {
                         std::fs::create_dir_all(parent)?;
@@ -282,7 +351,7 @@ fn run_fs_command(cmd: &Command, fs: &Rpf8FileSystem) -> Result<()> {
             }
             Ok(())
         }
-        Command::Keys | Command::Hash { .. } => unreachable!(),
+        _ => unreachable!(),
     }
 }
 
@@ -307,27 +376,82 @@ fn data_file(rel: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-fn open_fs(cli: &Cli) -> Result<Rpf8FileSystem> {
-    let game = game_folder(cli)?;
+fn load_strings(cli: &Cli) -> Result<HashIndex> {
     let strings_path = match &cli.strings {
         Some(p) => p.clone(),
         None => data_file("rdr2/strings.txt").context("strings.txt not found: pass --strings")?,
     };
-
     let t = Instant::now();
-    let mut strings = HashIndex::new();
+    let strings = HashIndex::new();
     let n = strings.load_file(&strings_path).with_context(|| format!("reading {}", strings_path.display()))?;
     log::info!("{n} strings loaded in {:.2?}", t.elapsed());
+    Ok(strings)
+}
 
+fn open_fs(cli: &Cli) -> Result<Rpf8FileSystem> {
+    let strings = load_strings(cli)?;
+    open_fs_with(cli, &strings)
+}
+
+fn open_fs_with(cli: &Cli, strings: &HashIndex) -> Result<Rpf8FileSystem> {
+    let game = game_folder(cli)?;
     let t = Instant::now();
     let keys = Rpf8Keys::from_game_folder(&game)?;
     log::info!("keys decoded in {:.2?}", t.elapsed());
 
     let t = Instant::now();
-    let fs = Rpf8FileSystem::open(&game, keys, &strings)?;
+    let fs = Rpf8FileSystem::open(&game, keys, strings)?;
     log::info!("{} archives, {} files indexed in {:.2?}", fs.archives.len(), fs.file_count(), t.elapsed());
     for e in &fs.errors {
         log::warn!("{}: {}", e.path, e.error);
     }
     Ok(fs)
+}
+
+/// `rf xml` and `rf from-xml`.
+fn convert_files(files: &[PathBuf], out: Option<&Path>, strings: &HashIndex, to_xml: bool) -> Result<()> {
+    use rf_formats::formats::{self, Kind, XmlContext, externals_folder};
+    let mut failed = 0;
+    for file in files {
+        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let dir = out.map(Path::to_owned).unwrap_or_else(|| file.parent().map(Path::to_owned).unwrap_or_default());
+        let result = (|| -> Result<PathBuf> {
+            std::fs::create_dir_all(&dir)?;
+            if to_xml {
+                let data = std::fs::read(file)?;
+                let kind = Kind::of_file(&name, &data);
+                let folder = kind.filter(|k| k.has_folder()).map(|_| externals_folder(&dir, &name));
+                let cx = XmlContext { hashes: strings, folder };
+                let xml = formats::to_xml(&name, &data, &cx)?;
+                let dest = dir.join(kind.map(|k| k.xml_file_name(&name)).unwrap_or_else(|| format!("{name}.xml")));
+                std::fs::write(&dest, xml)?;
+                Ok(dest)
+            } else {
+                let xml = std::fs::read_to_string(file)?;
+                let base = name.strip_suffix(".xml").unwrap_or(&name);
+                let base = base
+                    .strip_suffix(".rsc")
+                    .or(base.strip_suffix(".pso"))
+                    .or(base.strip_suffix(".rbf"))
+                    .unwrap_or(base);
+                let src_dir = file.parent().map(Path::to_owned).unwrap_or_default();
+                let cx = XmlContext { hashes: strings, folder: Some(externals_folder(&src_dir, base)) };
+                let data = formats::from_xml(&name, &xml, &cx)?;
+                let dest = dir.join(base);
+                std::fs::write(&dest, data)?;
+                Ok(dest)
+            }
+        })();
+        match result {
+            Ok(dest) => println!("{} -> {}", file.display(), dest.display()),
+            Err(e) => {
+                failed += 1;
+                eprintln!("{}: {e:#}", file.display());
+            }
+        }
+    }
+    if failed > 0 {
+        bail!("{failed} of {} files failed", files.len());
+    }
+    Ok(())
 }

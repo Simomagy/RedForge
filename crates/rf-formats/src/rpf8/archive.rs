@@ -170,7 +170,7 @@ impl Rpf8Archive {
 
 /// An entry's path inside its archive, `/`-separated.
 fn entry_name(e: &Rpf8Entry, strings: &HashIndex) -> String {
-    match strings.get(e.name_hash) {
+    strings.with(e.name_hash, |name| match name {
         Some(name) => {
             let name = name.replace('\\', "/");
             if name.rsplit('/').next().is_some_and(|n| n.contains('.')) {
@@ -180,5 +180,5 @@ fn entry_name(e: &Rpf8Entry, strings: &HashIndex) -> String {
             }
         }
         None => format!("0x{:X}.{}", e.name_hash, e.extension()),
-    }
+    })
 }

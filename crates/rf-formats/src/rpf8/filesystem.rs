@@ -152,6 +152,17 @@ impl Rpf8FileSystem {
         self.archive(f).extract_loose(self.file_of(f), f.entry as usize, &self.keys)
     }
 
+    /// A resource as a loose file compressed with deflate, the way RedForge saves
+    /// them; other files are just decompressed.
+    pub fn extract_loose_deflate(&self, f: FileRef) -> Result<Vec<u8>, Rpf8Error> {
+        let e = *self.entry(f);
+        let data = self.extract(f)?;
+        if !e.is_resource() {
+            return Ok(data);
+        }
+        Ok(crate::rsc8::write_loose(e.virtual_flags, e.physical_flags, &data))
+    }
+
     /// The archive an `.rpf` entry opens as, if it was read.
     pub fn child_archive(&self, f: FileRef) -> Option<usize> {
         self.archives.iter().position(|a| a.parent == Some((f.archive as usize, f.entry as usize)))
