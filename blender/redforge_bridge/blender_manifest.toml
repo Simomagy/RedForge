@@ -1,0 +1,18 @@
+schema_version = "1.0.0"
+
+id = "redforge_bridge"
+version = "0.1.0"
+name = "RedForge Bridge"
+tagline = "Edit RedForge's map models in Blender and send them back live"
+maintainer = "Prysma Studio"
+type = "add-on"
+
+tags = ["Import-Export"]
+
+blender_version_min = "5.0.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+network = "Connects to RedForge running on this computer"
+files = "Imports and exports models through Sollumz RDR"
