@@ -68,7 +68,7 @@ mod geometry;
 mod sampler;
 mod shader;
 mod skeleton;
-mod util;
+pub(crate) mod util;
 mod vertex;
 
 pub use drawable::{Drawable, DrawableBase, DrawableDictionary, DrawableLod, DrawableModel};
