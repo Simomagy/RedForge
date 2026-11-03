@@ -156,6 +156,9 @@ pub struct RedForgeApp {
     from_others: Option<Receiver<PathBuf>>,
     /// Files are dragged over the window (Wayland, where egui doesn't say).
     dragging: bool,
+    /// The drags over the window on Wayland, which winit doesn't report.
+    #[cfg(target_os = "linux")]
+    wayland_drops: Option<Receiver<crate::wayland_drop::WaylandDrop>>,
 }
 
 /// The setting that's set once the tour was seen (or skipped).
@@ -221,6 +224,8 @@ impl RedForgeApp {
                 crate::instance::listen(move || c.request_repaint())
             },
             dragging: std::env::var("REDFORGE_DROP_HOVER").is_ok(),
+            #[cfg(target_os = "linux")]
+            wayland_drops: crate::wayland_drop::start(cc),
         };
         // `REDFORGE_OPEN=folder`: the game folder's dialog, for its screenshot.
         if let Some(f) = folder.filter(|_| app.auto.as_ref().is_none_or(|a| a.open != "folder")) {
@@ -331,8 +336,9 @@ impl RedForgeApp {
     }
 
     /// The projects from outside: handed over by another RedForge (which
-    /// brings this one to the front), or dropped on the window, with a card
-    /// while files are dragged over it. They open once the game is loaded.
+    /// brings this one to the front), or dropped on the window (egui's drops
+    /// on X11 and Windows, ours on Wayland), with a card while files are
+    /// dragged over it. They open once the game is loaded.
     fn take_projects(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.from_others {
             while let Ok(file) = rx.try_recv() {
@@ -347,6 +353,8 @@ impl RedForgeApp {
             let dropped: Vec<PathBuf> = i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect();
             (hovered, dropped)
         });
+        #[cfg(target_os = "linux")]
+        let dropped = self.wayland_drops(dropped);
         if !dropped.is_empty() {
             match dropped.into_iter().find(|f| is_project(f)) {
                 Some(file) => self.incoming = Some(file),
@@ -360,6 +368,22 @@ impl RedForgeApp {
         // at the drop.
         let known: Vec<&PathBuf> = hovered.iter().flatten().collect();
         drop_card(ctx, known.is_empty() || known.iter().any(|f| is_project(f)));
+    }
+
+    /// What Wayland's drags did since the last frame: whether files are over
+    /// the window, and the files dropped (added to `dropped`).
+    #[cfg(target_os = "linux")]
+    fn wayland_drops(&mut self, mut dropped: Vec<PathBuf>) -> Vec<PathBuf> {
+        use crate::wayland_drop::WaylandDrop;
+        if let Some(rx) = &self.wayland_drops {
+            while let Ok(event) = rx.try_recv() {
+                match event {
+                    WaylandDrop::Hover(on) => self.dragging = on,
+                    WaylandDrop::Files(files) => dropped.extend(files),
+                }
+            }
+        }
+        dropped
     }
 
     /// The game folder's dialog: a card with the installs the launchers
