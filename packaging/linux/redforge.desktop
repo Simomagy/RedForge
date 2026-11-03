@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=RedForge
+GenericName=RedM Map Editor
+Comment=Edit Red Dead Redemption 2 maps for RedM
+Exec=redforge
+Icon=redforge
+Terminal=false
+Categories=Development;Graphics;3DGraphics;
+Keywords=RedM;RDR2;map;ymap;ytyp;editor;
+StartupWMClass=redforge

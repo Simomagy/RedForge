@@ -1,0 +1,2 @@
+// The Windows exe's icon (build.rs compiles this for Windows targets).
+1 ICON "redforge.ico"

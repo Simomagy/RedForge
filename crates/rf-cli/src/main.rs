@@ -363,8 +363,9 @@ fn game_folder(cli: &Cli) -> Result<PathBuf> {
     cli.game.clone().context("no game folder: pass --game or set REDFORGE_GAME_DIR")
 }
 
-/// Finds a data file shipped with RedForge: next to the executable, in the source
-/// tree when running from `target/`, or in the current folder.
+/// Finds a data file shipped with RedForge: next to the executable, in
+/// `../share/redforge` from it (the Linux packages), in the source tree when
+/// running from `target/`, or in the current folder.
 fn data_file(rel: &str) -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(dir) = std::env::var("REDFORGE_DATA") {
@@ -374,6 +375,7 @@ fn data_file(rel: &str) -> Option<PathBuf> {
         && let Some(dir) = exe.parent()
     {
         candidates.push(dir.join("data").join(rel));
+        candidates.push(dir.join("../share/redforge/data").join(rel));
         candidates.push(dir.join("../../data").join(rel));
     }
     candidates.push(Path::new("data").join(rel));

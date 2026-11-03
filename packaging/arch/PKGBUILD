@@ -1,0 +1,46 @@
+# Builds RedForge from this checkout: `makepkg -si` in this folder.
+pkgname=redforge
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A map editor for RedM: Red Dead Redemption 2's maps, models and textures"
+arch=('x86_64')
+license=('MIT OR Apache-2.0')
+depends=('gcc-libs' 'glibc' 'vulkan-icd-loader' 'xdg-desktop-portal')
+optdepends=(
+  'blender: the Blender bridge add-on (in /usr/share/redforge/blender)'
+)
+makedepends=('cargo')
+options=('!lto' '!debug')
+
+_root="$(realpath "$startdir/../..")"
+
+pkgver() {
+  sed -n 's/^version = "\(.*\)"/\1/p' "$_root/Cargo.toml" | head -1
+}
+
+prepare() {
+  cd "$_root"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_root"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo build --frozen --release -p rf-app -p rf-cli
+}
+
+package() {
+  cd "$_root"
+  install -Dm755 "$srcdir/target/release/redforge" "$pkgdir/usr/bin/redforge"
+  install -Dm755 "$srcdir/target/release/rf" "$pkgdir/usr/bin/rf"
+  install -Dm644 data/rdr2/strings.txt "$pkgdir/usr/share/redforge/data/rdr2/strings.txt"
+  cp -r blender "$pkgdir/usr/share/redforge/blender"
+  find "$pkgdir/usr/share/redforge/blender" -name '__pycache__' -prune -exec rm -rf {} +
+  install -Dm644 packaging/linux/redforge.desktop "$pkgdir/usr/share/applications/redforge.desktop"
+  for size in 16 24 32 48 64 96 128 256 512; do
+    install -Dm644 "packaging/linux/icons/redforge-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/redforge.png"
+  done
+  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname"
+  install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname"
+}

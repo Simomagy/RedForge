@@ -71,7 +71,9 @@ impl Game {
     }
 }
 
-/// The strings file next to the executable or in the source tree.
+/// The strings file next to the executable (as the Windows installer puts
+/// it), in `../share/redforge` from it (as the Linux packages do), or in the
+/// source tree.
 fn strings_file() -> Option<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(dir) = std::env::var("REDFORGE_DATA") {
@@ -81,6 +83,7 @@ fn strings_file() -> Option<PathBuf> {
         && let Some(dir) = exe.parent()
     {
         candidates.push(dir.join("data/rdr2/strings.txt"));
+        candidates.push(dir.join("../share/redforge/data/rdr2/strings.txt"));
         candidates.push(dir.join("../../data/rdr2/strings.txt"));
     }
     candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/rdr2/strings.txt"));

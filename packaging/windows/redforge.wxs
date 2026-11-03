@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Windows installer, built with wixl (msitools) by build-msi.sh: RedForge in
+     Program Files, a Start menu and a desktop shortcut, the strings file and the
+     Blender add-on next to it. The UpgradeCode stays the same across versions, so
+     a newer MSI replaces an older one. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="RedForge" Language="1033" Version="$(var.Version)" Manufacturer="Prysma Studio"
+           UpgradeCode="5838D2EA-60C5-44CA-8EAE-130DC1BB9D7C">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+             Description="RedForge, a map editor for RedM" Manufacturer="Prysma Studio" />
+    <MajorUpgrade DowngradeErrorMessage="A newer RedForge is already installed." />
+    <Media Id="1" Cabinet="redforge.cab" EmbedCab="yes" />
+
+    <Icon Id="RedForgeIcon" SourceFile="$(var.Assets)/redforge.ico" />
+    <Property Id="ARPPRODUCTICON" Value="RedForgeIcon" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="RedForge">
+          <Component Id="App" Guid="785978DE-914E-4B87-AEE0-3C78BA293294" Win64="yes">
+            <File Id="RedForgeExe" Name="redforge.exe" Source="$(var.Bin)/redforge.exe" KeyPath="yes" />
+          </Component>
+          <Component Id="Cli" Guid="D610976E-EA43-42F3-80AE-B4BCE125BA56" Win64="yes">
+            <File Id="RfExe" Name="rf.exe" Source="$(var.Bin)/rf.exe" KeyPath="yes" />
+          </Component>
+          <Component Id="Licenses" Guid="F48C9328-0520-4414-A841-8BA44FDD97CF" Win64="yes">
+            <File Id="LicenseMit" Name="LICENSE-MIT.txt" Source="$(var.Root)/LICENSE-MIT" KeyPath="yes" />
+            <File Id="LicenseApache" Name="LICENSE-APACHE.txt" Source="$(var.Root)/LICENSE-APACHE" />
+            <File Id="Readme" Name="README.md" Source="$(var.Root)/README.md" />
+          </Component>
+          <Directory Id="DataDir" Name="data">
+            <Directory Id="DataRdr2Dir" Name="rdr2">
+              <Component Id="Strings" Guid="73996843-2FE2-414D-92D5-347872BF7C0E" Win64="yes">
+                <File Id="StringsTxt" Name="strings.txt" Source="$(var.Root)/data/rdr2/strings.txt" KeyPath="yes" />
+              </Component>
+            </Directory>
+          </Directory>
+          <Directory Id="BlenderDir" Name="blender">
+            <Directory Id="BridgeDir" Name="redforge_bridge">
+              <Component Id="Bridge" Guid="E8D44D34-CE24-4FA2-A889-1E45B50128AC" Win64="yes">
+                <File Id="BridgeInit" Name="__init__.py" Source="$(var.Root)/blender/redforge_bridge/__init__.py" KeyPath="yes" />
+                <File Id="BridgeLink" Name="link.py" Source="$(var.Root)/blender/redforge_bridge/link.py" />
+                <File Id="BridgeManifest" Name="blender_manifest.toml" Source="$(var.Root)/blender/redforge_bridge/blender_manifest.toml" />
+              </Component>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Component Id="StartMenuShortcut" Guid="E63C09E4-76AE-43E9-982C-3F45E188ACA8">
+          <Shortcut Id="StartMenuRedForge" Name="RedForge" Description="A map editor for RedM"
+                    Target="[INSTALLDIR]redforge.exe" WorkingDirectory="INSTALLDIR" Icon="RedForgeIcon" />
+          <RegistryValue Root="HKCU" Key="Software\Prysma Studio\RedForge" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+      <Directory Id="DesktopFolder">
+        <Component Id="DesktopShortcut" Guid="A997FE7C-267C-4AD2-85CA-FEC72064874F">
+          <Shortcut Id="DesktopRedForge" Name="RedForge" Description="A map editor for RedM"
+                    Target="[INSTALLDIR]redforge.exe" WorkingDirectory="INSTALLDIR" Icon="RedForgeIcon" />
+          <RegistryValue Root="HKCU" Key="Software\Prysma Studio\RedForge" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </Directory>
+
+    <Feature Id="Main" Title="RedForge" Level="1">
+      <ComponentRef Id="App" />
+      <ComponentRef Id="Cli" />
+      <ComponentRef Id="Licenses" />
+      <ComponentRef Id="Strings" />
+      <ComponentRef Id="Bridge" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+    </Feature>
+  </Product>
+</Wix>

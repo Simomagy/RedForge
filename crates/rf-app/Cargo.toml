@@ -10,6 +10,9 @@ authors.workspace = true
 name = "redforge"
 path = "src/main.rs"
 
+[build-dependencies]
+embed-resource = "3"
+
 [dependencies]
 anyhow = "1.0.104"
 dirs = "7.0.0"

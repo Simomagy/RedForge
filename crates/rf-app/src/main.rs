@@ -1,5 +1,8 @@
 //! RedForge: a map editor for RedM.
 
+// No console window on Windows, but in debug builds (for the logs).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod blender;
 mod browser;

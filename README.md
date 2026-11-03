@@ -49,6 +49,16 @@ cargo run --release -p rf-app
 It asks for the game folder the first time (or takes `REDFORGE_GAME_DIR`), and
 keeps it in `RedForge.Settings.ini` in the user's config folder.
 
+### Installing
+
+- Arch Linux: `makepkg -si` in `packaging/arch` builds this checkout into a
+  package (`redforge` and `rf` in `/usr/bin`, the strings file and the Blender
+  add-on in `/usr/share/redforge`, a desktop entry and icons).
+- Windows: `packaging/windows/build-msi.sh` builds the MSI from Linux (it needs
+  `cargo-xwin` and `wixl`, from msitools) into `target/msi/`. It installs into
+  Program Files with Start menu and desktop shortcuts; a newer MSI replaces an
+  older one.
+
 In the map: drag with the mouse to look around, WASD to move, R/F for up/down,
 Shift to go faster, the wheel to change speed. "Go to…" jumps to a town. The
 toolbar sets the hour and weather; the exposure (in EV) adds to the one the
