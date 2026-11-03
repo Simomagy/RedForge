@@ -194,7 +194,6 @@ impl Geometry {
         self.add_cap(Vec3::ZERO, 1.0, Quat::IDENTITY, 0.0, angle, colour);
     }
 
-    #[allow(dead_code)] // for the collisions' shapes
     pub fn add_cylinder(&mut self, a: Vec3, b: Vec3, radius: f32, colour: [u8; 4]) {
         self.add_tube(a, b, radius, true, colour);
     }

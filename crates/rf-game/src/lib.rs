@@ -57,6 +57,7 @@ mod files;
 mod init;
 pub mod lights;
 mod manifest;
+pub mod materials;
 pub mod peds;
 pub mod timecycle;
 
