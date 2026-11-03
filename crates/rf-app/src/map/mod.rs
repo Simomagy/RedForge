@@ -646,7 +646,7 @@ impl MapView {
         if tools.mode != helpers::Mode::Entity
             && let (Source::World, Some(ed)) = (&self.source, editor.as_deref())
         {
-            let c = helpers::Collect { gpu, game: &self.game, world: &ed.world };
+            let c = helpers::Collect { gpu, game: &self.game, world: &ed.world, eye: camera.eye };
             self.helpers.collect(tools.mode, &c);
             for p in &self.helpers.parts {
                 if !frustum.sphere_visible(p.centre, p.radius) {

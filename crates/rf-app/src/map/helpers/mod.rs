@@ -6,7 +6,11 @@
 //! colour, and what Properties shows of it. Each mode's source makes them for
 //! what's streamed around the camera ([`Helpers::collect`]).
 
+mod amv;
 mod maps;
+mod navmesh;
+mod physics;
+mod scenario;
 pub mod shapes;
 
 use std::sync::Arc;
@@ -135,6 +139,9 @@ pub struct Collect<'a> {
     pub gpu: &'a Gpu,
     pub game: &'a Arc<Game>,
     pub world: &'a rf_world::World,
+    /// The camera, which the streamed modes load around.
+    #[allow(dead_code)]
+    pub eye: Vec3,
 }
 
 /// The modes' sources, and the parts of the last [`Helpers::collect`].
@@ -142,6 +149,10 @@ pub struct Collect<'a> {
 pub struct Helpers {
     pub shapes: Shapes,
     maps: maps::MapParts,
+    physics: physics::Physics,
+    navmesh: navmesh::Navmesh,
+    scenario: scenario::Scenario,
+    amv: amv::AmbientMasks,
     pub parts: Vec<HelperPart>,
 }
 
@@ -153,7 +164,11 @@ impl Helpers {
             Mode::Occlusion | Mode::InteriorInstance | Mode::TimeCycleModifier => {
                 self.maps.collect(mode, c, &mut self.shapes, &mut self.parts)
             }
-            _ => {}
+            Mode::Physics => self.physics.collect(c, &mut self.shapes, &mut self.parts),
+            Mode::Navmesh => self.navmesh.collect(c, &mut self.shapes, &mut self.parts),
+            Mode::Scenario => self.scenario.collect(c, &mut self.shapes, &mut self.parts),
+            Mode::AmbientMaskVolume => self.amv.collect(c, &mut self.shapes, &mut self.parts),
+            Mode::Entity | Mode::Light | Mode::Skeleton => {}
         }
         &self.parts
     }
