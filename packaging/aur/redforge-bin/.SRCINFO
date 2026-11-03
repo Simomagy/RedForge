@@ -1,0 +1,20 @@
+pkgbase = redforge-bin
+	pkgdesc = A map editor for RedM: Red Dead Redemption 2's maps, models and textures (prebuilt)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/OWNER/redforge
+	arch = x86_64
+	license = MIT OR Apache-2.0
+	depends = gcc-libs
+	depends = glibc
+	depends = vulkan-icd-loader
+	depends = xdg-desktop-portal
+	optdepends = blender: the Blender bridge add-on (in /usr/share/redforge/blender)
+	provides = redforge
+	conflicts = redforge
+	options = !strip
+	options = !debug
+	source = https://github.com/OWNER/redforge/releases/download/v0.1.0/redforge-0.1.0-x86_64-linux.tar.gz
+	sha256sums = SKIP
+
+pkgname = redforge-bin

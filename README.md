@@ -1,238 +1,188 @@
-# RedForge
+<p align="center">
+  <img src="docs/images/icon.png" width="112" alt="">
+</p>
 
-A map editor for **RedM** (Red Dead Redemption 2), by Prysma Studio. This is the
-Rust rewrite of the C#/WinUI RedForge, which grew out of CodeX. It runs on Linux
-and Windows.
+<h1 align="center">RedForge</h1>
 
-It is early work. Today:
+<p align="center">
+  <b>A map editor for RedM</b>: Red Dead Redemption 2's world, models and textures, on Windows and Linux.
+</p>
 
-- every file format RedForge handles can be read, written and converted to and
-  from XML, matching the C# RedForge;
-- the app opens the game, browses its files and shows models, textures and XML;
-- the world map streams the game's map around a free camera (View → World map),
-  with its LODs, interiors, terrain, instanced trees, bushes, rocks and grass,
-  and time of day; a ymap opens on its own;
-- entities can be selected, moved, rotated, scaled, edited in Properties,
-  duplicated, copied, deleted and placed, with undo;
-- projects (`.rfproj`, as the C# RedForge's) hold the edited ymaps and ytyps
-  and the mod's own models, textures and archetypes, and export as a RedM
-  resource;
-- the Objects pane lists the archetypes with 3D thumbnails, Hierarchy the
-  objects of a ymap or interior;
-- the Blender add-on (`blender/redforge_bridge`) edits the selection's models
-  in Blender and sends them back;
-- the renderer is deferred as the C# RedForge's: cascaded sun shadows, SSAO,
-  the sky's atmosphere and environment lighting, the map's lights, eye
-  adaptation, bloom, lens flares and RDR2's tone curve, all from the game's
-  timecycle for the hour and weather;
-- clip dictionaries play on peds and animals; any file shows as hex.
+<p align="center">
+  <img alt="Platforms: Windows and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-8b1a10">
+  <img alt="License: MIT or Apache-2.0" src="https://img.shields.io/badge/license-MIT%20or%20Apache--2.0-blue">
+  <img alt="Made with Rust" src="https://img.shields.io/badge/made%20with-Rust-orange">
+</p>
 
-Beyond the C#, the shaders follow RDR2's own where the C# folded them into its
-default one:
+![RedForge's world map at Valentine](docs/images/world.jpg)
 
-- rivers, lakes and waterfalls: ripples carried along each region's flow map,
-  the riverbed bent by them and fading into the water's colour with depth,
-  reflections, the rapids' foam and the swamps' pollen;
-- the sky's sun, moon and stars (from `skydome.ytd`), turning with the hour;
-- window lights and other glows only in their hours (`onofftimes`), fire
-  added over the image, glass that keeps its reflections, leaves and grass lit
-  through from behind, and peds' skin read as skin rather than metal;
-- the moon as bright as the game has it (`visualsettings.dat`'s 1; the C#'s
-  default is a real moon's tenth of that).
+RedForge streams the game's map around you and lets you change it: move, add
+and remove entities, interiors, trees and grass, place any object of the game
+or of your mod, and export the result as a RedM resource. It reads and writes
+the game's file formats exactly as RedForge 1.x did, converts them to and from
+the CodeX/Sollumz XML, and works hand in hand with Blender.
 
-## Running it
+This is RedForge 2.0, rewritten in Rust; see the [changelog](CHANGELOG.md).
 
-```sh
-cargo run --release -p rf-app
-```
+## Features
 
-It asks for the game folder the first time (or takes `REDFORGE_GAME_DIR`), and
-keeps it in `RedForge.Settings.ini` in the user's config folder.
+- **The world as the game draws it**: the streamed map with its LODs,
+  interiors, terrain, water, instanced trees and grass, lights, shadows, sky
+  and weather, at any hour.
+- **Editing with undo**: select, move, rotate, scale, duplicate, copy, delete,
+  edit every field in Properties; LOD links kept right.
+- **Placing**: every archetype of the game and of your mod, with 3D
+  thumbnails; its model shows where a click will put it.
+- **Selection modes**: collisions, navmeshes, occluders, interiors' rooms and
+  portals, time cycle modifiers, ambient mask volumes, scenario points,
+  lights and skeletons, to see and inspect.
+- **Projects**: `.rfproj` files (compatible with RedForge 1.x) hold your
+  ymaps, ytyps, models and textures, and export as a ready-to-stream RedM
+  resource.
+- **Blender**: send the selection to Blender, edit it, and see it back on the
+  map immediatly.
+- **Viewers** for models, textures, animations (played on peds and animals),
+  XML and hex, and `rf`, a command-line tool for the game's archives.
 
-### Installing
-
-- Arch Linux: `makepkg -si` in `packaging/arch` builds this checkout into a
-  package (`redforge` and `rf` in `/usr/bin`, the strings file and the Blender
-  add-on in `/usr/share/redforge`, a desktop entry and icons).
-- Windows: `packaging/windows/build-msi.sh` builds the MSI from Linux (it needs
-  `cargo-xwin` and `wixl`, from msitools) into `target/msi/`. It installs into
-  Program Files with Start menu and desktop shortcuts; a newer MSI replaces an
-  older one.
-
-In the map: drag with the mouse to look around, WASD to move, R/F for up/down,
-Shift to go faster, the wheel to change speed. "Go to…" jumps to a town. The
-toolbar sets the hour and weather; the exposure (in EV) adds to the one the
-image adapts to, as the C#'s `Render.HDR.Exposure`.
-
-Editing (the keys are the C# RedForge's):
+## Install
 
 | | |
 |---|---|
-| Right click (or click) | Select what's under the mouse; with Ctrl, add or remove it |
+| **Windows 10/11** | The `.msi` from the [releases](../../releases). Windows may warn about an unknown publisher: the installer isn't signed. |
+| **Arch Linux** | `redforge-bin` or `redforge-git` from the AUR (as soon as it takes new accounts again), or `makepkg -si` in `packaging/arch` from a clone. |
+| **Debian, Ubuntu** | The `.deb` from the releases: `sudo apt install ./redforge_*_amd64.deb` |
+| **Any Linux** | The AppImage from the releases (`chmod +x`, then run it), or the Flatpak bundle: `flatpak install --user RedForge-*.flatpak` |
+| **From source** | See [building](#building-from-source). |
+
+You need **Red Dead Redemption 2** installed (Steam, Rockstar Games Launcher
+or Epic): RedForge reads its files and never changes them. The GPU needs
+Vulkan (Linux) or DirectX 12 / Vulkan (Windows).
+
+## Getting started
+
+1. Start RedForge and choose the game folder, the one with `RDR2.exe`. The
+   first time, a short tour shows what each panel does (Help > Tour of the
+   panels shows it again).
+2. Click **Open the world map**, or a town under it.
+3. Look around by dragging the mouse; WASD moves, R and F go up and down,
+   Shift goes faster, the wheel sets the speed. "Go to…" jumps to a town.
+4. Right click (or click) to select; Q moves, E rotates; Properties edits.
+5. **New…** in the Project pane saves your work as an `.rfproj`; Ctrl+S saves its files.
+6. **RedM resource**, under the Project pane's files, exports the resource for
+   your server (add `ensure <name>` to `server.cfg`).
+
+## Controls
+
+| | |
+|---|---|
+| Drag, WASD, R / F, Shift, wheel | Look around, move, up / down, faster, speed |
+| Right click (or click) | Select; with Ctrl, add or remove |
 | Q, E, toolbar | Move, rotate (Scale and Place are in the toolbar); V back to selecting |
 | `.` | Gizmo along the world's or the object's axes |
 | Shift at the start of a gizmo drag | Drag copies |
 | Delete, Ctrl+D, Ctrl+C, Ctrl+V | Delete, duplicate, copy, paste (into the ymap chosen in Project) |
-| Ctrl+S | Save the project's files |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
+| Ctrl+S | Save the project's files |
 | Home | Look at the selection |
 | Esc | Clear the selection; leave the Place tool |
 
-What's hovered is outlined by its shape in white, with its name under the
-mouse, and the selection in green, as the C# does.
+## Selection modes
 
-The menu at the toolbar's start is the C#'s selection mode. Every mode but
-Entity shows helpers over the map (in a layer of their own, at 85%), and
-hovers and selects them instead of the entities; Properties shows the
-selected one's fields:
+![Physics mode: the collisions, coloured by material](docs/images/physics.jpg)
+
+The menu at the start of the map's toolbar picks what you see and select.
+Every mode but Entity shows its helpers over the map; hover one for its name,
+select it for its fields in Properties.
 
 | Mode | Shows |
 |---|---|
-| Light | The entities' lights, picked by their reach (which only shows outlined) |
-| Physics | The static collisions (ybn) within 100 m and the entities' own, by material colour |
-| Navmesh | The navmeshes (ynv) within 200 m, coloured by their polygons' flags |
-| Skeleton | The bones of the entities with a skeleton |
+| Entity | The map's entities (the default) |
+| Light | The entities' lights, picked by their reach |
+| Physics | The collisions around you, the world's and the entities', by material |
+| Navmesh | The navigation meshes around you |
+| Skeleton | The bones of the entities that have one |
 | Occlusion | The ymaps' box occluders and occlude models |
-| Interior Instance | The interiors' rooms, portals and time cycle modifier spheres |
+| Interior Instance | The interiors' rooms, portals and time cycle modifiers |
 | Time Cycle Modifier | The ymaps' time cycle modifier boxes |
 | Ambient Mask Volume | The ambient mask volumes |
-| Scenario | The scenario points of the regions within 1000 m |
+| Scenario | The scenario points around you |
 
 Helpers can't be moved or edited yet.
 
-To place something, find it in Objects (beside Properties, or View → Objects):
-the search matches the names and the ytyps they're in, and the list can be
-narrowed to props, drawable dictionaries, fragments or interiors. Clicking an
-object picks the Place tool with it; its model shows under the mouse where a
-click would place it (lit and casting shadows, as the C#'s preview), and a
-click places it in the ymap chosen under "Place in" (Q/E turn it, a right
-click stops).
+## Placing objects
 
-### Projects
+![Placing a barrel from the Objects pane](docs/images/place.jpg)
 
-The Project pane (on the left, with Game Files, above the Hierarchy) makes,
-opens and saves `.rfproj` projects, read and written as the C# RedForge does
-(JSON with folders, files and export settings, paths relative to it), and
-reopens the last one at start. Its files are grouped as the C#'s (maps,
-archetypes, models, textures, collisions, other); a ymap picked there shows in
-the Hierarchy until the map's selection changes. Editing anything
-of the game puts its ymap (or an interior's ytyp) in the project, made then if
-there's none; Save all (Ctrl+S) writes the changed files next to the
-`.rfproj`. A project's own files replace the game's of the same name: models
-(ydr, ydd, yft), textures (ytd), collisions (ybn), and ytyps, whose new
-archetypes then show in Objects and can be placed. "New ymap" makes a ymap to
-place things in; the radio button by a ymap chooses where new things go.
+Find the object in **Objects** (beside Properties): the search matches names
+and the ytyps they're in, and the list narrows to props, drawable
+dictionaries, fragments or interiors. Click it, and its model follows the
+mouse on the map; a click places it in the ymap chosen under "Place in"
+(Q and E turn it, a right click stops).
 
-"RedM resource" exports the project to `<resources folder>/<name>/` with a
-`stream` folder and `fxmanifest.lua` (an existing manifest keeps its edits:
-only the info lines and what a map needs are updated), optionally on every
-save. "Generate _manifest.ymf" lists the ytyps the project's ymaps need.
+## Projects and RedM resources
 
-### Blender
+A project is your mod: the ymaps and ytyps you edit (editing anything of the
+game puts its ymap in the project) and the models, textures, collisions and
+ytyps you add, which replace the game's of the same name and show in Objects.
+The Project pane groups them by type; Save all (Ctrl+S) writes them next to
+the `.rfproj`, and RedForge reopens the last project when it starts.
 
-Install `blender/redforge_bridge` as an extension in Blender (it's the C#
-RedForge's add-on, unchanged): it connects to RedForge while both run (port
-47810, the `Bridge.Port` setting). Edit → Edit in Blender sends the selection's
-models (as Sollumz XML) and placements; the models Blender sends back go in the
-project's folder and show on the map, and moving objects in Blender moves them
-in RedForge (one undo step each).
+**RedM resource** exports the project to `<resources folder>/<name>/`, with
+a `stream` folder and an `fxmanifest.lua` (an existing manifest keeps your
+edits), on demand or on every save. **Generate _manifest.ymf** lists the
+ytyps your ymaps need.
 
-### Viewers
+## Blender
 
-A clip dictionary (ycd) opened from Game Files plays its clips on a ped or
-animal, put together from its metaped as the game does (the C#'s default
-`mp_male`, or the animal a creature's clips name), with play/pause, a time
-slider, speed and loop.
+Install `blender/redforge_bridge` (in the installed RedForge's folder, or
+`/usr/share/redforge/blender` on Linux) as an extension in Blender. While both
+run, **Edit > Edit in Blender** sends the selection's models (as Sollumz XML)
+and their placements; the models Blender sends back go in the project's folder
+and show on the map, and moving objects in Blender moves them in RedForge.
 
-The instanced trees, bushes, rocks and grass are selected like entities: they
-move, turn and scale with the gizmo or in Properties (grass only along its
-batch's box, about Z and evenly, as the game stores it), duplicate into their
-batch, delete, and copy as entities of their archetype. Their batch's box and
-population grid follow, as the C# rebuilds them before saving.
-
-Editing an entity of a game ymap makes that ymap edited: the map shows the
-edited data from then on. Deleting fixes the LOD indices (`parentIndex`,
-`numChildren`) in the ymap, its parent and its children, and refuses entities
-that still have LOD children. Interior entities are edited in their interior's
-ytyp, so every placement of that interior changes.
-
-For checking the app without a screen, it can open something, take a screenshot
-of its window and quit:
+## Command-line tool
 
 ```sh
-REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT_DELAY=25 \
-    target/release/redforge
+rf ls ymap                       # every path containing "ymap"
+rf extract --filter twi_01_strm -o out          # decompressed files
+rf extract --loose --filter twi_01_strm -o out  # as RedM loads them from stream/
+rf xml out/foo.ydr               # foo.ydr.xml, and foo/ with the DDS textures
+rf from-xml out/foo.ydr.xml      # and back
+rf hash prop_name
 ```
 
-`REDFORGE_OPEN` is a game path (a model, texture, clip dictionary or ymap; `hex:<path>` for the hex viewer), `world`,
-`world:<place>` or `world:x,y,z[,yaw,pitch]`. For a clip dictionary,
-`REDFORGE_ANIM_PED` picks the ped and `REDFORGE_ANIM_TIME` stops the clip at a
-time (seconds). `REDFORGE_SELECT_CENTRE=1`
-selects what's in the middle of the world map before the screenshot, and
-`REDFORGE_TEST_DRAG=1` then drags the gizmo with made-up mouse events.
-`REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside the world map
-with that search, and chooses the first object. `REDFORGE_SHOW_TAB=<title>`
-brings a pane to the front (Project, Hierarchy...), `REDFORGE_HOUR` sets
-the map's hour, `REDFORGE_MODE=<name>` starts in a selection mode (where
-`REDFORGE_SELECT_CENTRE` selects the helper in the middle), and
-`REDFORGE_PROJECT=<rfproj>` opens a project instead of the last one.
-`REDFORGE_HOLD_LOADING=<seconds>` keeps the loading screen up that long.
-
-## Crates
-
-| Crate | What it is |
-|---|---|
-| `rf-formats` | The game's file formats as plain data: RPF8 archives; RSC8 resources (ydr, ydd, yft, ytd, ybn, ycd, yad, yld, yed, ynv, yfd, ypmd, yldb, yvr, ywr); metadata (ymap, ytyp, ymt, PSO, RBF); fxdb; DDS. No rendering, no UI. |
-| `rf-game` | The game's data layer: DLC packs, data files, stream entries, archetypes and their lights, texture dictionary relationships (GTXD, HD bindings), peds put together from their metapeds, the timecycle; a project's files on top. |
-| `rf-world` | The world: map nodes, ymaps and their entities, the LOD tree, interiors, cull boxes and map states, streamed around a camera. |
-| `rf-editor` | The editor: projects, the ymaps and ytyps being edited, the selection, undo and redo, LOD-safe deletes, saving, the RedM export. No UI. |
-| `rf-bridge` | The Blender add-on's link: its protocol (the C#'s) over TCP, the models to and from Sollumz XML. |
-| `rf-render` | The renderer, on wgpu (Vulkan on Linux, Vulkan/DX12 on Windows) with WGSL shaders: textures, models, RDR2's materials (standard, two-layer, decals, tint palettes, terrain, water, emission by the hour, fire, glass, foliage, skin); skinned models posed by clips; deferred lighting with cascaded shadows, SSAO, point/spot/capsule lights, the sky's atmosphere and environment maps, and the HDR post-processing. |
-| `rf-app` | The `redforge` app: egui, with Game Files, the model, animation, texture, XML and hex viewers, the map, Project, Hierarchy, Properties and Objects. |
-| `rf-cli` | The `rf` command: list, extract and check game files. |
-
-## The `rf` command
-
-```sh
-cargo build --release
-export REDFORGE_GAME_DIR="/path/to/Red Dead Redemption 2"
-
-target/release/rf ls ymap                  # every path containing "ymap"
-target/release/rf ls -l van_farmhouse      # with sizes, compression, encryption, version
-target/release/rf ls --archives update_4   # archives instead of files
-target/release/rf extract --filter twi_01_strm -o out           # decompressed data
-target/release/rf extract --loose --filter twi_01_strm -o out   # as RedM loads it from stream/
-target/release/rf check --limit 20000      # decrypt + decompress a sample, report failures
-target/release/rf stats
-target/release/rf hash prop_name
-target/release/rf xml out/foo.ydr                  # loose file -> foo.ydr.xml (+ foo/ with the DDS textures)
-target/release/rf from-xml out/foo.ydr.xml         # and back
-```
-
-`rf compare <ext>` checks the port against the C# RedForge on game files (see
-[docs/PORTING.md](docs/PORTING.md)). [docs/CSHARP_BUGS.md](docs/CSHARP_BUGS.md)
-lists the C# bugs the port keeps for compatibility.
-
-Paths are `/`-separated and start from the game folder, like
+It finds the game through `REDFORGE_GAME_DIR` (or `--game`). Paths start
+from the game folder and are `/`-separated, like
 `levels_3.rpf/levels/rdr3/interiors/van_farmhouse01_int.rpf/van_03_monster.ydr`.
-Case and `\` don't matter when looking a path up.
 
-## Data files
+## Building from source
 
-- `data/rdr2/strings.txt`: the names the hashes in the game files stand for.
-  RPF8 stores no names, only hashes, so a path is only readable if its name is in
-  here; unknown ones show up as `0x<HASH>.<ext>`.
-- `crates/rf-formats/data/magic.dat`: the RPF8 cipher keys and tables, obfuscated
-  and encrypted. They are only usable with the AES key found in the user's own
-  `RDR2.exe`, which is why the game folder is needed.
-
-## Tests
+With a recent stable Rust and a Vulkan driver:
 
 ```sh
-cargo test                                          # unit tests
-REDFORGE_GAME_DIR="/path/to/Red Dead Redemption 2" cargo test   # plus tests on the real game files
+git clone <this repository>
+cd redforge
+cargo run --release -p rf-app
 ```
+
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) has the crates, the tests and how
+the packages (MSI, Arch, AUR, `.deb`, AppImage, Flatpak) are built.
+
+## Contributing
+
+Bug reports and ideas are welcome: open an issue with the bug, file format
+or feature form. Please follow the [code of conduct](CODE_OF_CONDUCT.md).
+
+## Credits
+
+RedForge 2.0 is a rewrite of RedForge 1.x (C#), which grew out of CodeX. Its
+XML is CodeX's and Sollumz's, so files go back and forth with them. Built
+with [egui](https://github.com/emilk/egui) and [wgpu](https://github.com/gfx-rs/wgpu).
+
+Red Dead Redemption 2 is Rockstar Games'. RedForge is a fan-made tool, not
+affiliated with or endorsed by Rockstar Games or Take-Two Interactive.
 
 ## License
 
-MIT OR Apache-2.0, at your option.
+MIT or Apache-2.0, at your option ([LICENSE-MIT](LICENSE-MIT),
+[LICENSE-APACHE](LICENSE-APACHE)).

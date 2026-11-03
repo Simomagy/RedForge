@@ -1,0 +1,25 @@
+# Maintainer: Prysma Studio <simomagy02@proton.me>
+# RedForge's prebuilt release (the tarball packaging/linux/build.sh makes and
+# the GitHub release carries).
+pkgname=redforge-bin
+_pkgname=redforge
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A map editor for RedM: Red Dead Redemption 2's maps, models and textures (prebuilt)"
+arch=('x86_64')
+url="https://github.com/OWNER/redforge"
+license=('MIT OR Apache-2.0')
+depends=('gcc-libs' 'glibc' 'vulkan-icd-loader' 'xdg-desktop-portal')
+optdepends=('blender: the Blender bridge add-on (in /usr/share/redforge/blender)')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+options=('!strip' '!debug')
+source=("$url/releases/download/v$pkgver/$_pkgname-$pkgver-x86_64-linux.tar.gz")
+# Replace with the release tarball's (`sha256sum` or `updpkgsums`).
+sha256sums=('SKIP')
+
+package() {
+  cp -r usr "$pkgdir/"
+  install -Dm644 "$pkgdir/usr/share/doc/$_pkgname/LICENSE-MIT" "$pkgdir/usr/share/doc/$_pkgname/LICENSE-APACHE" \
+    -t "$pkgdir/usr/share/licenses/$pkgname"
+}

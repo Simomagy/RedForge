@@ -32,3 +32,38 @@ rf-editor = { path = "../rf-editor" }
 rf-world = { path = "../rf-world" }
 transform-gizmo-egui = "0.11"
 mint = "0.5"
+
+# The .deb (cargo-deb), from the binaries packaging/linux/build.sh makes.
+[package.metadata.deb]
+name = "redforge"
+maintainer = "Prysma Studio <simomagy02@proton.me>"
+copyright = "Prysma Studio"
+license-file = ["../../LICENSE-MIT", "0"]
+extended-description = """\
+RedForge edits Red Dead Redemption 2's maps for RedM: the streamed world, its \
+entities, interiors, instanced props and grass, the game's file formats and \
+their XML, projects exported as RedM resources, and a bridge to Blender."""
+section = "graphics"
+priority = "optional"
+depends = "libc6 (>= 2.31), libgcc-s1, libvulkan1"
+recommends = "xdg-desktop-portal"
+assets = [
+    ["target/release/redforge", "usr/bin/", "755"],
+    ["target/release/rf", "usr/bin/", "755"],
+    ["../../data/rdr2/strings.txt", "usr/share/redforge/data/rdr2/", "644"],
+    ["../../blender/redforge_bridge/__init__.py", "usr/share/redforge/blender/redforge_bridge/", "644"],
+    ["../../blender/redforge_bridge/link.py", "usr/share/redforge/blender/redforge_bridge/", "644"],
+    ["../../blender/redforge_bridge/blender_manifest.toml", "usr/share/redforge/blender/redforge_bridge/", "644"],
+    ["../../packaging/linux/redforge.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/icons/redforge-16.png", "usr/share/icons/hicolor/16x16/apps/redforge.png", "644"],
+    ["../../packaging/linux/icons/redforge-24.png", "usr/share/icons/hicolor/24x24/apps/redforge.png", "644"],
+    ["../../packaging/linux/icons/redforge-32.png", "usr/share/icons/hicolor/32x32/apps/redforge.png", "644"],
+    ["../../packaging/linux/icons/redforge-48.png", "usr/share/icons/hicolor/48x48/apps/redforge.png", "644"],
+    ["../../packaging/linux/icons/redforge-64.png", "usr/share/icons/hicolor/64x64/apps/redforge.png", "644"],
+    ["../../packaging/linux/icons/redforge-96.png", "usr/share/icons/hicolor/96x96/apps/redforge.png", "644"],
+    ["../../packaging/linux/icons/redforge-128.png", "usr/share/icons/hicolor/128x128/apps/redforge.png", "644"],
+    ["../../packaging/linux/icons/redforge-256.png", "usr/share/icons/hicolor/256x256/apps/redforge.png", "644"],
+    ["../../packaging/linux/icons/redforge-512.png", "usr/share/icons/hicolor/512x512/apps/redforge.png", "644"],
+    ["../../README.md", "usr/share/doc/redforge/", "644"],
+    ["../../CHANGELOG.md", "usr/share/doc/redforge/", "644"],
+]

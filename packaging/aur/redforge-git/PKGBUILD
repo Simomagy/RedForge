@@ -1,0 +1,51 @@
+# Maintainer: Prysma Studio <simomagy02@proton.me>
+# Builds RedForge from the latest commit of its repository.
+pkgname=redforge-git
+_pkgname=redforge
+pkgver=0.1.0.r0.g0000000
+pkgrel=1
+pkgdesc="A map editor for RedM: Red Dead Redemption 2's maps, models and textures"
+arch=('x86_64')
+url="https://github.com/OWNER/redforge"
+license=('MIT OR Apache-2.0')
+depends=('gcc-libs' 'glibc' 'vulkan-icd-loader' 'xdg-desktop-portal')
+optdepends=('blender: the Blender bridge add-on (in /usr/share/redforge/blender)')
+makedepends=('cargo' 'git')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+options=('!lto' '!debug')
+source=("$_pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  local version
+  version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+  printf "%s.r%s.g%s" "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "$_pkgname"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_pkgname"
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p rf-app -p rf-cli
+}
+
+package() {
+  cd "$_pkgname"
+  install -Dm755 target/release/redforge "$pkgdir/usr/bin/redforge"
+  install -Dm755 target/release/rf "$pkgdir/usr/bin/rf"
+  install -Dm644 data/rdr2/strings.txt "$pkgdir/usr/share/redforge/data/rdr2/strings.txt"
+  install -Dm644 blender/redforge_bridge/*.py blender/redforge_bridge/*.toml -t "$pkgdir/usr/share/redforge/blender/redforge_bridge"
+  install -Dm644 packaging/linux/redforge.desktop "$pkgdir/usr/share/applications/redforge.desktop"
+  for size in 16 24 32 48 64 96 128 256 512; do
+    install -Dm644 "packaging/linux/icons/redforge-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/redforge.png"
+  done
+  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname"
+  install -Dm644 README.md CHANGELOG.md -t "$pkgdir/usr/share/doc/$pkgname"
+}

@@ -41,7 +41,8 @@ fn main() -> eframe::Result {
     let mut options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("RedForge")
-            .with_app_id("redforge")
+            // The desktop entry the window goes with: the Flatpak's is named after its id.
+            .with_app_id(std::env::var("FLATPAK_ID").unwrap_or_else(|_| "redforge".into()))
             .with_icon(icon())
             .with_inner_size([1600.0, 950.0]),
         ..Default::default()

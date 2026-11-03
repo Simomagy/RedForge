@@ -1,0 +1,48 @@
+# The Flatpak, built by build.sh. The crates are fetched during the build
+# (--share=network), which is fine for a local bundle; Flathub would want
+# them listed as sources (flatpak-cargo-generator).
+app-id: io.github.OWNER.RedForge
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: redforge
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # The game folder and the projects, wherever they are.
+  - --filesystem=host
+  # The Blender bridge (a local TCP port).
+  - --share=network
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: redforge
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+      env:
+        CARGO_HOME: /run/build/redforge/cargo
+    build-commands:
+      - cargo build --release --locked -p rf-app -p rf-cli
+      - install -Dm755 target/release/redforge /app/bin/redforge
+      - install -Dm755 target/release/rf /app/bin/rf
+      - install -Dm644 data/rdr2/strings.txt /app/share/redforge/data/rdr2/strings.txt
+      - install -Dm644 blender/redforge_bridge/*.py blender/redforge_bridge/*.toml -t /app/share/redforge/blender/redforge_bridge
+      - install -Dm644 packaging/linux/redforge.desktop /app/share/applications/${FLATPAK_ID}.desktop
+      - desktop-file-edit --set-icon=${FLATPAK_ID} --set-key=StartupWMClass --set-value=${FLATPAK_ID} /app/share/applications/${FLATPAK_ID}.desktop
+      - for s in 16 24 32 48 64 96 128 256 512; do install -Dm644 packaging/linux/icons/redforge-$s.png /app/share/icons/hicolor/${s}x${s}/apps/${FLATPAK_ID}.png; done
+      - install -Dm644 packaging/flatpak/redforge.metainfo.xml /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - .git
+          - .claude
+          - packaging/arch/src
+          - packaging/arch/pkg
