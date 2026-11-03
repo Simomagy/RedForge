@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::GpuContext;
+use crate::helpers::{HelperPass, HelperTargets};
 use crate::outline::{OutlinePass, OutlineTargets};
 use crate::post::{Post, PostTargets};
 use crate::sky::{Sky, SkyTargets};
@@ -120,6 +121,8 @@ pub struct RenderTargets {
     pub(crate) sky: SkyTargets,
     /// The outlines' mask.
     pub(crate) outline: OutlineTargets,
+    /// The editor helpers' layer.
+    pub(crate) helpers: HelperTargets,
     /// When this view was last drawn, for the adaptation.
     pub(crate) last_frame: Mutex<Option<Instant>>,
 }
@@ -133,6 +136,7 @@ impl RenderTargets {
         post: &Post,
         sky: &Sky,
         outline: &OutlinePass,
+        helpers: &HelperPass,
         width: u32,
         height: u32,
     ) -> Self {
@@ -204,6 +208,7 @@ impl RenderTargets {
         let post = post.targets(ctx, &hdr, width, height);
         let sky = sky.view_targets(ctx, &lit, &depth_view);
         let outline = outline.targets(ctx, width, height);
+        let helpers = helpers.targets(ctx, width, height);
         Self {
             width,
             height,
@@ -231,6 +236,7 @@ impl RenderTargets {
             post,
             sky,
             outline,
+            helpers,
             last_frame: Mutex::new(None),
         }
     }

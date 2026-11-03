@@ -12,10 +12,14 @@ use glam::{Mat4, Vec3};
 use rf_render::{GpuModel, Instance};
 use rf_world::{EntityId, InstanceBatch, VisibleBatch};
 
+use super::helpers::HelperKey;
 use crate::viewers::Gpu;
 
-/// Where the pick ids of batches' instances start: below are the entities'.
+/// Where the pick ids of batches' instances start: below are the helpers'
+/// and the entities'.
 const FIRST_BATCH_ID: u32 = 1 << 30;
+/// Where the pick ids of the selection mode's helpers start.
+pub const FIRST_HELPER_ID: u32 = 1 << 29;
 
 /// Batches' instance buffers, by [`VisibleBatch::key`]. Each batch's
 /// instances have pick ids of their own.
@@ -38,22 +42,42 @@ struct Entry {
     first_id: u32,
 }
 
-/// What each pick id of a frame stands for: an entity, or a batch's instance.
+/// What each pick id of a frame stands for: an entity, a batch's instance,
+/// or a helper.
 #[derive(Default)]
 pub struct Picks {
-    /// The entity of each id below the batches', minus 1.
+    /// The entity of each id below the helpers', minus 1.
     pub entities: Vec<EntityId>,
     /// Per batch: its instances' first id, its map, the batch.
     batches: Vec<(u32, u32, Arc<InstanceBatch>)>,
+    /// The helper of each id from [`FIRST_HELPER_ID`].
+    helpers: Vec<HelperKey>,
 }
 
 impl Picks {
+    /// The entity (or batch instance) drawn with an id.
     pub fn get(&self, id: u32) -> Option<EntityId> {
+        if (FIRST_HELPER_ID..FIRST_BATCH_ID).contains(&id) {
+            return None;
+        }
         if id < FIRST_BATCH_ID {
             return self.entities.get(id.checked_sub(1)? as usize).copied();
         }
         let (first, node, b) = self.batches.iter().find(|(f, _, b)| id >= *f && id - *f < b.len() as u32)?;
         Some(EntityId::instance(*node, b.grass, b.list_index, b.source_index((id - first) as usize)))
+    }
+
+    /// The helper drawn with an id.
+    pub fn helper(&self, id: u32) -> Option<HelperKey> {
+        (FIRST_HELPER_ID..FIRST_BATCH_ID)
+            .contains(&id)
+            .then(|| self.helpers.get((id - FIRST_HELPER_ID) as usize))?
+            .copied()
+    }
+
+    /// With the helpers drawn, by id from [`FIRST_HELPER_ID`].
+    pub fn with_helpers(self, helpers: Vec<HelperKey>) -> Self {
+        Self { helpers, ..self }
     }
 }
 
@@ -94,7 +118,7 @@ impl BatchBuffers {
     /// The pick ids of the batches' instances, with `entities` for the rest.
     pub fn picks(&self, entities: Vec<EntityId>) -> Picks {
         let batches = self.buffers.iter().map(|(k, e)| (e.first_id, k.0, e.batch.clone())).collect();
-        Picks { entities, batches }
+        Picks { entities, batches, helpers: Vec::new() }
     }
 
     /// A batch's buffer, if it's the batch's as it is now.

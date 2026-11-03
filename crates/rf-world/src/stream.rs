@@ -303,7 +303,11 @@ mod tests {
         mlo.set_vec4("rotation", [0.0, 0.0, 0.0, 1.0]);
         mlo.set_object("defaultEntitySets", Some(Value::Hashes(vec![])));
         let chair = entity_bag("CEntityDef", "chair", [1.0, 0.0, 0.0], -1, 0, (30.0, 0.0, 5));
-        let def = Arc::new(InteriorDef { entities: vec![Some(EntityDef::read(&chair))], sets: vec![] });
+        let def = Arc::new(InteriorDef {
+            entities: vec![Some(EntityDef::read(&chair))],
+            sets: vec![],
+            parts: Default::default(),
+        });
         let mut loaded = HashMap::new();
         let mut p = MapData::build(&parent, &HashMap::new(), &|_| None);
         p.entities[0].num_children = 1;

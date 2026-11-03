@@ -11,6 +11,7 @@ use rf_formats::formats::databag::{DataBag, SchemaField, ValueType};
 use rf_formats::formats::meta::rsc_schema;
 use rf_formats::hash::joaat;
 
+use crate::map::helpers::HelperPart;
 use crate::map::tools::Tools;
 
 /// `RDR2EntityFlags`, by bit (the C#'s names; the others are unused).
@@ -55,10 +56,39 @@ pub struct Properties {
     error: Option<String>,
 }
 
+/// The selected helpers of the selection mode (the last one's fields).
+fn parts_ui(ui: &mut egui::Ui, parts: &[HelperPart]) {
+    let Some(p) = parts.last() else { return };
+    if parts.len() > 1 {
+        ui.label(format!("{} selected; showing the last", parts.len()));
+    }
+    let info = &p.info;
+    ui.horizontal(|ui| {
+        ui.label(&info.type_name);
+        ui.label(RichText::new(&info.name).strong());
+    });
+    if !info.owner.is_empty() {
+        ui.horizontal(|ui| {
+            ui.label("In");
+            ui.label(RichText::new(&info.owner).strong());
+        });
+    }
+    egui::Grid::new("helper-fields").num_columns(2).striped(true).show(ui, |ui| {
+        for (k, v) in &info.fields {
+            ui.label(k);
+            ui.label(v);
+            ui.end_row();
+        }
+    });
+}
+
 impl Properties {
     pub fn ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, tools: Option<&mut Tools>) {
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-            self.selection_ui(ui, editor);
+            match tools.as_deref() {
+                Some(t) if !t.selected_parts.is_empty() => parts_ui(ui, &t.selected_parts),
+                _ => self.selection_ui(ui, editor),
+            }
             ui.separator();
             if let Some(tools) = tools {
                 self.place_ui(ui, editor, tools);

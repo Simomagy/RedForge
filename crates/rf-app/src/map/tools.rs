@@ -14,6 +14,8 @@ use eframe::egui::{self, Key, Pos2, Rect, Stroke};
 use glam::{Mat4, Quat, Vec2, Vec3};
 use rf_editor::{Editor, EntityId, Placement};
 use rf_render::{CameraView, PickRequest};
+
+use super::helpers::{HelperKey, HelperPart, Mode};
 use transform_gizmo_egui::math::Transform;
 use transform_gizmo_egui::{Gizmo, GizmoConfig, GizmoInteraction, GizmoMode, GizmoOrientation};
 
@@ -49,6 +51,13 @@ pub struct Tools {
     /// Whether the gizmo has a selection to show this frame.
     gizmo_shown: bool,
     pub hover: Option<EntityId>,
+    /// The selection mode, as the C#'s: every mode but "Entity" hovers and
+    /// selects its helpers.
+    pub mode: Mode,
+    pub hover_helper: Option<HelperKey>,
+    pub helper_selection: Vec<HelperKey>,
+    /// The selected helpers as last drawn, for Properties.
+    pub selected_parts: Vec<HelperPart>,
     /// Asks the map view to look at the selection (Hierarchy's double click).
     pub focus: bool,
     /// Where the mouse points at the scene, from the last pick.
@@ -85,10 +94,30 @@ impl Default for Tools {
             gizmo_press: false,
             gizmo_shown: false,
             hover: None,
+            // REDFORGE_MODE=<name> starts in that selection mode (for testing).
+            mode: std::env::var("REDFORGE_MODE")
+                .ok()
+                .and_then(|m| Mode::ALL.into_iter().find(|x| x.name() == m))
+                .unwrap_or_default(),
+            hover_helper: None,
+            helper_selection: Vec::new(),
+            selected_parts: Vec::new(),
             focus: false,
             hover_point: None,
             pending: None,
             status: None,
+        }
+    }
+}
+
+impl Tools {
+    /// Switches the selection mode: its helpers' hover and selection go.
+    pub fn set_mode(&mut self, mode: Mode) {
+        if mode != self.mode {
+            self.mode = mode;
+            self.hover_helper = None;
+            self.helper_selection.clear();
+            self.selected_parts.clear();
         }
     }
 }
@@ -291,12 +320,15 @@ impl Tools {
         if let Some(p) = &self.pending
             && let Some(pick) = p.request.try_get(&gpu.ctx)
         {
-            self.hover = p.drawn.get(pick.id);
+            let entities = self.mode == Mode::Entity;
+            self.hover = p.drawn.get(pick.id).filter(|_| entities);
+            self.hover_helper = p.drawn.helper(pick.id).filter(|_| !entities);
             self.hover_point = (pick.depth > 0.0).then(|| p.view.unproject(p.ndc, pick.depth));
             self.pending = None;
         }
         let Some((pos, rect)) = mouse else {
             self.hover = None;
+            self.hover_helper = None;
             self.hover_point = None;
             return;
         };

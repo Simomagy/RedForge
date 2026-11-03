@@ -14,6 +14,7 @@ pub mod anim;
 pub mod assets;
 mod camera;
 mod context;
+mod helpers;
 pub mod mesh;
 pub mod model;
 mod outline;
@@ -28,6 +29,7 @@ pub mod texture;
 pub use anim::Pose;
 pub use camera::{CameraView, FlyCamera, Frustum, OrbitCamera, Ray};
 pub use context::{GpuContext, wanted_features};
+pub use helpers::{HelperBatch, HelperMesh, HelperVertex};
 pub use model::{
     AlphaMode, DecalMode, GpuModel, MaterialDesc, ModelOptions, NoTextures, Slot, TerrainDesc, TextureSource,
     WaterDesc, WaterParams,

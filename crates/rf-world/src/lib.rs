@@ -90,6 +90,7 @@
 
 pub mod batch;
 mod edit;
+pub mod helpers;
 mod map;
 mod math;
 mod nodes;
@@ -451,6 +452,18 @@ impl World {
     /// batches): their instances show by cell, each cell at its LOD.
     pub fn visible_batches(&self) -> &[VisibleBatch] {
         &self.visible_batches
+    }
+
+    /// The helpers of the streamed ymaps that have any, by the ymap's name
+    /// hash (the editor's selection modes show them).
+    pub fn map_helpers(&self) -> Vec<(u32, Arc<helpers::MapHelpers>)> {
+        self.streamed
+            .iter()
+            .filter_map(|n| {
+                let l = self.loaded.get(n)?;
+                (!l.map.helpers.is_empty()).then(|| (self.nodes[*n as usize].name, l.map.helpers.clone()))
+            })
+            .collect()
     }
 
     pub fn stats(&self) -> WorldStats {

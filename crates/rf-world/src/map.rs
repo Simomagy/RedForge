@@ -11,6 +11,7 @@ use rf_formats::rpf8::{FileRef, Rpf8FileSystem};
 use rf_game::{Archetype, GameData};
 
 use crate::batch::InstanceBatch;
+use crate::helpers::{InteriorParts, MapHelpers};
 use crate::math::{self, Aabb, Quat, Vec3};
 
 /// `"entities"`, of a `CMapData`, a `CMloArchetypeDef` and a `CMloEntitySet`.
@@ -196,6 +197,8 @@ impl Entity {
 pub(crate) struct InteriorDef {
     pub entities: Vec<Option<EntityDef>>,
     pub sets: Vec<(u32, Vec<Option<EntityDef>>)>,
+    /// Its rooms, portals and time cycle modifiers.
+    pub parts: InteriorParts,
 }
 
 impl InteriorDef {
@@ -210,7 +213,7 @@ impl InteriorDef {
             .flatten()
             .map(|s| (s.hash(0xE6E1_7F14), defs(s))) // "name"
             .collect();
-        InteriorDef { entities: defs(arch), sets }
+        InteriorDef { entities: defs(arch), sets, parts: InteriorParts::read(arch) }
     }
 }
 
@@ -317,6 +320,8 @@ pub(crate) struct MapData {
     pub interiors: Vec<Interior>,
     /// Its instanced props and grass.
     pub batches: Vec<Arc<InstanceBatch>>,
+    /// What the editor's selection modes show of it.
+    pub helpers: Arc<MapHelpers>,
 }
 
 impl MapData {
@@ -334,6 +339,7 @@ impl MapData {
     ) -> MapData {
         let batches = crate::batch::read_batches(bag).into_iter().map(Arc::new).collect();
         let mut map = MapData { flags: bag.u32(0x67D2_6872), batches, ..Default::default() }; // "flags"
+        let mut helpers = MapHelpers::read(bag);
         let defs = match bag.object(ENTITIES) {
             Some(Value::Bags(b)) => b.as_slice(),
             _ => &[],
@@ -349,9 +355,13 @@ impl MapData {
             {
                 e.interior = Some(map.interiors.len() as u32);
                 map.interiors.push(Interior::new(&i, &def, archetypes));
+                let inner: Vec<&EntityDef> =
+                    i.entities.iter().chain(i.sets.iter().flat_map(|s| &s.1)).flatten().collect();
+                helpers.interiors.push(i.parts.place(map.entities.len() as u32, &e, &inner, archetypes));
             }
             map.entities.push(e);
         }
+        map.helpers = Arc::new(helpers);
         let n = map.entities.len();
         // The parents within the map; `LevelLod.Add` makes the others roots.
         let parent = |e: &Entity| {
@@ -502,6 +512,7 @@ pub(crate) mod tests {
                 (rf_formats::hash::joaat("set_a"), vec![Some(EntityDef::read(&inner))]),
                 (rf_formats::hash::joaat("set_b"), vec![Some(EntityDef::read(&inner)); 2]),
             ],
+            parts: Default::default(),
         };
         let def = Arc::new(def);
         let map = MapData::build(&map_bag(vec![mlo]), &HashMap::new(), &|_| Some(def.clone()));

@@ -3,6 +3,7 @@
 
 mod batches;
 mod globals;
+pub mod helpers;
 pub mod models;
 pub mod tools;
 
@@ -17,8 +18,8 @@ use rf_formats::formats::meta::Meta;
 use rf_formats::rpf8::FileRef;
 use rf_render::sky::STAR_COLOUR;
 use rf_render::{
-    CASCADES, Cascades, DrawBatch, FlyCamera, GpuModel, Instance, Light, LightKind, Outline, RenderStats,
-    RenderTargets, Scene, Sky, SkyLights, ViewSettings,
+    CASCADES, Cascades, DrawBatch, FlyCamera, GpuModel, HelperBatch, HelperMesh, Instance, Light, LightKind, Outline,
+    RenderStats, RenderTargets, Scene, Sky, SkyLights, ViewSettings,
 };
 use rf_world::{EntityId, VisibleEntity};
 
@@ -113,6 +114,8 @@ pub struct MapView {
     drawn: Arc<batches::Picks>,
     /// The last frame's camera and where the view was on screen.
     last_view: Option<(rf_render::CameraView, egui::Rect)>,
+    /// The selection mode's helpers.
+    helpers: helpers::Helpers,
 }
 
 /// `T * R * S` from a ymap entity's fields. The game stores the inverse
@@ -238,6 +241,7 @@ impl MapView {
             last_evict: Instant::now(),
             drawn: Arc::default(),
             last_view: None,
+            helpers: Default::default(),
         }
     }
 
@@ -371,6 +375,17 @@ impl MapView {
         egui::Panel::top(egui::Id::new(("map-bar", &self.path))).show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 if let Some(editor) = editor {
+                    egui::ComboBox::from_id_salt(("mode", &self.path))
+                        .selected_text(tools.mode.name())
+                        .show_ui(ui, |ui| {
+                            for m in helpers::Mode::ALL {
+                                if ui.selectable_label(tools.mode == m, m.name()).on_hover_text(m.tip()).clicked() {
+                                    tools.set_mode(m);
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("Selection mode: what the map shows and selects");
                     for (tool, label, tip) in [
                         (Tool::Select, "Select", "Select things (V); right click or click"),
                         (Tool::Move, "Move", "Move the selection (Q)"),
@@ -572,7 +587,6 @@ impl MapView {
             }
             groups.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint, id));
         }
-        self.drawn = Arc::new(self.batch_buffers.picks(drawn));
         let mut instances = Vec::new();
         let mut ranges = |groups: &Groups| {
             let mut out = Vec::new();
@@ -622,10 +636,61 @@ impl MapView {
         }
         self.batch_instances_drawn = (drawn_batch_instances, visible_batches.len());
 
+        // The selection mode's helpers in view, each with a pick id of its own;
+        // the hovered and selected ones outlined too.
+        type HelperGroups = HashMap<usize, (Arc<HelperMesh>, Vec<Instance>)>;
+        let mut helper_keys = Vec::new();
+        let mut helper_groups: HelperGroups = HashMap::new();
+        let mut helper_outlined: [HelperGroups; 2] = Default::default();
+        tools.selected_parts.clear();
+        if tools.mode != helpers::Mode::Entity
+            && let (Source::World, Some(ed)) = (&self.source, editor.as_deref())
+        {
+            let c = helpers::Collect { gpu, game: &self.game, world: &ed.world };
+            self.helpers.collect(tools.mode, &c);
+            for p in &self.helpers.parts {
+                if !frustum.sphere_visible(p.centre, p.radius) {
+                    continue;
+                }
+                let id = batches::FIRST_HELPER_ID + helper_keys.len() as u32;
+                helper_keys.push(p.key);
+                let inst = Instance::helper(p.transform, id, p.colour);
+                let key = Arc::as_ptr(&p.mesh) as usize;
+                let add =
+                    |g: &mut HelperGroups| g.entry(key).or_insert_with(|| (p.mesh.clone(), Vec::new())).1.push(inst);
+                add(&mut helper_groups);
+                let selected = tools.helper_selection.contains(&p.key);
+                if selected {
+                    add(&mut helper_outlined[1]);
+                } else if tools.hover_helper == Some(p.key) {
+                    add(&mut helper_outlined[0]);
+                }
+            }
+            tools.selected_parts = self.helpers.parts_of(&tools.helper_selection).cloned().collect();
+        }
+        let mut helper_ranges = |groups: &HelperGroups| -> Vec<(Arc<HelperMesh>, std::ops::Range<u32>)> {
+            groups
+                .values()
+                .map(|(mesh, list)| {
+                    let start = instances.len() as u32;
+                    instances.extend_from_slice(list);
+                    (mesh.clone(), start..instances.len() as u32)
+                })
+                .collect()
+        };
+        let helper_seen = helper_ranges(&helper_groups);
+        let helper_lit: Vec<_> = helper_outlined.iter().map(&mut helper_ranges).collect();
+        fn to_helper_batches(r: &[(Arc<HelperMesh>, std::ops::Range<u32>)]) -> Vec<HelperBatch<'_>> {
+            r.iter().map(|(mesh, r)| HelperBatch { mesh, instances: r.clone() }).collect()
+        }
+        let helper_batches = to_helper_batches(&helper_seen);
+        self.drawn = Arc::new(self.batch_buffers.picks(drawn).with_helpers(helper_keys));
+
         let mut outlines: Vec<Outline> = [HOVER_OUTLINE, SELECTION_OUTLINE]
             .into_iter()
             .zip(&ranges_outlined)
-            .map(|(colour, r)| Outline { colour, batches: to_batches(r) })
+            .zip(&helper_lit)
+            .map(|((colour, r), h)| Outline { colour, batches: to_batches(r), helpers: to_helper_batches(h) })
             .collect();
         // Instances of batches outlined: each one alone from its batch's buffer.
         let outlined_instances = hovered.into_iter().map(|id| (0, id)).chain(selection.iter().map(|&id| (1, id)));
@@ -643,13 +708,14 @@ impl MapView {
             let at = at as u32;
             outlines[layer].batches.push(DrawBatch { model, lod, instances: at..at + 1, buffer: Some(buffer) });
         }
-        outlines.retain(|o| !o.batches.is_empty());
+        outlines.retain(|o| !o.batches.is_empty() || !o.helpers.is_empty());
         let scene = Scene {
             instances: &instances,
             batches: &batches,
             shadows: cascades.as_ref().map(|c| (c, &cast)),
             lights: &lights,
             outlines: &outlines,
+            helpers: &helper_batches,
         };
         self.lights_drawn = lights.len();
         self.stats = gpu.renderer.render_scene(&gpu.ctx, targets, &camera, &self.view, &scene);
@@ -752,6 +818,25 @@ impl MapView {
                 }
             } else if tools.tool == Tool::Place {
                 tools.tool = Tool::Select; // a right click leaves placing, as in the C#
+            } else if tools.mode != helpers::Mode::Entity {
+                // The mode's helpers are what's selected.
+                let hit = pick.and_then(|p| self.drawn.helper(p.id));
+                let add = ui.input(|i| i.modifiers.command);
+                let selection = &mut tools.helper_selection;
+                match (hit, add) {
+                    (Some(k), true) => match selection.iter().position(|s| *s == k) {
+                        Some(i) => {
+                            selection.remove(i);
+                        }
+                        None => selection.push(k),
+                    },
+                    (Some(k), false) => *selection = vec![k],
+                    (None, false) => selection.clear(),
+                    (None, true) => {}
+                }
+                if hit.is_some() && !editor.selection().is_empty() {
+                    editor.select(Vec::new());
+                }
             } else {
                 let hit = pick.and_then(|p| self.drawn.get(p.id));
                 let add = ui.input(|i| i.modifiers.command);
@@ -766,16 +851,22 @@ impl MapView {
 
         let painter = ui.painter().with_clip_rect(rect);
         // The hovered entity's name under the mouse (the C#'s
-        // `Editor.HoverNameLabel` "Below"), with a shadow.
-        if let Some(id) = tools.hover
+        // `Editor.HoverNameLabel` "Below"), with a shadow; a helper's owner and name.
+        let hovered = match (tools.hover, tools.hover_helper) {
+            (_, Some(k)) => self.helpers.parts.iter().find(|p| p.key == k).map(|p| p.info.label()),
+            (Some(id), None) => editor.world.entity(id).map(|e| {
+                let name = editor.hashes().name(e.archetype);
+                match id.batch_instance() {
+                    Some((_, _, i)) => format!("{name} : {i}"),
+                    None => name,
+                }
+            }),
+            (None, None) => None,
+        };
+        if let Some(name) = hovered
             && tools.tool != Tool::Place
             && let Some(mouse) = response.hover_pos()
-            && let Some(e) = editor.world.entity(id)
         {
-            let mut name = editor.hashes().name(e.archetype);
-            if let Some((_, _, i)) = id.batch_instance() {
-                name = format!("{name} : {i}");
-            }
             let font = egui::FontId::proportional(14.0);
             let at = mouse + Vec2::new(0.0, 30.0);
             let shadow = egui::Color32::from_black_alpha(200);
