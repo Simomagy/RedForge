@@ -552,9 +552,11 @@ impl eframe::App for Lab {
             });
         let style = t.dock(ui);
         let mut dock = std::mem::replace(&mut self.dock, DockState::new(vec![]));
+        // Islands: the gap between them goes round them too, under the
+        // title bar and above the status bar.
         let gap = if t.islands { 8 } else { 0 };
         let frame =
-            egui::Frame::new().fill(t.bg).inner_margin(egui::Margin { left: gap, right: gap, top: 0, bottom: 0 });
+            egui::Frame::new().fill(t.bg).inner_margin(egui::Margin { left: gap, right: gap, top: gap, bottom: gap });
         egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             DockArea::new(&mut dock).style(style).show_inside(ui, &mut Tabs { lab: self });
         });
