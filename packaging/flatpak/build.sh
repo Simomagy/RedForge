@@ -8,6 +8,8 @@ version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)"
 app="$(sed -n 's/^app-id: //p' "$root/packaging/flatpak/redforge.yml")"
 cd "$root"
 mkdir -p target/dist target/flatpak
+# The runtime and SDK come from the user's Flathub (a system one isn't used).
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak-builder --user --install-deps-from=flathub --force-clean --repo=target/flatpak/repo \
   --state-dir=target/flatpak/state target/flatpak/build packaging/flatpak/redforge.yml
 flatpak build-bundle target/flatpak/repo "target/dist/RedForge-$version.flatpak" "$app"
