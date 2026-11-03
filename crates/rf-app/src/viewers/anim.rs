@@ -255,7 +255,12 @@ impl AnimViewer {
         let mut pick_ped = None;
         egui::Panel::top(egui::Id::new(("anim-bar", &self.path))).show(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.button(if self.playing { "⏸ Pause" } else { "▶ Play" }).clicked() {
+                let play = if self.playing {
+                    crate::theme::icon_text(crate::theme::icon::PAUSE, "Pause")
+                } else {
+                    crate::theme::icon_text(crate::theme::icon::PLAY, "Play")
+                };
+                if ui.button(play).clicked() {
                     self.playing = !self.playing;
                     if self.playing && !self.looping && self.time >= duration {
                         self.time = 0.0;

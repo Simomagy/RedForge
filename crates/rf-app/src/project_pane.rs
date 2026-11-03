@@ -9,6 +9,7 @@ use eframe::egui::{self, RichText};
 use rf_editor::{DocKey, Editor, ProjectEntry, redm};
 
 use crate::settings::Settings;
+use crate::theme::{self, icon};
 
 const RESOURCES_FOLDER: &str = "RedM.ResourcesFolder";
 const AUTHOR: &str = "RedM.Author";
@@ -18,15 +19,15 @@ const RECENT: &str = "Project.Recent";
 const LAST: &str = "Project.Last";
 const REOPEN_LAST: &str = "Project.ReopenLast";
 
-/// Files go in groups by what they are, as in the C#'s pane, with a colour
-/// each; the last group takes everything else.
-const GROUPS: [(&str, &[&str], egui::Color32); 6] = [
-    ("Maps", &["ymap"], egui::Color32::from_rgb(110, 190, 90)),
-    ("Archetypes", &["ytyp"], egui::Color32::from_rgb(230, 160, 60)),
-    ("Models", &["ydr", "ydd", "yft"], egui::Color32::from_rgb(90, 160, 235)),
-    ("Textures", &["ytd"], egui::Color32::from_rgb(190, 120, 220)),
-    ("Collisions", &["ybn"], egui::Color32::from_rgb(225, 95, 90)),
-    ("Other", &[], egui::Color32::GRAY),
+/// Files go in groups by what they are, as in the C#'s pane, with an icon
+/// for the group and one for its files; the last group takes everything else.
+const GROUPS: [(&str, &[&str], &str, &str); 6] = [
+    ("Maps", &["ymap"], icon::MAP_TRIFOLD, icon::MAP_PIN),
+    ("Archetypes", &["ytyp"], icon::STACK, icon::FILE_CODE),
+    ("Models", &["ydr", "ydd", "yft"], icon::CUBE, icon::CUBE),
+    ("Textures", &["ytd"], icon::IMAGE, icon::IMAGE),
+    ("Collisions", &["ybn"], icon::CUBE_TRANSPARENT, icon::CUBE_TRANSPARENT),
+    ("Other", &[], icon::FILES, icon::FILE),
 ];
 
 fn group_of(name: &str) -> usize {
@@ -96,11 +97,12 @@ impl ProjectPane {
         };
         let path = editor.project.as_ref().and_then(|p| p.file.as_ref()).map(|f| f.display().to_string());
         ui.horizontal(|ui| {
-            ui.label(RichText::new(title).strong()).on_hover_text(path.as_deref().unwrap_or("Not saved yet"));
+            ui.label(RichText::new(title).font(theme::heading(theme::SIZE + 4.0)))
+                .on_hover_text(path.as_deref().unwrap_or("Not saved yet"));
         });
         ui.horizontal_wrapped(|ui| {
             if ui
-                .button("New…")
+                .button(theme::icon_text(icon::PLUS, "New…"))
                 .on_hover_text("A new project, saved as an .rfproj; what's edited now goes in it")
                 .clicked()
                 && let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).save_file()
@@ -112,7 +114,7 @@ impl ProjectPane {
                 }
                 self.report(made.map(|_| "Project made".into()));
             }
-            if ui.button("Open…").clicked()
+            if ui.button(theme::icon_text(icon::FOLDER_OPEN, "Open…")).clicked()
                 && let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).pick_file()
             {
                 if editor.has_unsaved() {
@@ -121,17 +123,18 @@ impl ProjectPane {
                     self.open(editor, settings, &file);
                 }
             }
-            if ui.button("Save all").on_hover_text("Ctrl+S").clicked() {
+            if ui.button(theme::icon_text(icon::FLOPPY_DISK, "Save all")).on_hover_text("Ctrl+S").clicked() {
                 self.save_all(editor, settings);
             }
-            if ui.add_enabled(editor.project.is_some(), egui::Button::new("Close")).clicked() {
+            if ui.add_enabled(editor.project.is_some(), egui::Button::new(theme::icon_text(icon::X, "Close"))).clicked()
+            {
                 if editor.has_unsaved() {
                     self.confirm = Some(Pending::Close);
                 } else {
                     self.close(editor, settings);
                 }
             }
-            ui.menu_button("More", |ui| {
+            ui.menu_button(theme::icon_text(icon::DOTS_THREE, "More"), |ui| {
                 let mut reopen = settings.get(REOPEN_LAST) != Some("false");
                 if ui.checkbox(&mut reopen, "Reopen the last project at start").changed() {
                     settings.set(REOPEN_LAST, reopen.to_string());
@@ -139,7 +142,7 @@ impl ProjectPane {
             });
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Add files…").clicked()
+            if ui.button(theme::icon_text(icon::FILE_PLUS, "Add files…")).clicked()
                 && let Some(files) = rfd::FileDialog::new()
                     .add_filter("Game files", &["ymap", "ytyp", "ydr", "ydd", "yft", "ytd", "ybn", "ymf"])
                     .pick_files()
@@ -147,7 +150,10 @@ impl ProjectPane {
                 let problems = editor.add_project_files(&files);
                 self.after_load(editor, problems);
             }
-            if ui.button("Add folder…").on_hover_text("Its game files and its subfolders' are in the project").clicked()
+            if ui
+                .button(theme::icon_text(icon::FOLDER_PLUS, "Add folder…"))
+                .on_hover_text("Its game files and its subfolders' are in the project")
+                .clicked()
                 && let Some(folder) = rfd::FileDialog::new().pick_folder()
             {
                 let problems = editor.add_project_folder(&folder);
@@ -156,7 +162,11 @@ impl ProjectPane {
         });
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.new_map_name).hint_text("name").desired_width(140.0));
-            if ui.button("New ymap").on_hover_text("An empty ymap to place things in").clicked() {
+            if ui
+                .button(theme::icon_text(icon::MAP_PIN, "New ymap"))
+                .on_hover_text("An empty ymap to place things in")
+                .clicked()
+            {
                 match editor.new_map(&self.new_map_name) {
                     Ok(_) => {
                         self.status = Some(format!("Made {}.ymap: new things go in it", self.new_map_name.trim()));
@@ -188,7 +198,7 @@ impl ProjectPane {
         let filter = self.filter.trim().to_lowercase();
         let root = editor.project.as_ref().and_then(|p| p.dir()).map(Path::to_path_buf);
         egui::ScrollArea::vertical().id_salt("project-files").max_height(ui.available_height() * 0.6).show(ui, |ui| {
-            for (g, (name, _, colour)) in GROUPS.iter().enumerate() {
+            for (g, (name, _, glyph, _)) in GROUPS.iter().enumerate() {
                 let mut rows: Vec<&ProjectEntry> = entries
                     .iter()
                     .filter(|e| {
@@ -201,13 +211,7 @@ impl ProjectPane {
                 rows.sort_by_key(|e| e.name.to_lowercase());
                 // Collapsed groups show their header only, unless searching.
                 let open = !self.collapsed.contains(&g) || !filter.is_empty();
-                let header = ui.horizontal(|ui| {
-                    ui.label(RichText::new(if open { "⏷" } else { "⏵" }).weak());
-                    ui.label(RichText::new("■").color(*colour));
-                    ui.label(RichText::new(*name).strong());
-                    ui.label(RichText::new(rows.len().to_string()).weak());
-                });
-                let click = ui.interact(header.response.rect, ui.id().with(("project-group", g)), egui::Sense::click());
+                let click = theme::section(ui, open, glyph, name, rows.len());
                 if click.clicked() && !self.collapsed.remove(&g) {
                     self.collapsed.insert(g);
                 }
@@ -228,27 +232,22 @@ impl ProjectPane {
 
     fn entry_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, e: &ProjectEntry, root: Option<&Path>) {
         ui.horizontal(|ui| {
-            ui.add_space(12.0);
+            ui.add_space(10.0);
             if let Some(DocKey::Map(name)) = e.doc {
                 let target = editor.target == Some(name);
                 if ui.radio(target, "").on_hover_text("Place and paste into this ymap").clicked() {
                     editor.target = Some(name);
                 }
             }
-            let mut text = RichText::new(format!("{}{}", e.name, if e.dirty { " •" } else { "" }));
-            if e.path.is_none() {
-                text = text.italics();
-            }
             let tip = match &e.path {
                 Some(p) => p.display().to_string(),
                 None => "Changed game file, not saved to disk yet".into(),
             };
             let key = entry_key(e);
-            let row = ui.selectable_label(self.selected.contains(&key), text).on_hover_text(tip);
+            let name = format!("{}{}", e.name, if e.dirty { "  •" } else { "" });
             let folder = folder_text(root, e.path.as_deref());
-            if !folder.is_empty() {
-                ui.add(egui::Label::new(RichText::new(folder).weak().small()).truncate());
-            }
+            let glyph = GROUPS[group_of(&e.name)].3;
+            let row = theme::row(ui, self.selected.contains(&key), glyph, &name, &folder).on_hover_text(tip);
             if row.clicked() {
                 if ui.input(|i| i.modifiers.command) {
                     if !self.selected.remove(&key) {

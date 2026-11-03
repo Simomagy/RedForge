@@ -379,98 +379,159 @@ impl MapView {
         self.camera.position = centre - self.camera.forward() * distance;
     }
 
+    /// The map's toolbar, in groups of icons (their names on hover).
     fn toolbar(&mut self, ui: &mut egui::Ui, editor: Option<&mut Editor>, tools: &mut Tools) {
-        egui::Panel::top(egui::Id::new(("map-bar", &self.path))).show(ui, |ui| {
+        use crate::theme::{self, icon, icon_text};
+        let frame = egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 0, bottom: 6 });
+        let bar = egui::Panel::top(egui::Id::new(("map-bar", &self.path))).frame(frame).show_separator_line(false);
+        let mut world_editor = editor;
+        bar.show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if let Some(editor) = editor {
-                    egui::ComboBox::from_id_salt(("mode", &self.path))
-                        .selected_text(tools.mode.name())
-                        .show_ui(ui, |ui| {
-                            for m in helpers::Mode::ALL {
-                                if ui.selectable_label(tools.mode == m, m.name()).on_hover_text(m.tip()).clicked() {
-                                    tools.set_mode(m);
+                if let Some(editor) = world_editor.as_deref_mut() {
+                    theme::group(ui, |ui| {
+                        egui::ComboBox::from_id_salt(("mode", &self.path))
+                            .selected_text(icon_text(icon::CROSSHAIR, tools.mode.name()))
+                            .show_ui(ui, |ui| {
+                                for m in helpers::Mode::ALL {
+                                    if ui.selectable_label(tools.mode == m, m.name()).on_hover_text(m.tip()).clicked() {
+                                        tools.set_mode(m);
+                                    }
                                 }
+                            })
+                            .response
+                            .on_hover_text("Selection mode: what the map shows and selects");
+                    });
+                    theme::group(ui, |ui| {
+                        for (tool, glyph, tip) in [
+                            (Tool::Select, icon::CURSOR, "Select (V): right click or click"),
+                            (Tool::Move, icon::ARROWS_OUT_CARDINAL, "Move the selection (Q)"),
+                            (Tool::Rotate, icon::ARROW_CLOCKWISE, "Rotate the selection (E)"),
+                            (Tool::Scale, icon::ARROWS_OUT, "Scale the selection"),
+                            (Tool::Place, icon::STAMP, "Place the object chosen in Objects"),
+                        ] {
+                            if theme::tool(ui, tools.tool == tool, glyph, tip).clicked() {
+                                tools.tool = tool;
                             }
+                        }
+                    });
+                    theme::group(ui, |ui| {
+                        let (glyph, tip) = if tools.local {
+                            (icon::CUBE_FOCUS, "Gizmo along the object's axes (.)")
+                        } else {
+                            (icon::GLOBE_HEMISPHERE_WEST, "Gizmo along the world's axes (.)")
+                        };
+                        if theme::tool(ui, false, glyph, tip).clicked() {
+                            tools.local = !tools.local;
+                        }
+                        let snap = |v: f32, unit: &str| if v == 0.0 { "off".to_owned() } else { format!("{v} {unit}") };
+                        egui::ComboBox::from_id_salt("snap-move")
+                            .width(64.0)
+                            .selected_text(icon_text(icon::MAGNET, &snap(tools.snap_move, "m")))
+                            .show_ui(ui, |ui| {
+                                for v in tools::MOVE_SNAPS {
+                                    ui.selectable_value(&mut tools.snap_move, v, snap(v, "m"));
+                                }
+                            })
+                            .response
+                            .on_hover_text("Snap moves to");
+                        egui::ComboBox::from_id_salt("snap-angle")
+                            .width(64.0)
+                            .selected_text(icon_text(icon::ANGLE, &snap(tools.snap_angle, "°")))
+                            .show_ui(ui, |ui| {
+                                for v in tools::ANGLE_SNAPS {
+                                    ui.selectable_value(&mut tools.snap_angle, v, snap(v, "°"));
+                                }
+                            })
+                            .response
+                            .on_hover_text("Snap turns to");
+                    });
+                    theme::group(ui, |ui| {
+                        let undo = editor.undo_labels().next().map(|l| format!("Undo {l} (Ctrl+Z)"));
+                        let undone = ui
+                            .add_enabled_ui(undo.is_some(), |ui| {
+                                theme::tool(
+                                    ui,
+                                    false,
+                                    icon::ARROW_U_UP_LEFT,
+                                    undo.as_deref().unwrap_or("Nothing to undo"),
+                                )
+                            })
+                            .inner;
+                        if undone.clicked() {
+                            editor.undo();
+                        }
+                        let redo = editor.redo_labels().next().map(|l| format!("Redo {l} (Ctrl+Y)"));
+                        let redone = ui
+                            .add_enabled_ui(redo.is_some(), |ui| {
+                                theme::tool(
+                                    ui,
+                                    false,
+                                    icon::ARROW_U_UP_RIGHT,
+                                    redo.as_deref().unwrap_or("Nothing to redo"),
+                                )
+                            })
+                            .inner;
+                        if redone.clicked() {
+                            editor.redo();
+                        }
+                    });
+                    theme::group(ui, |ui| {
+                        let places = editor.world.places();
+                        egui::ComboBox::from_id_salt(("places", &self.path))
+                            .selected_text(icon_text(icon::MAP_PIN, "Go to"))
+                            .show_ui(ui, |ui| {
+                                for (name, p) in &places {
+                                    if ui.button(name).clicked() {
+                                        self.view_place(Vec3::from(*p));
+                                    }
+                                }
+                            });
+                        // The hour and the weather, in a menu of their own.
+                        let weather = self.timecycle.as_ref().map_or("sunny", |t| t.weather.as_str()).to_owned();
+                        let mut chosen = weather.clone();
+                        let (h, m) = (self.hour as u32 % 24, (self.hour.fract() * 60.0) as u32);
+                        let glyph = if (6..20).contains(&h) { icon::SUN } else { icon::MOON };
+                        ui.menu_button(icon_text(glyph, &format!("{h:02}:{m:02}")), |ui| {
+                            ui.set_min_width(220.0);
+                            ui.label(icon_text(icon::CLOCK, "Hour"));
+                            ui.add(egui::Slider::new(&mut self.hour, 0.0..=24.0).fixed_decimals(1));
+                            ui.label(icon_text(icon::CLOUD_SUN, "Weather"));
+                            egui::ComboBox::from_id_salt(("weather", &self.path)).selected_text(&weather).show_ui(
+                                ui,
+                                |ui| {
+                                    for w in rf_game::timecycle::WEATHERS {
+                                        ui.selectable_value(&mut chosen, w.to_owned(), w);
+                                    }
+                                },
+                            );
                         })
                         .response
-                        .on_hover_text("Selection mode: what the map shows and selects");
-                    for (tool, label, tip) in [
-                        (Tool::Select, "Select", "Select things (V); right click or click"),
-                        (Tool::Move, "Move", "Move the selection (Q)"),
-                        (Tool::Rotate, "Rotate", "Rotate the selection (E)"),
-                        (Tool::Scale, "Scale", "Scale the selection"),
-                        (Tool::Place, "Place", "Place the archetype chosen in Objects"),
-                    ] {
-                        if ui.selectable_label(tools.tool == tool, label).on_hover_text(tip).clicked() {
-                            tools.tool = tool;
-                        }
-                    }
-                    let axes = if tools.local { "Object axes" } else { "World axes" };
-                    if ui.button(axes).on_hover_text("Gizmo axes (.)").clicked() {
-                        tools.local = !tools.local;
-                    }
-                    let snap = |v: f32, unit: &str| if v == 0.0 { "off".to_owned() } else { format!("{v} {unit}") };
-                    egui::ComboBox::from_id_salt("snap-move")
-                        .selected_text(format!("Snap {}", snap(tools.snap_move, "m")))
-                        .show_ui(ui, |ui| {
-                            for v in tools::MOVE_SNAPS {
-                                ui.selectable_value(&mut tools.snap_move, v, snap(v, "m"));
-                            }
-                        });
-                    egui::ComboBox::from_id_salt("snap-angle")
-                        .selected_text(format!("Snap {}", snap(tools.snap_angle, "°")))
-                        .show_ui(ui, |ui| {
-                            for v in tools::ANGLE_SNAPS {
-                                ui.selectable_value(&mut tools.snap_angle, v, snap(v, "°"));
-                            }
-                        });
-                    ui.separator();
-                    let undo = editor.undo_labels().next().map(|l| format!("Undo {l}"));
-                    if ui
-                        .add_enabled(undo.is_some(), egui::Button::new("Undo"))
-                        .on_hover_text(undo.as_deref().unwrap_or("Nothing to undo"))
-                        .clicked()
-                    {
-                        editor.undo();
-                    }
-                    let redo = editor.redo_labels().next().map(|l| format!("Redo {l}"));
-                    if ui
-                        .add_enabled(redo.is_some(), egui::Button::new("Redo"))
-                        .on_hover_text(redo.as_deref().unwrap_or("Nothing to redo"))
-                        .clicked()
-                    {
-                        editor.redo();
-                    }
-                    ui.separator();
-                    let places = editor.world.places();
-                    egui::ComboBox::from_id_salt(("places", &self.path)).selected_text("Go to…").show_ui(ui, |ui| {
-                        for (name, p) in &places {
-                            if ui.button(name).clicked() {
-                                self.view_place(Vec3::from(*p));
-                            }
+                        .on_hover_text(format!("The hour and the weather ({weather})"));
+                        if chosen != weather || self.timecycle.is_none() {
+                            self.timecycle = Some(rf_game::timecycle::TimeCycle::load(&self.game.fs, &chosen));
                         }
                     });
-                    ui.add(egui::Slider::new(&mut self.hour, 0.0..=24.0).text("Hour"));
-                    let weather = self.timecycle.as_ref().map_or("sunny", |t| t.weather.as_str()).to_owned();
-                    let mut chosen = weather.clone();
-                    egui::ComboBox::from_id_salt(("weather", &self.path)).selected_text(&weather).show_ui(ui, |ui| {
-                        for w in rf_game::timecycle::WEATHERS {
-                            ui.selectable_value(&mut chosen, w.to_owned(), w);
-                        }
-                    });
-                    if chosen != weather || self.timecycle.is_none() {
-                        self.timecycle = Some(rf_game::timecycle::TimeCycle::load(&self.game.fs, &chosen));
-                    }
-                    if ui
-                        .checkbox(&mut self.scripted, "Scripted maps")
-                        .on_hover_text("Ymaps the game's scripts switch on and off: lockdowns, camps, mission states")
-                        .changed()
-                    {
-                        editor.world.set_hide_scripted(!self.scripted);
-                    }
                 }
-                ui.add(egui::Slider::new(&mut self.speed, 1.0..=5000.0).logarithmic(true).text("Speed m/s"));
-                ui.add(egui::Slider::new(&mut self.exposure, -4.0..=4.0).text("Exposure (EV)"));
+                // What's set once in a while: the speed, the exposure, the scripted maps.
+                theme::group(ui, |ui| {
+                    let gear = egui::RichText::new(icon::GEAR_SIX).size(theme::SIZE + 1.0);
+                    ui.menu_button(gear, |ui| {
+                        ui.set_min_width(240.0);
+                        ui.label(theme::icon_text(icon::GAUGE, "Speed (m/s)"));
+                        ui.add(egui::Slider::new(&mut self.speed, 1.0..=5000.0).logarithmic(true).fixed_decimals(0));
+                        ui.label(theme::icon_text(icon::APERTURE, "Exposure (EV)"));
+                        ui.add(egui::Slider::new(&mut self.exposure, -4.0..=4.0).fixed_decimals(1));
+                        if let Some(world) = world_editor {
+                            ui.separator();
+                            let tip = "Ymaps the game's scripts switch on and off: lockdowns, camps, mission states";
+                            if ui.checkbox(&mut self.scripted, "Scripted maps").on_hover_text(tip).changed() {
+                                world.world.set_hide_scripted(!self.scripted);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("View settings: speed, exposure, scripted maps");
+                });
             });
         });
     }
@@ -784,12 +845,10 @@ impl MapView {
         self.stats = gpu.renderer.render_scene(&gpu.ctx, targets, &camera, &self.view, &scene);
         gpu.show_texture(&mut self.texture_id, &targets.display_view);
         if let Some(id) = self.texture_id {
-            ui.painter().image(
-                id,
-                rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
+            // Rounded as the islands.
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            let corners = egui::CornerRadius::same(crate::theme::RADIUS);
+            ui.painter().add(egui::epaint::RectShape::filled(rect, corners, egui::Color32::WHITE).with_texture(id, uv));
         }
 
         if let Some(ed) = editor.as_deref_mut() {

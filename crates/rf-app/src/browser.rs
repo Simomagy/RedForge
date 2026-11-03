@@ -38,7 +38,7 @@ impl Browser {
     pub fn ui(&mut self, ui: &mut egui::Ui, game: &Game) -> Option<BrowserAction> {
         let mut action = None;
         ui.horizontal(|ui| {
-            ui.label("🔍");
+            ui.label(egui::RichText::new(crate::theme::icon::MAGNIFYING_GLASS).color(crate::theme::WEAK));
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text("Search all files…")
@@ -129,7 +129,7 @@ impl Browser {
         folder: &Folder,
         action: &mut Option<BrowserAction>,
     ) {
-        let icon = if name.ends_with(".rpf") { "📦" } else { "📁" };
+        let icon = if name.ends_with(".rpf") { crate::theme::icon::PACKAGE } else { crate::theme::icon::FOLDER };
         egui::CollapsingHeader::new(format!("{icon} {name}")).id_salt(id).show(ui, |ui| {
             for (sub, f) in &folder.folders {
                 self.folder_ui(ui, &format!("{id}/{sub}"), sub, f, action);

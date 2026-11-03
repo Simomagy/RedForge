@@ -11,6 +11,7 @@ use rf_editor::{Editor, EntityId, lod};
 use rf_formats::formats::databag::{DataBag, Value};
 
 use crate::map::tools::Tools;
+use crate::theme::{self, icon};
 
 /// A row: a group's header, or an object.
 #[derive(Clone)]
@@ -117,15 +118,14 @@ impl Hierarchy {
             i += 1 + count;
         }
 
-        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+        let row_height = theme::ROW;
         let selection: HashSet<EntityId> = editor.selection().iter().copied().collect();
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show_rows(ui, row_height, rows.len(), |ui, range| {
             for row in &rows[range] {
                 match row {
                     Row::Group { name, count } => {
                         let open = !self.collapsed.contains(name);
-                        let text = format!("{} {name}  ({count})", if open { "⏷" } else { "⏵" });
-                        if ui.selectable_label(false, RichText::new(text).strong()).clicked() {
+                        if theme::section(ui, open, icon::STACK, name, *count).clicked() {
                             if open {
                                 self.collapsed.insert(name.clone());
                             } else {
@@ -136,15 +136,13 @@ impl Hierarchy {
                     Row::Object { id, name, index, .. } => {
                         ui.horizontal(|ui| {
                             let hidden = editor.world.is_hidden(*id);
-                            let eye = if hidden { "—" } else { "👁" };
-                            if ui.small_button(eye).on_hover_text(if hidden { "Show" } else { "Hide" }).clicked() {
+                            let (eye, tip) = if hidden { (icon::EYE_SLASH, "Show") } else { (icon::EYE, "Hide") };
+                            let eye = egui::Button::new(RichText::new(eye).color(theme::WEAK)).frame(false);
+                            if ui.add(eye).on_hover_text(tip).clicked() {
                                 editor.world.set_hidden(*id, !hidden);
                             }
-                            let mut text = RichText::new(format!("{name}  #{index}"));
-                            if hidden {
-                                text = text.weak();
-                            }
-                            let r = ui.selectable_label(selection.contains(id), text);
+                            let note = if hidden { format!("#{index}  hidden") } else { format!("#{index}") };
+                            let r = theme::row(ui, selection.contains(id), icon::CUBE, name, &note);
                             if r.clicked() {
                                 if ui.input(|i| i.modifiers.command) {
                                     editor.toggle(*id);

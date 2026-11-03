@@ -14,6 +14,7 @@ mod objects;
 mod project_pane;
 mod properties;
 mod settings;
+mod theme;
 mod tour;
 mod viewers;
 

@@ -3741,6 +3741,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "eframe",
+ "egui-phosphor",
  "egui_dock",
  "embed-resource",
  "env_logger",

@@ -5,7 +5,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
 use eframe::egui;
-use egui_dock::{DockArea, DockState, NodeIndex, Style, TabViewer};
+use egui_dock::{DockArea, DockState, NodeIndex, TabViewer};
 use rf_editor::Editor;
 use rf_render::{GpuContext, Renderer, TexturePreview};
 
@@ -137,6 +137,7 @@ const TOUR_DONE: &str = "Onboarding.Done";
 
 impl RedForgeApp {
     pub fn new(cc: &eframe::CreationContext) -> Self {
+        crate::theme::apply(&cc.egui_ctx);
         let rs = cc.wgpu_render_state.as_ref().expect("RedForge needs the wgpu backend");
         let ctx = GpuContext::new(rs.device.clone(), rs.queue.clone());
         if !ctx.has_bc() {
@@ -500,10 +501,13 @@ impl Tabs<'_> {
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() * 0.2).max(24.0));
             ui.add(egui::Image::new(self.icon).fit_to_exact_size(egui::vec2(96.0, 96.0)));
-            ui.heading(egui::RichText::new("RedForge").size(32.0).strong());
+            ui.label(egui::RichText::new("RedForge").font(crate::theme::heading(34.0)));
             ui.label(egui::RichText::new("A map editor for RedM").weak());
             ui.add_space(24.0);
-            let open = egui::Button::new(egui::RichText::new("🗺  Open the world map").size(18.0))
+            let text = format!("{}  Open the world map", crate::theme::icon::MAP_TRIFOLD);
+            let open = egui::Button::new(egui::RichText::new(text).size(18.0).color(crate::theme::ON_ACCENT))
+                .fill(crate::theme::ACCENT)
+                .corner_radius(egui::CornerRadius::same(crate::theme::BIG_RADIUS))
                 .min_size(egui::vec2(260.0, 44.0));
             let enabled = self.game.is_some();
             if ui
@@ -545,20 +549,22 @@ impl TabViewer for Tabs<'_> {
     type Tab = Tab;
 
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
+        use crate::theme::{icon, icon_text};
         match tab {
-            Tab::Welcome => "Welcome".into(),
-            Tab::Model(v) => format!("🧊 {}", v.title).into(),
-            Tab::Anim(v) => format!("🏃 {}", v.title).into(),
-            Tab::Texture(v) => format!("🖼 {}", v.title).into(),
-            Tab::Text(v) => format!("📄 {}", v.title).into(),
-            Tab::Hex(v) => format!("{} (hex)", v.title).into(),
-            Tab::Map(v) => format!("🗺 {}", v.title).into(),
-            Tab::Properties => "Properties".into(),
-            Tab::Project => "Project".into(),
-            Tab::Hierarchy => "Hierarchy".into(),
-            Tab::GameFiles => "Game Files".into(),
-            Tab::Objects => "Objects".into(),
+            Tab::Welcome => icon_text(icon::HOUSE, "Welcome"),
+            Tab::Model(v) => icon_text(icon::CUBE, &v.title),
+            Tab::Anim(v) => icon_text(icon::PERSON_SIMPLE_RUN, &v.title),
+            Tab::Texture(v) => icon_text(icon::IMAGE, &v.title),
+            Tab::Text(v) => icon_text(icon::FILE_CODE, &v.title),
+            Tab::Hex(v) => icon_text(icon::BINARY, &format!("{} (hex)", v.title)),
+            Tab::Map(v) => icon_text(icon::MAP_TRIFOLD, &v.title),
+            Tab::Properties => icon_text(icon::SLIDERS_HORIZONTAL, "Properties"),
+            Tab::Project => icon_text(icon::FOLDER_OPEN, "Project"),
+            Tab::Hierarchy => icon_text(icon::TREE_STRUCTURE, "Hierarchy"),
+            Tab::GameFiles => icon_text(icon::PACKAGE, "Game Files"),
+            Tab::Objects => icon_text(icon::SHAPES, "Objects"),
         }
+        .into()
     }
 
     fn id(&mut self, tab: &mut Tab) -> egui::Id {
@@ -712,38 +718,22 @@ impl eframe::App for RedForgeApp {
         }
 
         let game_ready = matches!(self.game, GameState::Ready(_));
-        egui::Panel::top("menu").show(ui, |ui| {
+        let bar = egui::Frame::new().fill(crate::theme::BG).inner_margin(egui::Margin::symmetric(8, 4));
+        egui::Panel::top("menu").frame(bar).show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
+                ui.add(egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(18.0, 18.0)));
+                ui.menu_button("File", |ui| {
+                    if ui.button("Game folder…").clicked() {
+                        let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
+                        self.game = GameState::NoFolder { input, error: None };
+                        ui.close();
+                    }
+                    if ui.button("Quit").clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
                 if let GameState::Ready(g) = &self.game {
                     let g = g.clone();
-                    ui.menu_button("View", |ui| {
-                        if ui.button("World map").clicked() {
-                            self.open_world(&g, None);
-                            ui.close();
-                        }
-                        for (label, tab) in
-                            [("Project", Tab::Project), ("Hierarchy", Tab::Hierarchy), ("Game Files", Tab::GameFiles)]
-                        {
-                            if ui.button(label).clicked() {
-                                let missing = self
-                                    .dock
-                                    .find_tab_from(|t| std::mem::discriminant(t) == std::mem::discriminant(&tab))
-                                    .is_none();
-                                if missing {
-                                    self.dock.main_surface_mut().split_left(NodeIndex::root(), 0.22, vec![tab]);
-                                }
-                                ui.close();
-                            }
-                        }
-                        if ui.button("Properties").clicked() {
-                            self.show_side_tab(Tab::Properties, true);
-                            ui.close();
-                        }
-                        if ui.button("Objects").clicked() {
-                            self.show_side_tab(Tab::Objects, true);
-                            ui.close();
-                        }
-                    });
                     if let Some(ed) = &mut self.editor {
                         ui.menu_button("Edit", |ui| {
                             let undo = ed.undo_labels().next().map(|l| format!("Undo {l}"));
@@ -800,17 +790,35 @@ impl eframe::App for RedForgeApp {
                             }
                         });
                     }
+                    ui.menu_button("View", |ui| {
+                        if ui.button("World map").clicked() {
+                            self.open_world(&g, None);
+                            ui.close();
+                        }
+                        for (label, tab) in
+                            [("Project", Tab::Project), ("Hierarchy", Tab::Hierarchy), ("Game Files", Tab::GameFiles)]
+                        {
+                            if ui.button(label).clicked() {
+                                let missing = self
+                                    .dock
+                                    .find_tab_from(|t| std::mem::discriminant(t) == std::mem::discriminant(&tab))
+                                    .is_none();
+                                if missing {
+                                    self.dock.main_surface_mut().split_left(NodeIndex::root(), 0.22, vec![tab]);
+                                }
+                                ui.close();
+                            }
+                        }
+                        if ui.button("Properties").clicked() {
+                            self.show_side_tab(Tab::Properties, true);
+                            ui.close();
+                        }
+                        if ui.button("Objects").clicked() {
+                            self.show_side_tab(Tab::Objects, true);
+                            ui.close();
+                        }
+                    });
                 }
-                ui.menu_button("File", |ui| {
-                    if ui.button("Game folder…").clicked() {
-                        let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
-                        self.game = GameState::NoFolder { input, error: None };
-                        ui.close();
-                    }
-                    if ui.button("Quit").clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                });
                 ui.menu_button("Help", |ui| {
                     if ui.add_enabled(game_ready, egui::Button::new("Tour of the panels")).clicked() {
                         self.tour.start();
@@ -842,15 +850,21 @@ impl eframe::App for RedForgeApp {
             }
         }
 
-        egui::Panel::bottom("status").show(ui, |ui| {
+        egui::Panel::bottom("status").frame(bar).show(ui, |ui| {
+            use crate::theme::icon;
             if let Some(g) = &game {
                 ui.horizontal(|ui| {
-                    ui.label(format!("{} files in {} archives", g.fs.file_count(), g.fs.archives.len()));
+                    let files =
+                        format!("{}  {} files in {} archives", icon::PACKAGE, g.fs.file_count(), g.fs.archives.len());
+                    ui.label(egui::RichText::new(files).small().weak());
                     ui.separator();
-                    ui.label(egui::RichText::new(g.folder.display().to_string()).weak());
+                    ui.label(egui::RichText::new(g.folder.display().to_string()).small().weak());
                     if self.blender.as_ref().is_some_and(BlenderLink::connected) {
-                        ui.separator();
-                        ui.label("● Blender").on_hover_text("The Blender add-on is connected");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let on = egui::Color32::from_rgb(110, 200, 120);
+                            ui.label(egui::RichText::new(format!("{}  Blender", icon::CIRCLE)).small().color(on))
+                                .on_hover_text("The Blender add-on is connected");
+                        });
                     }
                 });
             }
@@ -894,7 +908,10 @@ impl eframe::App for RedForgeApp {
         self.panel_rects.clear();
         let mut action = None;
         let mut open_world = None;
-        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+        // The islands, with the gap around them too.
+        let gap = crate::theme::GAP;
+        let around = egui::Frame::new().fill(crate::theme::BG).inner_margin(egui::Margin::same(gap));
+        egui::CentralPanel::default().frame(around).show(ui, |ui| {
             let mut tabs = Tabs {
                 gpu: &self.gpu,
                 game: game.as_ref(),
@@ -911,7 +928,7 @@ impl eframe::App for RedForgeApp {
                 rects: &mut self.panel_rects,
                 icon: &self.icon,
             };
-            DockArea::new(&mut self.dock).style(Style::from_egui(ui.style().as_ref())).show_inside(ui, &mut tabs);
+            DockArea::new(&mut self.dock).style(crate::theme::dock(ui.style())).show_inside(ui, &mut tabs);
         });
         if let (Some(a), Some(g)) = (action, &game) {
             self.open(ctx, g, a);

@@ -79,9 +79,9 @@ impl Kind {
     /// Shown while there's no picture.
     fn glyph(self) -> &'static str {
         match self {
-            Kind::Interior => "🏠",
-            Kind::Other => "∅",
-            _ => "📦",
+            Kind::Interior => crate::theme::icon::HOUSE,
+            Kind::Other => crate::theme::icon::QUESTION,
+            _ => crate::theme::icon::CUBE,
         }
     }
 }
@@ -269,7 +269,7 @@ impl Objects {
                 ui.label(RichText::new(count).weak());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     self.resizing = false;
-                    ui.menu_button("⚙", |ui| {
+                    ui.menu_button(crate::theme::icon::GEAR_SIX, |ui| {
                         ui.label("Preview size");
                         let r = ui.add(egui::Slider::new(&mut self.tile_size, TILE_SIZES).step_by(16.0));
                         self.resizing = r.dragged();
