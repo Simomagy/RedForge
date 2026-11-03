@@ -130,7 +130,6 @@ impl Geometry {
     }
 
     /// A cylinder from `a` to `b`, open (`ends` closes it).
-    #[allow(dead_code)] // for the collisions' shapes
     fn add_tube(&mut self, a: Vec3, b: Vec3, radius: f32, ends: bool, colour: [u8; 4]) {
         let axis = (b - a).normalize_or(Vec3::Z);
         let q = Quat::from_rotation_arc(Vec3::Z, axis);
@@ -162,13 +161,11 @@ impl Geometry {
         }
     }
 
-    #[allow(dead_code)] // for the collisions' shapes
     pub fn add_cylinder(&mut self, a: Vec3, b: Vec3, radius: f32, colour: [u8; 4]) {
         self.add_tube(a, b, radius, true, colour);
     }
 
     /// A cylinder from `a` to `b` with half spheres on its ends.
-    #[allow(dead_code)] // for the collisions' shapes
     pub fn add_capsule(&mut self, a: Vec3, b: Vec3, radius: f32, colour: [u8; 4]) {
         let axis = (b - a).normalize_or(Vec3::Z);
         let q = Quat::from_rotation_arc(Vec3::Z, axis);
