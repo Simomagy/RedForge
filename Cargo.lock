@@ -3749,6 +3749,8 @@ dependencies = [
  "image",
  "log",
  "mint",
+ "percent-encoding",
+ "raw-window-handle",
  "rf-bridge",
  "rf-editor",
  "rf-formats",
@@ -3756,8 +3758,10 @@ dependencies = [
  "rf-render",
  "rf-world",
  "rfd",
+ "smithay-client-toolkit 0.19.2",
  "tiny-skia",
  "transform-gizmo-egui",
+ "wayland-client",
 ]
 
 [[package]]

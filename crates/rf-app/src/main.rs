@@ -17,6 +17,8 @@ mod settings;
 mod theme;
 mod tour;
 mod viewers;
+#[cfg(target_os = "linux")]
+mod wayland_drop;
 
 use std::sync::Arc;
 
