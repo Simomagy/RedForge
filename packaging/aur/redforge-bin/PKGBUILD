@@ -3,7 +3,7 @@
 # the GitHub release carries).
 pkgname=redforge-bin
 _pkgname=redforge
-pkgver=0.1.0
+pkgver=2.1.0
 pkgrel=1
 pkgdesc="A map editor for RedM: Red Dead Redemption 2's maps, models and textures (prebuilt)"
 arch=('x86_64')

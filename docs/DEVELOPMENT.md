@@ -97,10 +97,34 @@ The packages point to the repository, `github.com/Simomagy/RedForge`: the AUR
 packages' sources, the Flatpak's id (`io.github.Simomagy.RedForge`) and its
 metainfo.
 
-A release, then: tag it (`v<version>`), run the build scripts, attach
-`target/dist/*` and `target/msi/*.msi` to the GitHub release, put the
-tarball's checksum in `packaging/aur/redforge-bin/PKGBUILD` (`updpkgsums`),
-regenerate its `.SRCINFO` (`makepkg --printsrcinfo > .SRCINFO`) and push both
-AUR packages (each is its own git repository on the AUR:
-`git clone ssh://aur@aur.archlinux.org/<name>.git`, copy the two files in,
-commit, push).
+## Versions and releases
+
+The versions follow [Semantic Versioning](https://semver.org) from 2.0.0: the
+major number for changes that break projects or files, the minor for new
+features, the patch for fixes. `CHANGELOG.md` is in the
+[Keep a Changelog](https://keepachangelog.com) form: what changes goes under
+`[Unreleased]` as it's made, and at a release that section becomes the
+version's, which pastes as is into the GitHub release.
+
+The version lives in:
+
+- `Cargo.toml` (`[workspace.package] version`): the app, `rf`, the MSI, the
+  `.deb`, the AppImage and the tarball take it from there, and so does
+  `packaging/arch/PKGBUILD` (its `pkgver()`);
+- `packaging/aur/redforge-bin/PKGBUILD` (`pkgver`, then its `.SRCINFO`);
+- `packaging/flatpak/redforge.metainfo.xml` (a `<release>` per version).
+
+A release, then:
+
+1. Move `[Unreleased]` to `[x.y.z] - <date>` in `CHANGELOG.md` (with its link
+   at the bottom), bump the version in the places above, commit.
+2. Tag it: `git tag vx.y.z && git push origin master vx.y.z`.
+3. Build: `packaging/linux/build.sh all`, `packaging/flatpak/build.sh`,
+   `packaging/windows/build-msi.sh`.
+4. Make the GitHub release from the tag, its notes the version's changelog
+   section, and attach `target/dist/*` and `target/msi/*.msi`.
+5. The AUR: put the tarball's checksum in
+   `packaging/aur/redforge-bin/PKGBUILD` (`updpkgsums`), regenerate both
+   `.SRCINFO` files (`makepkg --printsrcinfo > .SRCINFO`) and push each package
+   to its own AUR repository (`git clone ssh://aur@aur.archlinux.org/<name>.git`,
+   copy the two files in, commit, push).

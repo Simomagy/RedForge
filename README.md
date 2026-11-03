@@ -22,7 +22,8 @@ or of your mod, and export the result as a RedM resource. It reads and writes
 the game's file formats exactly as RedForge 1.x did, converts them to and from
 the CodeX/Sollumz XML, and works hand in hand with Blender.
 
-This is RedForge 2.0, rewritten in Rust; see the [changelog](CHANGELOG.md).
+This is RedForge 2, rewritten in Rust. What changed in each version is in the
+[changelog](CHANGELOG.md); the versions follow [Semantic Versioning](https://semver.org).
 
 ## Features
 
@@ -175,7 +176,7 @@ or feature form. Please follow the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Credits
 
-RedForge 2.0 is a rewrite of RedForge 1.x (C#), which grew out of CodeX. Its
+RedForge 2 is a rewrite of RedForge 1.x (C#), which grew out of CodeX. Its
 XML is CodeX's and Sollumz's, so files go back and forth with them. Built
 with [egui](https://github.com/emilk/egui) and [wgpu](https://github.com/gfx-rs/wgpu).
 

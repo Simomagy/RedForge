@@ -1,6 +1,6 @@
 pkgbase = redforge-bin
 	pkgdesc = A map editor for RedM: Red Dead Redemption 2's maps, models and textures (prebuilt)
-	pkgver = 0.1.0
+	pkgver = 2.1.0
 	pkgrel = 1
 	url = https://github.com/Simomagy/RedForge
 	arch = x86_64
@@ -14,7 +14,7 @@ pkgbase = redforge-bin
 	conflicts = redforge
 	options = !strip
 	options = !debug
-	source = https://github.com/Simomagy/RedForge/releases/download/v0.1.0/redforge-0.1.0-x86_64-linux.tar.gz
+	source = https://github.com/Simomagy/RedForge/releases/download/v2.1.0/redforge-2.1.0-x86_64-linux.tar.gz
 	sha256sums = SKIP
 
 pkgname = redforge-bin
