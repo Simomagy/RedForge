@@ -121,6 +121,8 @@ pub struct RedForgeApp {
     /// The Blender add-on's link, from when the game is loaded.
     blender: Option<BlenderLink>,
     objects: Objects,
+    /// The loading screen, while the game loads and as it fades away.
+    loading: Option<crate::loading::LoadingScreen>,
 }
 
 impl RedForgeApp {
@@ -168,6 +170,7 @@ impl RedForgeApp {
             hierarchy: Hierarchy::default(),
             blender: None,
             objects: Objects::new(tile_size.unwrap_or(crate::objects::DEFAULT_TILE)),
+            loading: None,
         };
         if let Some(f) = folder {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
@@ -187,6 +190,7 @@ impl RedForgeApp {
         let c = ctx.clone();
         let rx = start_loading(folder, move || c.request_repaint());
         self.game = GameState::Loading { rx, status: "Starting…".into(), started: Instant::now() };
+        self.loading = Some(crate::loading::LoadingScreen::new());
     }
 
     fn open(&mut self, ctx: &egui::Context, game: &Arc<Game>, action: BrowserAction) {
@@ -600,9 +604,17 @@ impl eframe::App for RedForgeApp {
         if let GameState::Loading { rx, status, .. } = &mut self.game {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
-                    LoadMessage::Progress(s) => *status = s,
+                    LoadMessage::Progress(s) => {
+                        if let Some(l) = &mut self.loading {
+                            l.set_status(&s);
+                        }
+                        *status = s;
+                    }
                     LoadMessage::Done(result) => match *result {
                         Ok(g) => {
+                            if let Some(l) = &mut self.loading {
+                                l.finish();
+                            }
                             let g = Arc::new(g);
                             self.editor = Some(Editor::new(g.fs.clone(), g.hashes.clone(), g.data()));
                             self.blender.get_or_insert_with(|| BlenderLink::start(ctx, &self.settings));
@@ -611,6 +623,7 @@ impl eframe::App for RedForgeApp {
                             break;
                         }
                         Err(e) => {
+                            self.loading = None;
                             let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
                             self.game = GameState::NoFolder { input, error: Some(format!("{e:#}")) };
                             break;
@@ -729,18 +742,20 @@ impl eframe::App for RedForgeApp {
                 return;
             }
             GameState::Loading { status, started, .. } => {
-                egui::CentralPanel::default().show(ui, |ui| {
-                    ui.centered_and_justified(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label(format!("{status} ({:.1} s)", started.elapsed().as_secs_f32()));
-                        });
-                    });
-                });
-                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                log::debug!("{status} ({:.1} s)", started.elapsed().as_secs_f32());
+                if let Some(l) = &mut self.loading {
+                    l.ui(ctx);
+                }
                 return;
             }
         };
+        // The loading screen fading away over the app.
+        if let Some(l) = &mut self.loading {
+            l.ui(ctx);
+            if l.gone() {
+                self.loading = None;
+            }
+        }
 
         egui::Panel::bottom("status").show(ui, |ui| {
             if let Some(g) = &game {

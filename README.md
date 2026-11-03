@@ -166,6 +166,7 @@ brings a pane to the front (Project, Hierarchy...), `REDFORGE_HOUR` sets
 the map's hour, `REDFORGE_MODE=<name>` starts in a selection mode (where
 `REDFORGE_SELECT_CENTRE` selects the helper in the middle), and
 `REDFORGE_PROJECT=<rfproj>` opens a project instead of the last one.
+`REDFORGE_HOLD_LOADING=<seconds>` keeps the loading screen up that long.
 
 ## Crates
 
