@@ -160,8 +160,8 @@ from the game folder and are `/`-separated, like
 With a recent stable Rust and a Vulkan driver:
 
 ```sh
-git clone <this repository>
-cd redforge
+git clone https://github.com/Simomagy/RedForge.git
+cd RedForge
 cargo run --release -p rf-app
 ```
 

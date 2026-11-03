@@ -1,7 +1,7 @@
 # The Flatpak, built by build.sh. The crates are fetched during the build
 # (--share=network), which is fine for a local bundle; Flathub would want
 # them listed as sources (flatpak-cargo-generator).
-app-id: io.github.OWNER.RedForge
+app-id: io.github.Simomagy.RedForge
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
 sdk: org.freedesktop.Sdk

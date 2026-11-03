@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.OWNER.RedForge</id>
+  <id>io.github.Simomagy.RedForge</id>
   <name>RedForge</name>
   <summary>A map editor for RedM</summary>
   <developer id="studio.prysma">
@@ -16,9 +16,9 @@
     </p>
     <p>It needs an installed copy of Red Dead Redemption 2.</p>
   </description>
-  <launchable type="desktop-id">io.github.OWNER.RedForge.desktop</launchable>
-  <url type="homepage">https://github.com/OWNER/redforge</url>
-  <url type="bugtracker">https://github.com/OWNER/redforge/issues</url>
+  <launchable type="desktop-id">io.github.Simomagy.RedForge.desktop</launchable>
+  <url type="homepage">https://github.com/Simomagy/RedForge</url>
+  <url type="bugtracker">https://github.com/Simomagy/RedForge/issues</url>
   <content_rating type="oars-1.1" />
   <releases>
     <release version="0.1.0" date="2026-11-03" />

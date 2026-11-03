@@ -93,12 +93,9 @@ releases):
 The Linux binaries of `build.sh` are built for glibc 2.31 (Ubuntu 20.04,
 Debian 11 and newer); a plain `cargo build` on Arch needs the newest glibc.
 
-The repository's address isn't decided yet: the AUR packages, the Flatpak's id
-and its metainfo say `OWNER` where the GitHub owner goes.
-
-```sh
-grep -rl OWNER packaging | xargs sed -i 's/OWNER/<github owner>/g'
-```
+The packages point to the repository, `github.com/Simomagy/RedForge`: the AUR
+packages' sources, the Flatpak's id (`io.github.Simomagy.RedForge`) and its
+metainfo.
 
 A release, then: tag it (`v<version>`), run the build scripts, attach
 `target/dist/*` and `target/msi/*.msi` to the GitHub release, put the
