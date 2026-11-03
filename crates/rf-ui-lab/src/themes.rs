@@ -1,6 +1,8 @@
-//! The three styles to compare: Forge (RedForge's own, warm and dark as its
+//! The styles to compare: Forge (RedForge's own, warm and dark as its
 //! loading screen), RedForge 1.x (the C#'s WinUI/Fluent dark, with its
-//! coloured icons) and a neutral 3D editor's (Blender, Unreal).
+//! coloured icons), a neutral 3D editor's (Blender, Unreal), and Islands:
+//! Forge's style in Neutral's greys with an orange accent, the panels as
+//! rounded islands over a darker background (as JetBrains' new UI).
 
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle, Vec2,
@@ -34,6 +36,8 @@ pub enum Tabs {
     Card,
     /// Flat blocks, the active one a shade lighter.
     Block,
+    /// Rounded pills inside their island's bar.
+    Pill,
 }
 
 pub struct Theme {
@@ -65,13 +69,17 @@ pub struct Theme {
     /// Toolbar buttons with their names, not only their icons.
     pub labels: bool,
     pub coloured_icons: bool,
+    /// A bar in the accent at the start of a selected row.
+    pub accent_bar: bool,
+    /// The panels as rounded islands with gaps between them.
+    pub islands: bool,
 }
 
 const fn rgb(c: u32) -> Color32 {
     Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
 
-pub const THEMES: [Theme; 3] = [
+pub const THEMES: [Theme; 4] = [
     Theme {
         name: "Forge",
         tagline: "RedForge's own: warm and dark, the icon's red",
@@ -100,6 +108,8 @@ pub const THEMES: [Theme; 3] = [
         tabs: Tabs::Joined,
         labels: true,
         coloured_icons: true,
+        accent_bar: true,
+        islands: false,
     },
     Theme {
         name: "RedForge 1.x",
@@ -129,6 +139,8 @@ pub const THEMES: [Theme; 3] = [
         tabs: Tabs::Card,
         labels: true,
         coloured_icons: true,
+        accent_bar: false,
+        islands: false,
     },
     Theme {
         name: "Neutral",
@@ -158,6 +170,39 @@ pub const THEMES: [Theme; 3] = [
         tabs: Tabs::Block,
         labels: false,
         coloured_icons: false,
+        accent_bar: false,
+        islands: false,
+    },
+    Theme {
+        name: "Islands",
+        tagline: "Forge's style in Neutral's greys, an orange accent, the panels as islands",
+        fonts: [
+            "/usr/share/fonts/TTF/FiraSans-Regular.ttf",
+            "/usr/share/fonts/TTF/FiraSans-SemiBold.ttf",
+            "/usr/share/fonts/TTF/FiraSansCondensed-Bold.ttf",
+        ],
+        size: 14.0,
+        bg: rgb(0x131313),
+        panel: rgb(0x212121),
+        card: rgb(0x2A2A2A),
+        field: rgb(0x191919),
+        widget: rgb(0x323232),
+        hover: rgb(0x3C3C3C),
+        pressed: rgb(0x474747),
+        border: rgb(0x2D2D2D),
+        text: rgb(0xE6E6E6),
+        weak: rgb(0x8E8E8E),
+        accent: rgb(0xFF8A3D),
+        on_accent: rgb(0x1A1A1A),
+        radius: 8,
+        big_radius: 12,
+        spacing: Vec2::new(8.0, 6.0),
+        padding: Vec2::new(8.0, 4.0),
+        tabs: Tabs::Pill,
+        labels: false,
+        coloured_icons: false,
+        accent_bar: true,
+        islands: true,
     },
 ];
 
@@ -374,6 +419,7 @@ impl Theme {
         s.tab_bar.bg_fill = self.bg;
         s.tab_bar.height = self.size + 16.0;
         s.tab_bar.hline_color = self.bg;
+        s.tab_bar.show_scroll_bar_on_overflow = false;
         s.tab.tab_body.bg_fill = self.panel;
         s.tab.tab_body.stroke = Stroke::NONE;
         s.tab.tab_body.inner_margin = Margin::same(8);
@@ -385,6 +431,7 @@ impl Theme {
             Tabs::Joined => (self.panel, small),
             Tabs::Card => (self.panel, top),
             Tabs::Block => (self.panel, CornerRadius::ZERO),
+            Tabs::Pill => (self.widget, CornerRadius::same(self.radius)),
         };
         for t in
             [&mut s.tab.active, &mut s.tab.focused, &mut s.tab.active_with_kb_focus, &mut s.tab.focused_with_kb_focus]
@@ -408,6 +455,28 @@ impl Theme {
         s.buttons.close_tab_active_color = self.text;
         s.buttons.close_tab_bg_fill = self.hover;
         s.overlay.selection_color = self.accent.gamma_multiply(0.4);
+        if self.islands {
+            // Each leaf a rounded island: its tab bar the top, its body the
+            // rest, the separators gaps of the background between them.
+            let big = self.big_radius;
+            s.separator.width = 8.0;
+            s.separator.extra_interact_width = 2.0;
+            s.separator.color_idle = self.bg;
+            s.separator.color_hovered = self.bg;
+            s.separator.color_dragged = self.accent.gamma_multiply(0.5);
+            s.tab_bar.bg_fill = self.panel;
+            s.tab_bar.corner_radius = CornerRadius { nw: big, ne: big, sw: 0, se: 0 };
+            s.tab_bar.height = self.size + 22.0;
+            s.tab_bar.inner_margin = Margin { left: 6, right: 6, top: 5, bottom: 3 };
+            s.tab_bar.hline_color = self.panel;
+            s.tab.tab_body.corner_radius = CornerRadius { nw: 0, ne: 0, sw: big, se: big };
+            s.tab.tab_body.inner_margin = Margin::same(10);
+            s.tab.spacing = 4.0;
+            for t in [&mut s.tab.inactive, &mut s.tab.inactive_with_kb_focus] {
+                t.bg_fill = self.panel;
+            }
+            s.tab.hovered.bg_fill = self.card;
+        }
         s
     }
 }

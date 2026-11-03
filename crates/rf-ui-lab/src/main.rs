@@ -3,7 +3,7 @@
 //! toolbar, Properties and Objects, the status bar) with made-up content,
 //! and the styles of [`themes`] to switch between.
 //!
-//! `LAB_STYLE=<0-2>` starts in a style; with `LAB_SCREENSHOT=<png>` it saves
+//! `LAB_STYLE=<0-3>` starts in a style; with `LAB_SCREENSHOT=<png>` it saves
 //! a screenshot of its window and quits.
 
 mod themes;
@@ -69,7 +69,8 @@ fn layout() -> DockState<Tab> {
 
 impl Lab {
     fn new(cc: &eframe::CreationContext) -> Self {
-        let theme = std::env::var("LAB_STYLE").ok().and_then(|s| s.parse().ok()).unwrap_or(0usize).min(2);
+        let theme =
+            std::env::var("LAB_STYLE").ok().and_then(|s| s.parse().ok()).unwrap_or(0usize).min(THEMES.len() - 1);
         cc.egui_ctx.set_fonts(THEMES[theme].fonts());
         Self {
             theme,
@@ -126,11 +127,12 @@ fn tool_button(ui: &mut egui::Ui, t: &Theme, on: bool, glyph: &str, kind: Kind, 
 
 /// A group of toolbar controls, on a card.
 fn group(ui: &mut egui::Ui, t: &Theme, add: impl FnOnce(&mut egui::Ui)) {
+    let stroke = if t.islands { Stroke::NONE } else { Stroke::new(1.0, t.border) };
     egui::Frame::new()
         .fill(t.card)
         .corner_radius(CornerRadius::same(t.radius + 2))
         .inner_margin(egui::Margin::symmetric(4, 3))
-        .stroke(Stroke::new(1.0, t.border))
+        .stroke(stroke)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             ui.horizontal(add);
@@ -161,8 +163,10 @@ fn row(ui: &mut egui::Ui, t: &Theme, selected: bool, glyph: &str, kind: Kind, na
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::click());
     let painter = ui.painter();
     if selected {
-        painter.rect_filled(rect, CornerRadius::same(t.radius), t.accent.gamma_multiply(0.28));
-        if t.name == "Forge" {
+        // Islands: a neutral grey, the accent only in the bar and the icon.
+        let fill = if t.islands { t.widget } else { t.accent.gamma_multiply(0.28) };
+        painter.rect_filled(rect, CornerRadius::same(t.radius), fill);
+        if t.accent_bar {
             let bar = egui::Rect::from_min_size(rect.min, Vec2::new(3.0, rect.height()));
             painter.rect_filled(bar, CornerRadius::same(2), t.accent);
         }
@@ -172,7 +176,8 @@ fn row(ui: &mut egui::Ui, t: &Theme, selected: bool, glyph: &str, kind: Kind, na
     let font = egui::FontId::proportional(t.size);
     let mut x = rect.min.x + 18.0;
     let y = rect.center().y;
-    painter.text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, glyph, font.clone(), t.icon(kind));
+    let icon_colour = if selected && t.islands { t.accent } else { t.icon(kind) };
+    painter.text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, glyph, font.clone(), icon_colour);
     x += t.size + 8.0;
     let g = painter.text(egui::pos2(x, y), egui::Align2::LEFT_CENTER, name, font.clone(), t.text);
     if !note.is_empty() {
@@ -379,7 +384,9 @@ impl Lab {
             let w = map.width() * aspect / map_aspect;
             egui::Rect::from_center_size(map.center(), Vec2::new(w, map.height()))
         };
-        ui.painter().image(self.world.id(), rect, uv, Color32::WHITE);
+        let corners = CornerRadius::same(if t.islands { t.radius } else { 0 });
+        ui.painter()
+            .add(egui::epaint::RectShape::filled(rect, corners, Color32::WHITE).with_texture(self.world.id(), uv));
         ui.allocate_rect(rect, Sense::click_and_drag());
         let stats = "-300 640 122   10.0 ms\n1627 entities, 1104 drawn in 4258 draw calls\nmodels 1481, textures 1870";
         let galley = ui.painter().layout_no_wrap(stats.into(), egui::FontId::monospace(t.size - 2.0), t.text);
@@ -414,11 +421,11 @@ impl Lab {
         };
         let (mut p, mut r, mut s) = (self.position, self.rotation, self.scale);
         card(ui, "TRANSFORM", &mut |ui| {
-            ui.spacing_mut().interact_size.x = 58.0;
+            ui.spacing_mut().interact_size.x = 48.0;
             egui::Grid::new("transform").num_columns(4).spacing([6.0, 6.0]).show(ui, |ui| {
                 ui.label("Position");
                 for v in &mut p {
-                    ui.add(egui::DragValue::new(v).speed(0.1).fixed_decimals(3));
+                    ui.add(egui::DragValue::new(v).speed(0.1).fixed_decimals(2));
                 }
                 ui.end_row();
                 ui.label("Rotation °");
@@ -545,7 +552,10 @@ impl eframe::App for Lab {
             });
         let style = t.dock(ui);
         let mut dock = std::mem::replace(&mut self.dock, DockState::new(vec![]));
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(t.bg)).show(ui, |ui| {
+        let gap = if t.islands { 8 } else { 0 };
+        let frame =
+            egui::Frame::new().fill(t.bg).inner_margin(egui::Margin { left: gap, right: gap, top: 0, bottom: 0 });
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             DockArea::new(&mut dock).style(style).show_inside(ui, &mut Tabs { lab: self });
         });
         self.dock = dock;
