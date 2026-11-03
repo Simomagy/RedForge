@@ -140,7 +140,6 @@ pub struct Collect<'a> {
     pub game: &'a Arc<Game>,
     pub world: &'a rf_world::World,
     /// The camera, which the streamed modes load around.
-    #[allow(dead_code)]
     pub eye: Vec3,
 }
 
