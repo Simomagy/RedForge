@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32, Key, Pos2, Rect, Stroke};
+use eframe::egui::{self, Key, Pos2, Rect, Stroke};
 use glam::{Mat4, Quat, Vec2, Vec3};
 use rf_editor::{Editor, EntityId, Placement};
 use rf_render::{CameraView, PickRequest};
@@ -417,6 +417,3 @@ pub fn entity_box(editor: &Editor, id: EntityId) -> Option<(Mat4, Vec3, Vec3)> {
     };
     Some((Mat4::from_cols_array(&e.transform), min, max))
 }
-
-pub const HOVER: Color32 = Color32::from_rgba_premultiplied(230, 230, 230, 200);
-pub const SELECTED: Color32 = Color32::from_rgb(255, 160, 40);

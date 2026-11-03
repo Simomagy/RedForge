@@ -6,7 +6,7 @@ mod globals;
 pub mod models;
 pub mod tools;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -17,8 +17,8 @@ use rf_formats::formats::meta::Meta;
 use rf_formats::rpf8::FileRef;
 use rf_render::sky::STAR_COLOUR;
 use rf_render::{
-    CASCADES, Cascades, DrawBatch, FlyCamera, GpuModel, Instance, Light, LightKind, RenderStats, RenderTargets, Scene,
-    Sky, SkyLights, ViewSettings,
+    CASCADES, Cascades, DrawBatch, FlyCamera, GpuModel, Instance, Light, LightKind, Outline, RenderStats,
+    RenderTargets, Scene, Sky, SkyLights, ViewSettings,
 };
 use rf_world::{EntityId, VisibleEntity};
 
@@ -37,6 +37,11 @@ enum Source {
 /// The C#'s `RDR2Light.LuxScale`: what the game's light units are in the
 /// renderer's (the sun keeps its own brightness).
 const LUX_SCALE: f32 = 0.01;
+
+/// The C#'s default hover and selection outline colours
+/// (`Editor.HoverOutlineColour`, `Editor.SelectionOutlineColour`).
+const HOVER_OUTLINE: [f32; 4] = [1.0, 1.0, 1.0, 0.3];
+const SELECTION_OUTLINE: [f32; 4] = [0.0, 1.0, 0.0, 0.5];
 
 /// An entity's light in the world, if it's on at the hour and in view: placed
 /// on its bone at rest, then by the entity (the C#'s `GetAnimatedBasis`).
@@ -525,6 +530,11 @@ impl MapView {
         let mut casters: [Groups; CASCADES] = Default::default();
         let mut drawn = Vec::new();
         let mut lights = Vec::new();
+        // What's outlined: the hovered entity, then the selection.
+        let selection: HashSet<EntityId> =
+            editor.as_deref().map(|e| e.selection().iter().copied().collect()).unwrap_or_default();
+        let hovered = tools.hover.filter(|id| !selection.contains(id) && tools.tool != Tool::Place);
+        let mut outlined: [Groups; 2] = Default::default();
         let data = self.game.data();
         let hour = self.hour as u32 % 24;
         for e in &visible {
@@ -552,6 +562,14 @@ impl MapView {
             }
             drawn.push(e.id);
             let id = drawn.len() as u32;
+            let layer = if hovered == Some(e.id) { Some(0) } else { selection.contains(&e.id).then_some(1) };
+            if let Some(l) = layer {
+                outlined[l]
+                    .entry(key)
+                    .or_insert_with(|| (model.clone(), Vec::new()))
+                    .1
+                    .push(Instance::new(t, e.tint, id));
+            }
             groups.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint, id));
         }
         self.drawn = Arc::new(self.batch_buffers.picks(drawn));
@@ -567,6 +585,7 @@ impl MapView {
         };
         let ranges_seen = ranges(&groups);
         let ranges_cast: Vec<_> = casters.iter().map(&mut ranges).collect();
+        let ranges_outlined: Vec<_> = outlined.iter().map(&mut ranges).collect();
         fn to_batches(r: &[(Arc<GpuModel>, usize, std::ops::Range<u32>)]) -> Vec<DrawBatch<'_>> {
             r.iter().map(|(m, lod, r)| DrawBatch { model: m, lod: *lod, instances: r.clone(), buffer: None }).collect()
         }
@@ -602,11 +621,35 @@ impl MapView {
             }
         }
         self.batch_instances_drawn = (drawn_batch_instances, visible_batches.len());
+
+        let mut outlines: Vec<Outline> = [HOVER_OUTLINE, SELECTION_OUTLINE]
+            .into_iter()
+            .zip(&ranges_outlined)
+            .map(|(colour, r)| Outline { colour, batches: to_batches(r) })
+            .collect();
+        // Instances of batches outlined: each one alone from its batch's buffer.
+        let outlined_instances = hovered.into_iter().map(|id| (0, id)).chain(selection.iter().map(|&id| (1, id)));
+        for (layer, id) in outlined_instances {
+            let Some((grass, b, i)) = id.batch_instance() else { continue };
+            let found = batch_models
+                .iter()
+                .find(|(vb, ..)| vb.key.0 == id.node && vb.batch.grass == grass && vb.batch.list_index == b);
+            let Some((vb, model, lod_dist)) = found else { continue };
+            let (Some(buffer), Some(at)) = (self.batch_buffers.buffer(vb), vb.batch.index_of(i)) else { continue };
+            let at_eye = Vec3::from_slice(&vb.batch.transform(at)[12..15]).distance(camera.eye);
+            let dists = batches::lod_dists(&vb.batch, model, *lod_dist);
+            let lod = dists.iter().position(|&d| at_eye <= d).unwrap_or(2);
+            let lod = if model.lods[lod].is_empty() { model.highest_lod() } else { lod };
+            let at = at as u32;
+            outlines[layer].batches.push(DrawBatch { model, lod, instances: at..at + 1, buffer: Some(buffer) });
+        }
+        outlines.retain(|o| !o.batches.is_empty());
         let scene = Scene {
             instances: &instances,
             batches: &batches,
             shadows: cascades.as_ref().map(|c| (c, &cast)),
             lights: &lights,
+            outlines: &outlines,
         };
         self.lights_drawn = lights.len();
         self.stats = gpu.renderer.render_scene(&gpu.ctx, targets, &camera, &self.view, &scene);
@@ -722,16 +765,22 @@ impl MapView {
         }
 
         let painter = ui.painter().with_clip_rect(rect);
-        if let Some(id) = tools.hover.filter(|id| !editor.selection().contains(id))
+        // The hovered entity's name under the mouse (the C#'s
+        // `Editor.HoverNameLabel` "Below"), with a shadow.
+        if let Some(id) = tools.hover
             && tools.tool != Tool::Place
-            && let Some((m, min, max)) = tools::entity_box(editor, id)
+            && let Some(mouse) = response.hover_pos()
+            && let Some(e) = editor.world.entity(id)
         {
-            tools::draw_box(&painter, camera, rect, m, min, max, Stroke::new(1.0, tools::HOVER));
-        }
-        for id in editor.selection() {
-            if let Some((m, min, max)) = tools::entity_box(editor, *id) {
-                tools::draw_box(&painter, camera, rect, m, min, max, Stroke::new(1.5, tools::SELECTED));
+            let mut name = editor.hashes().name(e.archetype);
+            if let Some((_, _, i)) = id.batch_instance() {
+                name = format!("{name} : {i}");
             }
+            let font = egui::FontId::proportional(14.0);
+            let at = mouse + Vec2::new(0.0, 30.0);
+            let shadow = egui::Color32::from_black_alpha(200);
+            painter.text(at + Vec2::splat(1.0), egui::Align2::CENTER_TOP, &name, font.clone(), shadow);
+            painter.text(at, egui::Align2::CENTER_TOP, &name, font, egui::Color32::WHITE);
         }
         // Where a click would place the archetype.
         if tools.tool == Tool::Place

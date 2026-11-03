@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::GpuContext;
+use crate::outline::{OutlinePass, OutlineTargets};
 use crate::post::{Post, PostTargets};
 use crate::sky::{Sky, SkyTargets};
 
@@ -117,17 +118,21 @@ pub struct RenderTargets {
     pub(crate) post: PostTargets,
     /// The atmosphere's pass over the lit image.
     pub(crate) sky: SkyTargets,
+    /// The outlines' mask.
+    pub(crate) outline: OutlineTargets,
     /// When this view was last drawn, for the adaptation.
     pub(crate) last_frame: Mutex<Option<Instant>>,
 }
 
 impl RenderTargets {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         ctx: &GpuContext,
         layouts: &ViewLayouts,
         ssao_constants: &wgpu::Buffer,
         post: &Post,
         sky: &Sky,
+        outline: &OutlinePass,
         width: u32,
         height: u32,
     ) -> Self {
@@ -198,6 +203,7 @@ impl RenderTargets {
         let blur_group = group("ssao blur", &layouts.blur, &[(3, tv(&ssao_raw))]);
         let post = post.targets(ctx, &hdr, width, height);
         let sky = sky.view_targets(ctx, &lit, &depth_view);
+        let outline = outline.targets(ctx, width, height);
         Self {
             width,
             height,
@@ -224,6 +230,7 @@ impl RenderTargets {
             blur_group,
             post,
             sky,
+            outline,
             last_frame: Mutex::new(None),
         }
     }

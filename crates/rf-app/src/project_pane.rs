@@ -2,7 +2,7 @@
 //! the editor), saving them, and exporting them as a RedM resource, as the
 //! C# RedForge's Project pane does.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, RichText};
@@ -12,6 +12,46 @@ use crate::settings::Settings;
 
 const RESOURCES_FOLDER: &str = "RedM.ResourcesFolder";
 const AUTHOR: &str = "RedM.Author";
+/// The C#'s project settings: the .rfproj files opened, most recent first
+/// (separated by `|`), the one open when quitting, and whether it opens again.
+const RECENT: &str = "Project.Recent";
+const LAST: &str = "Project.Last";
+const REOPEN_LAST: &str = "Project.ReopenLast";
+
+/// Files go in groups by what they are, as in the C#'s pane, with a colour
+/// each; the last group takes everything else.
+const GROUPS: [(&str, &[&str], egui::Color32); 6] = [
+    ("Maps", &["ymap"], egui::Color32::from_rgb(110, 190, 90)),
+    ("Archetypes", &["ytyp"], egui::Color32::from_rgb(230, 160, 60)),
+    ("Models", &["ydr", "ydd", "yft"], egui::Color32::from_rgb(90, 160, 235)),
+    ("Textures", &["ytd"], egui::Color32::from_rgb(190, 120, 220)),
+    ("Collisions", &["ybn"], egui::Color32::from_rgb(225, 95, 90)),
+    ("Other", &[], egui::Color32::GRAY),
+];
+
+fn group_of(name: &str) -> usize {
+    let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    GROUPS.iter().position(|g| g.1.contains(&ext.as_str())).unwrap_or(GROUPS.len() - 1)
+}
+
+/// Where a file is: its folder in the project's, or the whole folder when
+/// it's somewhere else.
+fn folder_text(root: Option<&Path>, path: Option<&Path>) -> String {
+    let Some(path) = path else { return "not saved".into() };
+    let dir = path.parent().unwrap_or(Path::new(""));
+    match root.and_then(|r| dir.strip_prefix(r).ok()) {
+        Some(rel) => rel.display().to_string(),
+        None => dir.display().to_string(),
+    }
+}
+
+/// A row's identity, for the selection.
+fn entry_key(e: &ProjectEntry) -> String {
+    match &e.path {
+        Some(p) => p.display().to_string(),
+        None => e.name.clone(),
+    }
+}
 
 /// Something that waits for "discard unsaved changes?".
 enum Pending {
@@ -26,6 +66,14 @@ pub struct ProjectPane {
     confirm: Option<Pending>,
     /// The export form, filled from the project when it opens.
     export: Option<ExportForm>,
+    filter: String,
+    collapsed: HashSet<usize>,
+    /// The selected files ([`entry_key`]).
+    selected: HashSet<String>,
+    /// A ymap just picked in the list (by name hash), for the Hierarchy to show.
+    pub picked_map: Option<u32>,
+    /// Whether the last project was opened again at start.
+    started: bool,
 }
 
 #[derive(Default, Clone)]
@@ -39,6 +87,9 @@ struct ExportForm {
 
 impl ProjectPane {
     pub fn ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, settings: &mut Settings) {
+        if !std::mem::replace(&mut self.started, true) {
+            self.reopen(editor, settings);
+        }
         let title = match &editor.project {
             Some(p) => p.name(),
             None => "No project".into(),
@@ -55,7 +106,11 @@ impl ProjectPane {
                 && let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).save_file()
             {
                 let file = with_extension(file, "rfproj");
-                self.report(editor.new_project(&file).map(|_| "Project made".into()));
+                let made = editor.new_project(&file);
+                if made.is_ok() {
+                    remember(settings, &file);
+                }
+                self.report(made.map(|_| "Project made".into()));
             }
             if ui.button("Open…").clicked()
                 && let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).pick_file()
@@ -63,7 +118,7 @@ impl ProjectPane {
                 if editor.has_unsaved() {
                     self.confirm = Some(Pending::Open(file));
                 } else {
-                    self.open(editor, &file);
+                    self.open(editor, settings, &file);
                 }
             }
             if ui.button("Save all").on_hover_text("Ctrl+S").clicked() {
@@ -73,10 +128,15 @@ impl ProjectPane {
                 if editor.has_unsaved() {
                     self.confirm = Some(Pending::Close);
                 } else {
-                    editor.close_project();
-                    self.export = None;
+                    self.close(editor, settings);
                 }
             }
+            ui.menu_button("More", |ui| {
+                let mut reopen = settings.get(REOPEN_LAST) != Some("false");
+                if ui.checkbox(&mut reopen, "Reopen the last project at start").changed() {
+                    settings.set(REOPEN_LAST, reopen.to_string());
+                }
+            });
         });
         ui.horizontal_wrapped(|ui| {
             if ui.button("Add files…").clicked()
@@ -106,16 +166,56 @@ impl ProjectPane {
                 }
             }
         });
-        self.confirm_ui(ui, editor);
+        self.confirm_ui(ui, editor, settings);
         ui.separator();
 
         let entries = editor.project_entries();
         if entries.is_empty() {
             ui.label(RichText::new("No files yet: edit the map, make a ymap, or add files.").weak());
+            let recent = recent(settings);
+            if editor.project.is_none() && !recent.is_empty() {
+                ui.label(RichText::new("Recent projects").strong());
+                for file in recent.iter().take(6) {
+                    let name = file.file_stem().unwrap_or_default().to_string_lossy();
+                    if ui.link(name).on_hover_text(file.display().to_string()).clicked() {
+                        self.open(editor, settings, file);
+                    }
+                }
+            }
+        } else {
+            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Search files"));
         }
+        let filter = self.filter.trim().to_lowercase();
+        let root = editor.project.as_ref().and_then(|p| p.dir()).map(Path::to_path_buf);
         egui::ScrollArea::vertical().id_salt("project-files").max_height(ui.available_height() * 0.6).show(ui, |ui| {
-            for e in &entries {
-                self.entry_ui(ui, editor, e);
+            for (g, (name, _, colour)) in GROUPS.iter().enumerate() {
+                let mut rows: Vec<&ProjectEntry> = entries
+                    .iter()
+                    .filter(|e| {
+                        group_of(&e.name) == g && (filter.is_empty() || e.name.to_lowercase().contains(&filter))
+                    })
+                    .collect();
+                if rows.is_empty() {
+                    continue;
+                }
+                rows.sort_by_key(|e| e.name.to_lowercase());
+                // Collapsed groups show their header only, unless searching.
+                let open = !self.collapsed.contains(&g) || !filter.is_empty();
+                let header = ui.horizontal(|ui| {
+                    ui.label(RichText::new(if open { "⏷" } else { "⏵" }).weak());
+                    ui.label(RichText::new("■").color(*colour));
+                    ui.label(RichText::new(*name).strong());
+                    ui.label(RichText::new(rows.len().to_string()).weak());
+                });
+                let click = ui.interact(header.response.rect, ui.id().with(("project-group", g)), egui::Sense::click());
+                if click.clicked() && !self.collapsed.remove(&g) {
+                    self.collapsed.insert(g);
+                }
+                if open {
+                    for e in rows {
+                        self.entry_ui(ui, editor, e, root.as_deref());
+                    }
+                }
             }
         });
         ui.separator();
@@ -126,23 +226,43 @@ impl ProjectPane {
         }
     }
 
-    fn entry_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, e: &ProjectEntry) {
+    fn entry_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, e: &ProjectEntry, root: Option<&Path>) {
         ui.horizontal(|ui| {
+            ui.add_space(12.0);
             if let Some(DocKey::Map(name)) = e.doc {
                 let target = editor.target == Some(name);
                 if ui.radio(target, "").on_hover_text("Place and paste into this ymap").clicked() {
                     editor.target = Some(name);
                 }
             }
-            let mut text = RichText::new(format!("{}{}", e.name, if e.dirty { " *" } else { "" }));
+            let mut text = RichText::new(format!("{}{}", e.name, if e.dirty { " •" } else { "" }));
             if e.path.is_none() {
                 text = text.italics();
             }
             let tip = match &e.path {
                 Some(p) => p.display().to_string(),
-                None => "Not saved yet".into(),
+                None => "Changed game file, not saved to disk yet".into(),
             };
-            ui.label(text).on_hover_text(tip).context_menu(|ui| {
+            let key = entry_key(e);
+            let row = ui.selectable_label(self.selected.contains(&key), text).on_hover_text(tip);
+            let folder = folder_text(root, e.path.as_deref());
+            if !folder.is_empty() {
+                ui.add(egui::Label::new(RichText::new(folder).weak().small()).truncate());
+            }
+            if row.clicked() {
+                if ui.input(|i| i.modifiers.command) {
+                    if !self.selected.remove(&key) {
+                        self.selected.insert(key);
+                    }
+                } else {
+                    self.selected = HashSet::from([key]);
+                }
+                // A ymap picked shows in the Hierarchy (until the map's selection changes).
+                if let Some(DocKey::Map(name)) = e.doc {
+                    self.picked_map = Some(name);
+                }
+            }
+            row.context_menu(|ui| {
                 if let Some(doc) = e.doc {
                     if ui.button("Save").clicked() {
                         match editor.save_path(doc) {
@@ -176,12 +296,41 @@ impl ProjectPane {
         }
     }
 
-    fn open(&mut self, editor: &mut Editor, file: &Path) {
+    fn open(&mut self, editor: &mut Editor, settings: &mut Settings, file: &Path) {
         match editor.open_project(file) {
-            Ok(problems) => self.after_load(editor, problems),
+            Ok(problems) => {
+                remember(settings, file);
+                self.after_load(editor, problems);
+            }
             Err(e) => self.status = Some(e),
         }
         self.export = None;
+        self.selected.clear();
+    }
+
+    fn close(&mut self, editor: &mut Editor, settings: &mut Settings) {
+        editor.close_project();
+        settings.set(LAST, "");
+        self.export = None;
+        self.selected.clear();
+    }
+
+    /// At start: the project `REDFORGE_PROJECT` names (for testing, not
+    /// remembered), or the last one, as the C# does.
+    fn reopen(&mut self, editor: &mut Editor, settings: &mut Settings) {
+        if let Ok(file) = std::env::var("REDFORGE_PROJECT") {
+            match editor.open_project(Path::new(&file)) {
+                Ok(problems) => self.after_load(editor, problems),
+                Err(e) => self.status = Some(e),
+            }
+            return;
+        }
+        let last = settings.get(LAST).map(PathBuf::from).filter(|f| f.is_file());
+        if settings.get(REOPEN_LAST) != Some("false")
+            && let Some(file) = last
+        {
+            self.open(editor, settings, &file);
+        }
     }
 
     fn after_load(&mut self, editor: &mut Editor, problems: Vec<String>) {
@@ -211,10 +360,12 @@ impl ProjectPane {
             else {
                 return;
             };
-            if let Err(e) = editor.new_project(&with_extension(file, "rfproj")) {
+            let file = with_extension(file, "rfproj");
+            if let Err(e) = editor.new_project(&file) {
                 self.status = Some(e);
                 return;
             }
+            remember(settings, &file);
         }
         match editor.save_all() {
             Ok(homeless) if homeless.is_empty() => {
@@ -230,7 +381,7 @@ impl ProjectPane {
         }
     }
 
-    fn confirm_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor) {
+    fn confirm_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, settings: &mut Settings) {
         let Some(pending) = &self.confirm else { return };
         let what = match pending {
             Pending::Open(_) => "Open another project",
@@ -251,11 +402,8 @@ impl ProjectPane {
         });
         match answer {
             Some(true) => match self.confirm.take() {
-                Some(Pending::Open(file)) => self.open(editor, &file),
-                Some(Pending::Close) => {
-                    editor.close_project();
-                    self.export = None;
-                }
+                Some(Pending::Open(file)) => self.open(editor, settings, &file),
+                Some(Pending::Close) => self.close(editor, settings),
                 None => {}
             },
             Some(false) => self.confirm = None,
@@ -390,6 +538,29 @@ impl ProjectPane {
             Err(e) => format!("The export failed: {e}"),
         });
     }
+}
+
+/// The recent projects that are still there.
+fn recent(settings: &Settings) -> Vec<PathBuf> {
+    settings
+        .get(RECENT)
+        .unwrap_or_default()
+        .split('|')
+        .filter(|f| !f.is_empty())
+        .map(PathBuf::from)
+        .filter(|f| f.is_file())
+        .collect()
+}
+
+/// A project opened: first of the recent ones, and the last one.
+fn remember(settings: &mut Settings, file: &Path) {
+    let file = file.display().to_string();
+    let mut list: Vec<String> = settings.get(RECENT).unwrap_or_default().split('|').map(str::to_owned).collect();
+    list.retain(|f| !f.is_empty() && *f != file);
+    list.insert(0, file.clone());
+    list.truncate(10);
+    settings.set(RECENT, list.join("|"));
+    settings.set(LAST, file);
 }
 
 fn with_extension(mut file: PathBuf, ext: &str) -> PathBuf {

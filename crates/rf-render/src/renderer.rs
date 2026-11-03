@@ -17,6 +17,7 @@ use crate::model::{
     AlphaMode, DecalMode, GpuDraw, GpuModel, MaterialDesc, MaterialMap, NormalMap, Slot, TerrainDesc, TerrainParams,
     WaterDesc, terrain_slot, water_slot,
 };
+use crate::outline::{MASK_FORMAT, MAX_OUTLINES, OutlinePass};
 use crate::post::{Post, PostSettings, Tonemap};
 use crate::shadows::{CASCADES, Cascades, SHADOW_SIZE};
 use crate::sky::{Sky, SkyLights};
@@ -333,6 +334,16 @@ pub struct Scene<'a> {
     pub shadows: Option<(&'a Cascades, &'a [Vec<DrawBatch<'a>>; CASCADES])>,
     /// The lights in view.
     pub lights: &'a [Light],
+    /// Outlines over the image (up to [`MAX_OUTLINES`]).
+    pub outlines: &'a [Outline<'a>],
+}
+
+/// Models outlined in a colour (straight alpha) over the finished image, as
+/// the C# outlines what's hovered and selected: their shape, showing through
+/// what's in front.
+pub struct Outline<'a> {
+    pub colour: [f32; 4],
+    pub batches: Vec<DrawBatch<'a>>,
 }
 
 /// What a frame drew.
@@ -372,6 +383,8 @@ enum Pass {
     Water,
     /// Over the finished image, lit as they're drawn.
     Blend,
+    /// Into an outline layer's mask.
+    Outline(usize),
 }
 
 pub struct Renderer {
@@ -403,6 +416,7 @@ pub struct Renderer {
     studio_sky: std::sync::Mutex<Sky>,
     ssao_buffer: wgpu::Buffer,
     post: Post,
+    outline: OutlinePass,
     sampler: wgpu::Sampler,
     point_sampler: wgpu::Sampler,
     pipelines: Pipelines,
@@ -435,6 +449,8 @@ struct Pipelines {
     background: wgpu::RenderPipeline,
     lights: wgpu::RenderPipeline,
     water: wgpu::RenderPipeline,
+    /// Models into an outline's mask.
+    outline_mask: wgpu::RenderPipeline,
 }
 
 fn uniform_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
@@ -499,6 +515,7 @@ fn in_pass(draw: &GpuDraw, pass: Pass) -> Option<bool> {
     let phase = draw_phase(draw);
     let water = draw.material.kind == MaterialKind::Water;
     match pass {
+        Pass::Outline(_) => (!draw.mesh.lines).then_some(false),
         Pass::Water => water.then_some(false),
         _ if water => None,
         Pass::Shadow(_) => (!draw.mesh.lines && phase != AlphaMode::Decal)
@@ -886,6 +903,7 @@ impl Renderer {
             cache: None,
         });
         let ssao_pl = pipeline_layout("ssao", &[Some(&frame_layout), Some(&view_layouts.ssao)]);
+        let outline_pl = pipeline_layout("outline mask", &[Some(&frame_layout)]);
         let blur_pl = pipeline_layout("ssao blur", &[None, Some(&view_layouts.blur)]);
         let pipelines = Pipelines {
             terrain: make(Desc {
@@ -954,6 +972,17 @@ impl Renderer {
             lighting: fullscreen("lighting", &lighting_pl, &deferred_shader, "fs_lighting", HDR_FORMAT),
             background: fullscreen("background", &background_pl, &deferred_shader, "fs_background", HDR_FORMAT),
             lights,
+            outline_mask: make(Desc {
+                label: "outline mask",
+                layout: &outline_pl,
+                module: &model_shader,
+                vs: "vs_main",
+                fs: Some("fs_mask"),
+                buffers: &plain,
+                targets: &[target(MASK_FORMAT, None)],
+                depth: None,
+                topology: tri,
+            }),
             water: make(Desc {
                 label: "water",
                 layout: &water_pl,
@@ -993,6 +1022,7 @@ impl Renderer {
             studio_sky: std::sync::Mutex::new(studio_sky),
             ssao_buffer,
             post: Post::new(ctx),
+            outline: OutlinePass::new(ctx),
             sampler,
             point_sampler,
             pipelines,
@@ -1223,7 +1253,7 @@ impl Renderer {
 
     pub fn create_targets(&self, ctx: &GpuContext, width: u32, height: u32) -> RenderTargets {
         let sky = self.world_sky.lock().unwrap();
-        RenderTargets::new(ctx, &self.view_layouts, &self.ssao_buffer, &self.post, &sky, width, height)
+        RenderTargets::new(ctx, &self.view_layouts, &self.ssao_buffer, &self.post, &sky, &self.outline, width, height)
     }
 
     /// The world sky's moon and stars ([`Sky::set_textures`]).
@@ -1269,7 +1299,8 @@ impl Renderer {
         let cascades = Cascades::new(camera, settings.sun_dir);
         let casters = std::array::from_fn(|_| Vec::new());
         let shadows = settings.shadows.then_some((&cascades, &casters));
-        self.draw_scene(ctx, targets, camera, settings, &Scene { instances, batches, shadows, lights: &[] }, true)
+        let scene = Scene { instances, batches, shadows, lights: &[], outlines: &[] };
+        self.draw_scene(ctx, targets, camera, settings, &scene, true)
     }
 
     /// Draws a scene: its batches as [`Renderer::render`] does, and its own
@@ -1297,34 +1328,47 @@ impl Renderer {
     ) -> RenderStats {
         let mut stats = RenderStats { instances: scene.instances.len(), ..Default::default() };
         let cascades = scene.shadows.filter(|_| settings.shadows).map(|(c, _)| c);
-        self.frame(ctx, targets, camera, settings, scene.instances, cascades, scene.lights, &mut |rp, pass, frame| {
-            let batches = match (pass, scene.shadows) {
-                (Pass::Shadow(i), Some((_, casters))) if !all_cast => &casters[i][..],
-                _ => scene.batches,
-            };
-            // The instance buffer bound: the frame's, or a batch's own.
-            let mut bound = frame.map(|b| b as *const wgpu::Buffer);
-            for batch in batches {
-                if batch.instances.is_empty() {
-                    continue;
+        let outlines: Vec<[f32; 4]> = scene.outlines.iter().take(MAX_OUTLINES).map(|o| o.colour).collect();
+        let lights = scene.lights;
+        self.frame(
+            ctx,
+            targets,
+            camera,
+            settings,
+            scene.instances,
+            cascades,
+            lights,
+            &outlines,
+            &mut |rp, pass, frame| {
+                let batches = match (pass, scene.shadows) {
+                    (Pass::Shadow(i), Some((_, casters))) if !all_cast => &casters[i][..],
+                    (Pass::Outline(i), _) => &scene.outlines[i].batches[..],
+                    _ => scene.batches,
+                };
+                // The instance buffer bound: the frame's, or a batch's own.
+                let mut bound = frame.map(|b| b as *const wgpu::Buffer);
+                for batch in batches {
+                    if batch.instances.is_empty() {
+                        continue;
+                    }
+                    if let Some(b) = batch.buffer.or(frame)
+                        && bound != Some(b as *const _)
+                    {
+                        rp.set_vertex_buffer(1, b.slice(..));
+                        bound = Some(b as *const _);
+                    }
+                    for draw in &batch.model.lods[batch.lod.min(3)] {
+                        let Some(pipeline) = self.pipeline(rp, draw, pass) else { continue };
+                        rp.set_pipeline(pipeline);
+                        rp.set_bind_group(1, &draw.material.bind_group, &[]);
+                        rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
+                        rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
+                        rp.draw_indexed(0..draw.mesh.index_count, 0, batch.instances.clone());
+                        stats.draw_calls += 1;
+                    }
                 }
-                if let Some(b) = batch.buffer.or(frame)
-                    && bound != Some(b as *const _)
-                {
-                    rp.set_vertex_buffer(1, b.slice(..));
-                    bound = Some(b as *const _);
-                }
-                for draw in &batch.model.lods[batch.lod.min(3)] {
-                    let Some(pipeline) = self.pipeline(rp, draw, pass) else { continue };
-                    rp.set_pipeline(pipeline);
-                    rp.set_bind_group(1, &draw.material.bind_group, &[]);
-                    rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
-                    rp.set_index_buffer(draw.mesh.indices.slice(..), wgpu::IndexFormat::Uint16);
-                    rp.draw_indexed(0..draw.mesh.index_count, 0, batch.instances.clone());
-                    stats.draw_calls += 1;
-                }
-            }
-        });
+            },
+        );
         stats
     }
 
@@ -1381,7 +1425,7 @@ impl Renderer {
 
         let mut stats = RenderStats { instances: instances.len(), ..Default::default() };
         let cascades = settings.shadows.then(|| Cascades::new(camera, settings.sun_dir));
-        self.frame(ctx, targets, camera, settings, &instances, cascades.as_ref(), &[], &mut |rp, pass, _| {
+        self.frame(ctx, targets, camera, settings, &instances, cascades.as_ref(), &[], &[], &mut |rp, pass, _| {
             for ((m, insts), &first) in models.iter().zip(&draw_instances).zip(&rig_slots) {
                 for (draw, &inst) in m.model.lods[m.lod.min(3)].iter().zip(insts) {
                     let skinned = draw.rig.zip(draw.mesh.skin.as_ref()).zip(bone_group.as_ref());
@@ -1398,6 +1442,7 @@ impl Renderer {
                                 Pass::Blend | Pass::Water => &p.skinned_blend,
                                 Pass::Decal => &p.skinned_decal,
                                 Pass::Opaque => &p.skinned_opaque,
+                                Pass::Outline(_) => continue,
                             }
                         }
                         _ => {
@@ -1442,6 +1487,7 @@ impl Renderer {
         let alpha = in_pass(draw, pass)?;
         let p = &self.pipelines;
         Some(match (pass, draw.material.kind, draw.mesh.lines) {
+            (Pass::Outline(_), ..) => &p.outline_mask,
             (Pass::Shadow(_), ..) if alpha => &p.shadow_alpha,
             (Pass::Shadow(_), ..) => &p.shadow,
             (Pass::Water, ..) => &p.water,
@@ -1574,6 +1620,7 @@ impl Renderer {
         instances: &[Instance],
         cascades: Option<&Cascades>,
         lights: &[Light],
+        outlines: &[[f32; 4]],
         draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>, Pass, Option<&wgpu::Buffer>),
     ) {
         let frame = self.frame_uniform(targets, camera, settings, cascades);
@@ -1805,6 +1852,20 @@ impl Renderer {
             ..Default::default()
         };
         self.post.run(ctx, &mut encoder, &targets.post, &targets.display_view, &post);
+        // The outlines over it, a layer at a time.
+        self.outline.set_colours(ctx, outlines);
+        for i in 0..outlines.len() {
+            {
+                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("outline mask"),
+                    color_attachments: &[colour(&targets.outline.mask, clear)],
+                    ..Default::default()
+                });
+                rp.set_bind_group(0, &self.frame_group, &[]);
+                models_pass(&mut rp, draw, Pass::Outline(i));
+            }
+            self.outline.run(&mut encoder, &targets.outline, &targets.display_view, i);
+        }
         ctx.queue.submit([encoder.finish()]);
     }
 

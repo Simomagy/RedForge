@@ -320,12 +320,14 @@ fn tab_title(t: &Tab) -> &'static str {
     }
 }
 
-/// The layout to start with, as the C#'s: project, hierarchy and game files on
-/// the left, documents in the middle (Properties joins on the right with the
-/// world map).
+/// The layout to start with, as the C#'s: project and game files on the left
+/// with the hierarchy under them, documents in the middle (Properties joins
+/// on the right with the world map).
 fn default_dock() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Welcome]);
-    dock.main_surface_mut().split_left(NodeIndex::root(), 0.22, vec![Tab::Project, Tab::Hierarchy, Tab::GameFiles]);
+    let surface = dock.main_surface_mut();
+    let [_, left] = surface.split_left(NodeIndex::root(), 0.22, vec![Tab::Project, Tab::GameFiles]);
+    surface.split_below(left, 0.5, vec![Tab::Hierarchy]);
     dock
 }
 
@@ -530,7 +532,12 @@ impl TabViewer for Tabs<'_> {
                 }
             },
             Tab::Hierarchy => match self.editor.as_deref_mut() {
-                Some(ed) => self.hierarchy.ui(ui, ed, self.tools),
+                Some(ed) => {
+                    if let Some(node) = self.project.picked_map.take() {
+                        self.hierarchy.show_map(node, ed);
+                    }
+                    self.hierarchy.ui(ui, ed, self.tools)
+                }
                 None => {
                     ui.label("The game isn't loaded.");
                 }

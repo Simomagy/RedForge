@@ -1,5 +1,6 @@
 //! The Hierarchy pane: the objects of the ymap (or the interior) the
-//! selection is in, as the C# RedForge shows them: grouped (a ymap's by LOD
+//! selection is in, or of a ymap picked in the Project pane until the
+//! selection changes, as the C# RedForge shows them: grouped (a ymap's by LOD
 //! level, an interior's by room and entity set), searchable, each with an eye
 //! that hides it in the map view.
 
@@ -35,6 +36,9 @@ pub struct Hierarchy {
     objects: Vec<Row>,
     filter: String,
     collapsed: HashSet<String>,
+    /// A ymap picked in the Project pane, and the selection's last object
+    /// then: it's shown until that changes.
+    picked: Option<(u32, Option<EntityId>)>,
 }
 
 fn lod_group(lod_level: i64) -> &'static str {
@@ -57,13 +61,26 @@ fn u32s(bag: &DataBag, name: &str) -> Vec<u32> {
 }
 
 impl Hierarchy {
+    /// Shows a ymap's objects (by name hash), until the selection changes.
+    pub fn show_map(&mut self, node: u32, editor: &Editor) {
+        self.picked = Some((node, editor.selection().last().copied()));
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools) {
-        let Some(&last) = editor.selection().last() else {
-            ui.label(RichText::new("Select an object on the map").weak());
-            self.source = None;
-            return;
+        let last = editor.selection().last().copied();
+        if self.picked.is_some_and(|(node, at)| at != last || editor.map(node).is_none()) {
+            self.picked = None;
+        }
+        let shown = match (self.picked, last) {
+            (Some((node, _)), _) => EntityId { node, entity: 0, interior_entity: u32::MAX },
+            (None, Some(id)) => id,
+            (None, None) => {
+                ui.label(RichText::new("Select an object on the map, or a ymap in the project").weak());
+                self.source = None;
+                return;
+            }
         };
-        self.refresh(editor, last);
+        self.refresh(editor, shown);
         ui.horizontal(|ui| {
             ui.label(RichText::new(&self.title).strong());
             if ui.small_button("Show all").on_hover_text("Show the hidden objects again").clicked() {

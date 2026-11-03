@@ -99,6 +99,12 @@ fn vs_main(v: VertexIn) -> VertexOut {
     return vertex_out(v, v.position, v.normal, v.tangent.xyz);
 }
 
+// Into an outline's mask: the whole shape.
+@fragment
+fn fs_mask() -> @location(0) vec4<f32> {
+    return vec4<f32>(1.0);
+}
+
 // Skinned meshes drawn posed: the draw's rig, 256 bones each as the 3 rows of
 // a 3x4 matrix (the dynamic offset picks the rig).
 @group(2) @binding(0) var<storage, read> bones: array<vec4<f32>>;

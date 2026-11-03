@@ -16,6 +16,7 @@ mod camera;
 mod context;
 pub mod mesh;
 pub mod model;
+mod outline;
 mod post;
 pub mod preview;
 mod renderer;
@@ -31,11 +32,12 @@ pub use model::{
     AlphaMode, DecalMode, GpuModel, MaterialDesc, ModelOptions, NoTextures, Slot, TerrainDesc, TextureSource,
     WaterDesc, WaterParams,
 };
+pub use outline::MAX_OUTLINES;
 pub use post::{Post, PostSettings, PostTargets, Tonemap};
 pub use preview::{PreviewMode, PreviewTarget, TexturePreview};
 pub use renderer::{
-    DebugView, DrawBatch, GpuMaterial, Instance, Light, LightKind, MaterialKind, Pick, PickRequest, PosedModel,
-    RenderStats, Renderer, Scene, ViewSettings,
+    DebugView, DrawBatch, GpuMaterial, Instance, Light, LightKind, MaterialKind, Outline, Pick, PickRequest,
+    PosedModel, RenderStats, Renderer, Scene, ViewSettings,
 };
 pub use shadows::{CASCADES, Cascade, Cascades};
 pub use sky::{Sky, SkyLights, SkyTargets};
