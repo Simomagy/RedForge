@@ -93,8 +93,10 @@ Helpers can't be moved or edited yet.
 To place something, find it in Objects (beside Properties, or View → Objects):
 the search matches the names and the ytyps they're in, and the list can be
 narrowed to props, drawable dictionaries, fragments or interiors. Clicking an
-object picks the Place tool with it; then a click in the map places it in the
-ymap chosen under "Place in" (Q/E turn it, a right click stops).
+object picks the Place tool with it; its model shows under the mouse where a
+click would place it (lit and casting shadows, as the C#'s preview), and a
+click places it in the ymap chosen under "Place in" (Q/E turn it, a right
+click stops).
 
 ### Projects
 

@@ -339,6 +339,10 @@ pub struct Scene<'a> {
     pub outlines: &'a [Outline<'a>],
     /// Editor helpers, in their layer over the image.
     pub helpers: &'a [HelperBatch<'a>],
+    /// Drawn as the batches are, but not picked (the pick ids under them
+    /// stay what's behind): the place tool's preview, as the C#'s
+    /// `DisableMouseSelect`.
+    pub unpicked: &'a [DrawBatch<'a>],
 }
 
 /// Models outlined in a colour (straight alpha) over the finished image, as
@@ -436,6 +440,8 @@ pub struct Renderer {
 struct Pipelines {
     terrain: wgpu::RenderPipeline,
     opaque: wgpu::RenderPipeline,
+    /// The terrain, opaque and line pipelines leaving the pick ids alone.
+    unpicked: [wgpu::RenderPipeline; 3],
     decal: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
     blend: wgpu::RenderPipeline,
@@ -848,6 +854,8 @@ impl Renderer {
         let skinned = [Some(Vertex::layout()), Some(instance_layout()), Some(VertexSkin::layout())];
         let terrain_buffers = [Some(Vertex::layout()), Some(instance_layout()), Some(VertexExtra::layout())];
         let (opaque_targets, decal_targets) = (gbuffer(None), gbuffer(alpha));
+        let mut unpicked_targets = gbuffer(None);
+        *unpicked_targets.last_mut().unwrap() = ids(false);
         let model = |label, layout, skin: bool, fs, targets: &[Option<wgpu::ColorTargetState>], depth| {
             make(Desc {
                 label,
@@ -913,7 +921,33 @@ impl Renderer {
         let ssao_pl = pipeline_layout("ssao", &[Some(&frame_layout), Some(&view_layouts.ssao)]);
         let outline_pl = pipeline_layout("outline mask", &[Some(&frame_layout)]);
         let blur_pl = pipeline_layout("ssao blur", &[None, Some(&view_layouts.blur)]);
+        let unpicked = [
+            make(Desc {
+                label: "terrain unpicked",
+                layout: &terrain_pl,
+                module: &terrain_shader,
+                vs: "vs_main",
+                fs: Some("fs_main"),
+                buffers: &terrain_buffers,
+                targets: &unpicked_targets,
+                depth: Some(depth(true, 0)),
+                topology: tri,
+            }),
+            model("opaque unpicked", &gbuffer_pl, false, Some("fs_gbuffer"), &unpicked_targets, depth(true, 0)),
+            make(Desc {
+                label: "lines unpicked",
+                layout: &gbuffer_pl,
+                module: &model_shader,
+                vs: "vs_main",
+                fs: Some("fs_gbuffer"),
+                buffers: &plain,
+                targets: &unpicked_targets,
+                depth: Some(depth(true, 0)),
+                topology: wgpu::PrimitiveTopology::LineList,
+            }),
+        ];
         let pipelines = Pipelines {
+            unpicked,
             terrain: make(Desc {
                 label: "terrain",
                 layout: &terrain_pl,
@@ -1318,7 +1352,7 @@ impl Renderer {
         let cascades = Cascades::new(camera, settings.sun_dir);
         let casters = std::array::from_fn(|_| Vec::new());
         let shadows = settings.shadows.then_some((&cascades, &casters));
-        let scene = Scene { instances, batches, shadows, lights: &[], outlines: &[], helpers: &[] };
+        let scene = Scene { instances, batches, shadows, lights: &[], outlines: &[], helpers: &[], unpicked: &[] };
         self.draw_scene(ctx, targets, camera, settings, &scene, true)
     }
 
@@ -1363,9 +1397,14 @@ impl Renderer {
                 (Pass::Outline(i), _) => &scene.outlines[i].batches[..],
                 _ => scene.batches,
             };
+            let unpicked = match pass {
+                Pass::Opaque | Pass::Decal | Pass::Water | Pass::Blend => scene.unpicked,
+                _ => &[],
+            };
+            let lists = batches.iter().map(|b| (b, true)).chain(unpicked.iter().map(|b| (b, false)));
             // The instance buffer bound: the frame's, or a batch's own.
             let mut bound = frame.map(|b| b as *const wgpu::Buffer);
-            for batch in batches {
+            for (batch, picked) in lists {
                 if batch.instances.is_empty() {
                     continue;
                 }
@@ -1376,7 +1415,7 @@ impl Renderer {
                     bound = Some(b as *const _);
                 }
                 for draw in &batch.model.lods[batch.lod.min(3)] {
-                    let Some(pipeline) = self.pipeline(rp, draw, pass) else { continue };
+                    let Some(pipeline) = self.pipeline(rp, draw, pass, picked) else { continue };
                     rp.set_pipeline(pipeline);
                     rp.set_bind_group(1, &draw.material.bind_group, &[]);
                     rp.set_vertex_buffer(0, draw.mesh.vertices.slice(..));
@@ -1475,7 +1514,7 @@ impl Renderer {
                                 }
                             }
                             _ => {
-                                let Some(p) = self.pipeline(rp, draw, pass) else { continue };
+                                let Some(p) = self.pipeline(rp, draw, pass, true) else { continue };
                                 p
                             }
                         };
@@ -1507,16 +1546,24 @@ impl Renderer {
     }
 
     /// The pipeline of an unskinned draw in a pass (binding the terrain's
-    /// extra stream); `None` when it isn't drawn in that pass.
+    /// extra stream); `None` when it isn't drawn in that pass. Unless
+    /// `picked`, it leaves the pick ids alone.
     fn pipeline<'a>(
         &'a self,
         rp: &mut wgpu::RenderPass<'_>,
         draw: &'a GpuDraw,
         pass: Pass,
+        picked: bool,
     ) -> Option<&'a wgpu::RenderPipeline> {
         let alpha = in_pass(draw, pass)?;
         let p = &self.pipelines;
         Some(match (pass, draw.material.kind, draw.mesh.lines) {
+            (Pass::Opaque, MaterialKind::Terrain, _) if !picked => {
+                rp.set_vertex_buffer(2, draw.mesh.extra.as_ref()?.slice(..));
+                &p.unpicked[0]
+            }
+            (Pass::Opaque, _, true) if !picked => &p.unpicked[2],
+            (Pass::Opaque, ..) if !picked => &p.unpicked[1],
             (Pass::Outline(_), ..) => &p.outline_mask,
             (Pass::Shadow(_), ..) if alpha => &p.shadow_alpha,
             (Pass::Shadow(_), ..) => &p.shadow,

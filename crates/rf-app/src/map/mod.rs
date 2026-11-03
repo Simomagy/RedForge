@@ -116,6 +116,8 @@ pub struct MapView {
     last_view: Option<(rf_render::CameraView, egui::Rect)>,
     /// The selection mode's helpers.
     helpers: helpers::Helpers,
+    /// Whether the last frame drew the place tool's preview.
+    preview_shown: bool,
 }
 
 /// `T * R * S` from a ymap entity's fields. The game stores the inverse
@@ -242,6 +244,7 @@ impl MapView {
             drawn: Arc::default(),
             last_view: None,
             helpers: Default::default(),
+            preview_shown: false,
         }
     }
 
@@ -706,6 +709,45 @@ impl MapView {
         let helper_batches = to_helper_batches(&helper_seen);
         self.drawn = Arc::new(self.batch_buffers.picks(drawn).with_helpers(helper_keys));
 
+        // The place tool's preview: the archetype's model where a click would
+        // put it, in the world as the C#'s preview entity (lit, casting
+        // shadows), but not picked, so the mouse stays on what's behind it.
+        let mut unpicked = Vec::new();
+        self.preview_shown = false;
+        if tools.tool == Tool::Place
+            && let (Some(ed), Some(archetype)) = (editor.as_deref(), tools.place_archetype)
+            && let Some(pos) = response.hover_pos()
+        {
+            let point =
+                tools.hover_point.unwrap_or_else(|| camera.ray(tools::to_ndc(rect, pos)).at(tools.place_distance(ed)));
+            if let Some(p) = tools.place_at(ed, point, self.camera.yaw)
+                && let Some(model) = self.models.get(archetype)
+            {
+                let m = p.matrix();
+                let (min, max) = (Vec3::from(model.min), Vec3::from(model.max));
+                let centre = m.transform_point3((min + max) * 0.5);
+                let radius = (max - min).length() * 0.5;
+                let lod = model.lod_for_distance((centre.distance(camera.eye) - radius).max(0.0));
+                let at = instances.len() as u32;
+                instances.push(Instance::new(m, 0, 0));
+                unpicked.push((model, lod, at..at + 1, centre, radius));
+                self.preview_shown = true;
+            }
+        }
+        let unpicked: Vec<DrawBatch> = unpicked
+            .iter()
+            .map(|(model, lod, r, centre, radius)| {
+                if let Some(c) = &cascades {
+                    for (i, list) in cast.iter_mut().enumerate() {
+                        if c.casts(i, *centre, *radius) {
+                            list.push(DrawBatch { model, lod: *lod, instances: r.clone(), buffer: None });
+                        }
+                    }
+                }
+                DrawBatch { model, lod: *lod, instances: r.clone(), buffer: None }
+            })
+            .collect();
+
         let mut outlines: Vec<Outline> = [HOVER_OUTLINE, SELECTION_OUTLINE]
             .into_iter()
             .zip(&ranges_outlined)
@@ -736,6 +778,7 @@ impl MapView {
             lights: &lights,
             outlines: &outlines,
             helpers: &helper_batches,
+            unpicked: &unpicked,
         };
         self.lights_drawn = lights.len();
         self.stats = gpu.renderer.render_scene(&gpu.ctx, targets, &camera, &self.view, &scene);
@@ -834,7 +877,7 @@ impl MapView {
             if tools.tool == Tool::Place && response.clicked() {
                 let point = match pick.filter(|p| p.depth > 0.0) {
                     Some(p) => camera.unproject(ndc, p.depth),
-                    None => camera.ray(ndc).at(20.0),
+                    None => camera.ray(ndc).at(tools.place_distance(editor)),
                 };
                 if let Some(placement) = tools.place_at(editor, point, self.camera.yaw) {
                     let archetype = tools.place_archetype.unwrap_or_default();
@@ -901,8 +944,9 @@ impl MapView {
             painter.text(at + Vec2::splat(1.0), egui::Align2::CENTER_TOP, &name, font.clone(), shadow);
             painter.text(at, egui::Align2::CENTER_TOP, &name, font, egui::Color32::WHITE);
         }
-        // Where a click would place the archetype.
+        // Where a click would place the archetype, while its model loads.
         if tools.tool == Tool::Place
+            && !self.preview_shown
             && let Some(point) = tools.hover_point
             && let Some(p) = tools.place_at(editor, point, self.camera.yaw)
             && let Some(a) = tools.place_archetype.and_then(|a| editor.data().archetypes.get(&a))

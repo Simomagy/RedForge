@@ -353,6 +353,13 @@ impl Tools {
         })
     }
 
+    /// How far from the camera the place archetype goes when the mouse is on
+    /// nothing: three times its size, as the C#'s `RayNoHitDist`.
+    pub fn place_distance(&self, editor: &Editor) -> f32 {
+        let a = self.place_archetype.and_then(|a| editor.data().archetypes.get(&a));
+        a.map_or(20.0, |a| (Vec3::from(a.bb_max) - Vec3::from(a.bb_min)).length() * 3.0).max(2.0)
+    }
+
     /// The keys of the tools, when the map has the keyboard.
     pub fn keys(&mut self, ui: &egui::Ui, editor: &mut Editor) {
         let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
