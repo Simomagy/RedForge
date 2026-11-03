@@ -68,6 +68,28 @@ Editing (the keys are the C# RedForge's):
 | Home | Look at the selection |
 | Esc | Clear the selection; leave the Place tool |
 
+What's hovered is outlined by its shape in white, with its name under the
+mouse, and the selection in green, as the C# does.
+
+The menu at the toolbar's start is the C#'s selection mode. Every mode but
+Entity shows helpers over the map (in a layer of their own, at 85%), and
+hovers and selects them instead of the entities; Properties shows the
+selected one's fields:
+
+| Mode | Shows |
+|---|---|
+| Light | The entities' lights, picked by their reach (which only shows outlined) |
+| Physics | The static collisions (ybn) within 100 m and the entities' own, by material colour |
+| Navmesh | The navmeshes (ynv) within 200 m, coloured by their polygons' flags |
+| Skeleton | The bones of the entities with a skeleton |
+| Occlusion | The ymaps' box occluders and occlude models |
+| Interior Instance | The interiors' rooms, portals and time cycle modifier spheres |
+| Time Cycle Modifier | The ymaps' time cycle modifier boxes |
+| Ambient Mask Volume | The ambient mask volumes |
+| Scenario | The scenario points of the regions within 1000 m |
+
+Helpers can't be moved or edited yet.
+
 To place something, find it in Objects (beside Properties, or View → Objects):
 the search matches the names and the ytyps they're in, and the list can be
 narrowed to props, drawable dictionaries, fragments or interiors. Clicking an
@@ -76,9 +98,12 @@ ymap chosen under "Place in" (Q/E turn it, a right click stops).
 
 ### Projects
 
-The Project pane (on the left, with Hierarchy and Game Files) makes, opens and
-saves `.rfproj` projects, read and written as the C# RedForge does (JSON with
-folders, files and export settings, paths relative to it). Editing anything
+The Project pane (on the left, with Game Files, above the Hierarchy) makes,
+opens and saves `.rfproj` projects, read and written as the C# RedForge does
+(JSON with folders, files and export settings, paths relative to it), and
+reopens the last one at start. Its files are grouped as the C#'s (maps,
+archetypes, models, textures, collisions, other); a ymap picked there shows in
+the Hierarchy until the map's selection changes. Editing anything
 of the game puts its ymap (or an interior's ytyp) in the project, made then if
 there's none; Save all (Ctrl+S) writes the changed files next to the
 `.rfproj`. A project's own files replace the game's of the same name: models
@@ -135,8 +160,10 @@ selects what's in the middle of the world map before the screenshot, and
 `REDFORGE_TEST_DRAG=1` then drags the gizmo with made-up mouse events.
 `REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside the world map
 with that search, and chooses the first object. `REDFORGE_SHOW_TAB=<title>`
-brings a pane to the front (Project, Hierarchy...), and `REDFORGE_HOUR` sets
-the map's hour.
+brings a pane to the front (Project, Hierarchy...), `REDFORGE_HOUR` sets
+the map's hour, `REDFORGE_MODE=<name>` starts in a selection mode (where
+`REDFORGE_SELECT_CENTRE` selects the helper in the middle), and
+`REDFORGE_PROJECT=<rfproj>` opens a project instead of the last one.
 
 ## Crates
 
