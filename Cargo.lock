@@ -3758,6 +3758,7 @@ dependencies = [
  "rfd",
  "tiny-skia",
  "transform-gizmo-egui",
+ "winreg",
 ]
 
 [[package]]

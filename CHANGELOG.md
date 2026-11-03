@@ -8,6 +8,19 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Added
+- Projects open from the file manager: double-click an `.rfproj` (the
+  packages and the Windows installer make RedForge open them), or drop it on
+  RedForge's window. A RedForge already running opens it, and asks before
+  closing the project open, with **Save and open** when files have unsaved
+  changes.
+- The game folder is found by itself when Steam, the Rockstar Games Launcher,
+  the Epic Games Launcher or Heroic installed the game.
+
+### Changed
+- The game folder's dialog, redone in the new look: centred, with the
+  installs found, and **Cancel** when it's opened from File > Game folder….
+
 ## [2.1.0] - 2026-11-03
 
 ### Added

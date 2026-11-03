@@ -191,6 +191,28 @@ pub fn icon_text(glyph: &str, label: &str) -> egui::text::LayoutJob {
     job
 }
 
+/// A dialog's card: an island over the rest, `margin` inside.
+pub fn card(margin: i8) -> egui::Frame {
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(CornerRadius::same(BIG_RADIUS))
+        .inner_margin(Margin::same(margin))
+        .shadow(Shadow { offset: [0, 8], blur: 28, spread: 0, color: Color32::from_black_alpha(150) })
+}
+
+/// The button a dialog is for: filled with the accent.
+pub fn primary(label: &str) -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new(label).font(strong(SIZE)).color(ON_ACCENT))
+        .fill(ACCENT)
+        .min_size(Vec2::new(84.0, 30.0))
+}
+
+/// A dialog's other buttons, as tall as [`primary`].
+pub fn secondary(label: &str) -> egui::Button<'static> {
+    egui::Button::new(label.to_owned()).min_size(Vec2::new(84.0, 30.0))
+}
+
 /// A toolbar button: an icon, in the accent when it's on.
 pub fn tool(ui: &mut egui::Ui, on: bool, glyph: &str, tip: &str) -> Response {
     let colour = if on { ON_ACCENT } else { TEXT };

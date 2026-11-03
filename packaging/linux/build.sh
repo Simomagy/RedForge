@@ -24,6 +24,7 @@ stage() {
     install -Dm644 "$f" "$1/usr/share/redforge/$f"
   done
   install -Dm644 packaging/linux/redforge.desktop "$1/usr/share/applications/redforge.desktop"
+  install -Dm644 packaging/linux/redforge-mime.xml "$1/usr/share/mime/packages/redforge.xml"
   for size in 16 24 32 48 64 96 128 256 512; do
     install -Dm644 "packaging/linux/icons/redforge-$size.png" \
       "$1/usr/share/icons/hicolor/${size}x${size}/apps/redforge.png"

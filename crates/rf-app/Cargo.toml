@@ -34,6 +34,10 @@ rf-world = { path = "../rf-world" }
 transform-gizmo-egui = "0.11"
 mint = "0.5"
 
+[target.'cfg(windows)'.dependencies]
+# Where the launchers installed the game.
+winreg = "0.56"
+
 # The .deb (cargo-deb), from the binaries packaging/linux/build.sh makes.
 [package.metadata.deb]
 name = "redforge"
@@ -56,6 +60,7 @@ assets = [
     ["../../blender/redforge_bridge/link.py", "usr/share/redforge/blender/redforge_bridge/", "644"],
     ["../../blender/redforge_bridge/blender_manifest.toml", "usr/share/redforge/blender/redforge_bridge/", "644"],
     ["../../packaging/linux/redforge.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/redforge-mime.xml", "usr/share/mime/packages/redforge.xml", "644"],
     ["../../packaging/linux/icons/redforge-16.png", "usr/share/icons/hicolor/16x16/apps/redforge.png", "644"],
     ["../../packaging/linux/icons/redforge-24.png", "usr/share/icons/hicolor/24x24/apps/redforge.png", "644"],
     ["../../packaging/linux/icons/redforge-32.png", "usr/share/icons/hicolor/32x32/apps/redforge.png", "644"],

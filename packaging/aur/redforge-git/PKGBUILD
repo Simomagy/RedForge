@@ -42,6 +42,7 @@ package() {
   install -Dm644 data/rdr2/strings.txt "$pkgdir/usr/share/redforge/data/rdr2/strings.txt"
   install -Dm644 blender/redforge_bridge/*.py blender/redforge_bridge/*.toml -t "$pkgdir/usr/share/redforge/blender/redforge_bridge"
   install -Dm644 packaging/linux/redforge.desktop "$pkgdir/usr/share/applications/redforge.desktop"
+  install -Dm644 packaging/linux/redforge-mime.xml "$pkgdir/usr/share/mime/packages/redforge.xml"
   for size in 16 24 32 48 64 96 128 256 512; do
     install -Dm644 "packaging/linux/icons/redforge-$size.png" \
       "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/redforge.png"

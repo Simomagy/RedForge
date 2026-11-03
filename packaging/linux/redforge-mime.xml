@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- RedForge's projects (.rfproj, JSON), so file managers open them in RedForge.
+     Installed as share/mime/packages/redforge.xml. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-redforge-project">
+    <comment>RedForge project</comment>
+    <sub-class-of type="application/json"/>
+    <icon name="redforge"/>
+    <glob pattern="*.rfproj"/>
+  </mime-type>
+</mime-info>

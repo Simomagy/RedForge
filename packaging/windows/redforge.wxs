@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The Windows installer, built with wixl (msitools) by build-msi.sh: RedForge in
      Program Files, a Start menu and a desktop shortcut, the strings file and the
-     Blender add-on next to it. The UpgradeCode stays the same across versions, so
+     Blender add-on next to it, .rfproj files opening in it. The UpgradeCode stays the same across versions, so
      a newer MSI replaces an older one. -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="RedForge" Language="1033" Version="$(var.Version)" Manufacturer="Prysma Studio"
@@ -19,6 +19,14 @@
         <Directory Id="INSTALLDIR" Name="RedForge">
           <Component Id="App" Guid="785978DE-914E-4B87-AEE0-3C78BA293294" Win64="yes">
             <File Id="RedForgeExe" Name="redforge.exe" Source="$(var.Bin)/redforge.exe" KeyPath="yes" />
+            <!-- Projects (.rfproj) open in RedForge, with its icon. -->
+            <ProgId Id="RedForge.Project" Description="RedForge project">
+              <Extension Id="rfproj" ContentType="application/json">
+                <Verb Id="open" Command="Open" TargetFile="RedForgeExe" Argument="&quot;%1&quot;" />
+              </Extension>
+            </ProgId>
+            <!-- wixl doesn't do ProgId's Icon. -->
+            <RegistryValue Root="HKCR" Key="RedForge.Project\DefaultIcon" Type="string" Value="[#RedForgeExe],0" />
           </Component>
           <Component Id="Cli" Guid="D610976E-EA43-42F3-80AE-B4BCE125BA56" Win64="yes">
             <File Id="RfExe" Name="rf.exe" Source="$(var.Bin)/rf.exe" KeyPath="yes" />

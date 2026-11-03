@@ -64,7 +64,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | Variable | What it does |
 |---|---|
 | `REDFORGE_GAME_DIR` | The game folder (instead of the saved one) |
-| `REDFORGE_OPEN` | `welcome` (nothing), a game path (a model, texture, clip dictionary or ymap; `hex:<path>` for the hex viewer), `world`, `world:<place>` or `world:x,y,z[,yaw,pitch]` |
+| `REDFORGE_OPEN` | `welcome` (nothing), `folder` (the game folder's dialog), a game path (a model, texture, clip dictionary or ymap; `hex:<path>` for the hex viewer), `world`, `world:<place>` or `world:x,y,z[,yaw,pitch]` |
 | `REDFORGE_SCREENSHOT`, `REDFORGE_SCREENSHOT_DELAY` | Where the screenshot goes, and how many seconds after opening (6 by default) |
 | `REDFORGE_HOUR` | The map's hour |
 | `REDFORGE_MODE` | A selection mode to start in (`Physics`, `Navmesh`...) |
@@ -74,6 +74,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | `REDFORGE_SHOW_TAB` | Brings a pane to the front (Project, Hierarchy...) |
 | `REDFORGE_PROJECT` | A project to open instead of the last one (not remembered) |
 | `REDFORGE_HOLD_LOADING` | Keeps the loading screen up that many seconds |
+| `REDFORGE_DROP_HOVER=1` | Shows the card files dragged over the window get |
 | `REDFORGE_TOUR` | Shows the tour at that step (0-7), when it hasn't been seen |
 | `REDFORGE_ANIM_PED`, `REDFORGE_ANIM_TIME` | For a clip dictionary: the ped, and the time to stop the clip at |
 

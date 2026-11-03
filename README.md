@@ -61,9 +61,10 @@ Vulkan (Linux) or DirectX 12 / Vulkan (Windows).
 
 ## Getting started
 
-1. Start RedForge and choose the game folder, the one with `RDR2.exe`. The
-   first time, a short tour shows what each panel does (Help > Tour of the
-   panels shows it again).
+1. Start RedForge and choose the game folder, the one with `RDR2.exe` (found
+   by itself when Steam, Rockstar, Epic or Heroic installed it). The first
+   time, a short tour shows what each panel does (Help > Tour of the panels
+   shows it again).
 2. Click **Open the world map**, or a town under it.
 3. Look around by dragging the mouse; WASD moves, R and F go up and down,
    Shift goes faster, the wheel sets the speed. "Go to…" jumps to a town.
@@ -127,6 +128,8 @@ game puts its ymap in the project) and the models, textures, collisions and
 ytyps you add, which replace the game's of the same name and show in Objects.
 The Project pane groups them by type; Save all (Ctrl+S) writes them next to
 the `.rfproj`, and RedForge reopens the last project when it starts.
+Double-clicking an `.rfproj`, or dropping it on the window, opens it too (in
+the RedForge already open, if there's one).
 
 **RedM resource** exports the project to `<resources folder>/<name>/`, with
 a `stream` folder and an `fxmanifest.lua` (an existing manifest keeps your

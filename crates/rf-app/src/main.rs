@@ -8,6 +8,7 @@ mod blender;
 mod browser;
 mod game;
 mod hierarchy;
+mod instance;
 mod loading;
 mod map;
 mod objects;
@@ -39,6 +40,13 @@ fn main() -> eframe::Result {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn"))
         .init();
 
+    // `redforge file.rfproj` (a project opened from the file manager): the
+    // RedForge already running opens it, if there's one.
+    let project = instance::project_argument();
+    if project.as_deref().is_some_and(instance::hand_over) {
+        return Ok(());
+    }
+
     let mut options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("RedForge")
@@ -61,5 +69,5 @@ fn main() -> eframe::Result {
     };
     options.wgpu_options.wgpu_setup = WgpuSetup::CreateNew(setup);
 
-    eframe::run_native("RedForge", options, Box::new(|cc| Ok(Box::new(app::RedForgeApp::new(cc)))))
+    eframe::run_native("RedForge", options, Box::new(|cc| Ok(Box::new(app::RedForgeApp::new(cc, project)))))
 }

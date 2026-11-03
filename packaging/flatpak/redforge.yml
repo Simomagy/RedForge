@@ -35,6 +35,8 @@ modules:
       - install -Dm644 blender/redforge_bridge/*.py blender/redforge_bridge/*.toml -t /app/share/redforge/blender/redforge_bridge
       - install -Dm644 packaging/linux/redforge.desktop /app/share/applications/${FLATPAK_ID}.desktop
       - desktop-file-edit --set-icon=${FLATPAK_ID} --set-key=StartupWMClass --set-value=${FLATPAK_ID} /app/share/applications/${FLATPAK_ID}.desktop
+      - install -Dm644 packaging/linux/redforge-mime.xml /app/share/mime/packages/${FLATPAK_ID}.xml
+      - sed -i "s|<icon name=\"redforge\"/>|<icon name=\"${FLATPAK_ID}\"/>|" /app/share/mime/packages/${FLATPAK_ID}.xml
       - for s in 16 24 32 48 64 96 128 256 512; do install -Dm644 packaging/linux/icons/redforge-$s.png /app/share/icons/hicolor/${s}x${s}/apps/${FLATPAK_ID}.png; done
       - install -Dm644 packaging/flatpak/redforge.metainfo.xml /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
     sources:

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -11,7 +11,7 @@ use rf_render::{GpuContext, Renderer, TexturePreview};
 
 use crate::blender::BlenderLink;
 use crate::browser::{Browser, BrowserAction};
-use crate::game::{Game, LoadMessage, is_game_folder, start_loading};
+use crate::game::{Game, LoadMessage, find_installs, is_game_folder, start_loading};
 use crate::hierarchy::Hierarchy;
 use crate::map::MapView;
 use crate::map::tools::Tools;
@@ -19,6 +19,7 @@ use crate::objects::Objects;
 use crate::project_pane::ProjectPane;
 use crate::properties::Properties;
 use crate::settings::{GAME_FOLDER, Settings};
+use crate::theme::{self, icon};
 use crate::tour::{self, Tour, TourEvent};
 use crate::viewers::Gpu;
 use crate::viewers::anim::AnimViewer;
@@ -32,6 +33,10 @@ enum GameState {
     NoFolder {
         input: String,
         error: Option<String>,
+        /// Where the launchers installed the game.
+        found: Vec<(PathBuf, &'static str)>,
+        /// The game open before (File > Game folder…), to go back to.
+        previous: Option<Arc<Game>>,
     },
     Loading {
         rx: Receiver<LoadMessage>,
@@ -39,6 +44,19 @@ enum GameState {
         started: Instant,
     },
     Ready(Arc<Game>),
+}
+
+impl GameState {
+    /// Asking for the game folder: `input` to start with, or the first
+    /// install found.
+    fn ask(input: String, error: Option<String>, previous: Option<Arc<Game>>) -> Self {
+        let found = find_installs();
+        let input = match (input.is_empty(), found.first()) {
+            (true, Some((dir, _))) => dir.display().to_string(),
+            _ => input,
+        };
+        GameState::NoFolder { input, error, found, previous }
+    }
 }
 
 pub enum Tab {
@@ -72,7 +90,8 @@ impl Tab {
 /// For testing without anyone at the screen: opens a file, takes a screenshot
 /// of the window and quits (`REDFORGE_OPEN=<path> REDFORGE_SCREENSHOT=<png>`).
 ///
-/// `REDFORGE_OPEN` can also be `welcome` (nothing opened), `world`, `world:<place>` or
+/// `REDFORGE_OPEN` can also be `welcome` (nothing opened), `folder` (the game
+/// folder's dialog), `world`, `world:<place>` or
 /// `world:x,y,z[,yaw,pitch]` for the world map, and
 /// `REDFORGE_SCREENSHOT_DELAY` sets the seconds to wait (6 by default), and
 /// `REDFORGE_SELECT_CENTRE=1` selects what's in the middle of the world map
@@ -130,13 +149,20 @@ pub struct RedForgeApp {
     panel_rects: HashMap<&'static str, egui::Rect>,
     /// The app's icon, for the welcome page.
     icon: egui::TextureHandle,
+    /// A project to open once the game is loaded: from the command line,
+    /// another RedForge, or dropped on the window.
+    incoming: Option<PathBuf>,
+    /// The projects other RedForges hand over.
+    from_others: Option<Receiver<PathBuf>>,
+    /// Files are dragged over the window (Wayland, where egui doesn't say).
+    dragging: bool,
 }
 
 /// The setting that's set once the tour was seen (or skipped).
 const TOUR_DONE: &str = "Onboarding.Done";
 
 impl RedForgeApp {
-    pub fn new(cc: &eframe::CreationContext) -> Self {
+    pub fn new(cc: &eframe::CreationContext, project: Option<PathBuf>) -> Self {
         crate::theme::apply(&cc.egui_ctx);
         let rs = cc.wgpu_render_state.as_ref().expect("RedForge needs the wgpu backend");
         let ctx = GpuContext::new(rs.device.clone(), rs.queue.clone());
@@ -171,7 +197,7 @@ impl RedForgeApp {
             auto,
             settings,
             gpu,
-            game: GameState::NoFolder { input: folder.clone().unwrap_or_default(), error: None },
+            game: GameState::ask(folder.clone().unwrap_or_default(), None, None),
             dock: default_dock(),
             browser: Browser::default(),
             editor: None,
@@ -189,8 +215,15 @@ impl RedForgeApp {
                 let image = egui::ColorImage::from_rgba_unmultiplied([i.width as usize, i.height as usize], &i.rgba);
                 cc.egui_ctx.load_texture("redforge icon", image, egui::TextureOptions::LINEAR)
             },
+            incoming: project,
+            from_others: {
+                let c = cc.egui_ctx.clone();
+                crate::instance::listen(move || c.request_repaint())
+            },
+            dragging: std::env::var("REDFORGE_DROP_HOVER").is_ok(),
         };
-        if let Some(f) = folder {
+        // `REDFORGE_OPEN=folder`: the game folder's dialog, for its screenshot.
+        if let Some(f) = folder.filter(|_| app.auto.as_ref().is_none_or(|a| a.open != "folder")) {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
         }
         app
@@ -198,10 +231,12 @@ impl RedForgeApp {
 
     fn load_game(&mut self, ctx: &egui::Context, folder: PathBuf) {
         if !is_game_folder(&folder) {
-            self.game = GameState::NoFolder {
-                input: folder.display().to_string(),
-                error: Some("RDR2.exe isn't in that folder".into()),
+            let previous = match &self.game {
+                GameState::NoFolder { previous, .. } => previous.clone(),
+                _ => None,
             };
+            let error = Some(format!("RDR2.exe isn't in {}", folder.display()));
+            self.game = GameState::ask(folder.display().to_string(), error, previous);
             return;
         }
         self.settings.set(GAME_FOLDER, folder.display().to_string());
@@ -295,40 +330,185 @@ impl RedForgeApp {
         }
     }
 
-    fn folder_ui(&mut self, ui: &mut egui::Ui) {
-        let mut chosen = None;
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(ui.available_height() * 0.3);
-                ui.heading("RedForge");
-                ui.label("Where is Red Dead Redemption 2 installed?");
-                ui.add_space(8.0);
-                let GameState::NoFolder { input, error } = &mut self.game else { return };
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(input)
-                            .desired_width(420.0)
-                            .hint_text("/path/to/Red Dead Redemption 2"),
-                    );
-                    if ui.button("Browse…").clicked()
-                        && let Some(dir) = rfd::FileDialog::new().set_title("The RDR2 folder").pick_folder()
-                    {
-                        *input = dir.display().to_string();
-                    }
-                    if ui.button("Open").clicked() {
-                        chosen = Some(PathBuf::from(input.trim()));
-                    }
-                });
-                if let Some(e) = error {
-                    ui.colored_label(ui.visuals().error_fg_color, e.as_str());
-                }
-            });
+    /// The projects from outside: handed over by another RedForge (which
+    /// brings this one to the front), or dropped on the window, with a card
+    /// while files are dragged over it. They open once the game is loaded.
+    fn take_projects(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = &self.from_others {
+            while let Ok(file) = rx.try_recv() {
+                self.incoming = Some(file);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                let attention = egui::UserAttentionType::Informational;
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(attention));
+            }
+        }
+        let (hovered, dropped) = ctx.input(|i| {
+            let hovered: Vec<Option<PathBuf>> = i.raw.hovered_files.iter().map(|f| f.path.clone()).collect();
+            let dropped: Vec<PathBuf> = i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect();
+            (hovered, dropped)
         });
-        if let Some(f) = chosen {
+        if !dropped.is_empty() {
+            match dropped.into_iter().find(|f| is_project(f)) {
+                Some(file) => self.incoming = Some(file),
+                None => self.tools.say("Only RedForge projects (.rfproj) open by dropping them"),
+            }
+        }
+        if hovered.is_empty() && !self.dragging {
+            return;
+        }
+        // X11 and Windows say which files while they're dragged, Wayland only
+        // at the drop.
+        let known: Vec<&PathBuf> = hovered.iter().flatten().collect();
+        drop_card(ctx, known.is_empty() || known.iter().any(|f| is_project(f)));
+    }
+
+    /// The game folder's dialog: a card with the installs the launchers
+    /// know of, the folder, and Open.
+    fn folder_ui(&mut self, ui: &mut egui::Ui) {
+        let GameState::NoFolder { input, error, found, previous } = &mut self.game else { return };
+        let (mut chosen, mut back) = (None, false);
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG)).show(ui, |_| {});
+        let card = theme::card(28);
+        egui::Area::new(egui::Id::new("game-folder")).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(
+            ui.ctx(),
+            |ui| {
+                card.show(ui, |ui| {
+                    ui.set_width(520.0);
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(52.0, 52.0)));
+                        ui.vertical(|ui| {
+                            let title = if previous.is_some() { "The game folder" } else { "Welcome to RedForge" };
+                            ui.label(egui::RichText::new(title).font(theme::heading(theme::SIZE + 10.0)));
+                            ui.label(
+                                egui::RichText::new("Where is Red Dead Redemption 2 installed?").color(theme::WEAK),
+                            );
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.label(
+                        "RedForge reads the game's files from its folder, the one with RDR2.exe, and never \
+                         changes them.",
+                    );
+                    ui.add_space(14.0);
+                    if !found.is_empty() {
+                        ui.label(egui::RichText::new("Found on this computer").font(theme::strong(theme::SIZE)));
+                        for (dir, launcher) in found.iter() {
+                            let path = dir.display().to_string();
+                            let selected = input.trim() == path;
+                            let row = install_row(ui, selected, launcher, &path);
+                            if row.clicked() {
+                                *input = path.clone();
+                            }
+                            if row.double_clicked() {
+                                chosen = Some(dir.clone());
+                            }
+                        }
+                        ui.add_space(10.0);
+                    }
+                    ui.label(egui::RichText::new("Folder").font(theme::strong(theme::SIZE)));
+                    ui.horizontal(|ui| {
+                        let browse = 96.0;
+                        let width = ui.available_width() - browse - ui.spacing().item_spacing.x;
+                        let field = ui.add(
+                            egui::TextEdit::singleline(input)
+                                .desired_width(width)
+                                .min_size(egui::vec2(width, 30.0))
+                                .vertical_align(egui::Align::Center)
+                                .hint_text("The folder with RDR2.exe"),
+                        );
+                        if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            chosen = Some(PathBuf::from(input.trim()));
+                        }
+                        let button = egui::Button::new(theme::icon_text(icon::FOLDER_OPEN, "Browse…"))
+                            .min_size(egui::vec2(browse, 30.0));
+                        if ui.add(button).clicked()
+                            && let Some(dir) =
+                                rfd::FileDialog::new().set_title("The Red Dead Redemption 2 folder").pick_folder()
+                        {
+                            *input = dir.display().to_string();
+                        }
+                    });
+                    if let Some(e) = error {
+                        ui.add_space(4.0);
+                        let red = ui.visuals().error_fg_color;
+                        ui.label(egui::RichText::new(format!("{}  {e}", icon::WARNING)).color(red));
+                    }
+                    ui.add_space(18.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_enabled(!input.trim().is_empty(), theme::primary("Open")).clicked() {
+                            chosen = Some(PathBuf::from(input.trim()));
+                        }
+                        if previous.is_some() && ui.add(theme::secondary("Cancel")).clicked() {
+                            back = true;
+                        }
+                    });
+                });
+            },
+        );
+        if back && let GameState::NoFolder { previous: Some(g), .. } = &self.game {
+            self.game = GameState::Ready(g.clone());
+        } else if let Some(f) = chosen {
             let ctx = ui.ctx().clone();
             self.load_game(&ctx, f);
         }
     }
+}
+
+fn is_project(file: &Path) -> bool {
+    file.extension().is_some_and(|e| e.eq_ignore_ascii_case("rfproj"))
+}
+
+/// The card over the window while files are dragged over it: whether
+/// dropping them opens a project.
+fn drop_card(ctx: &egui::Context, project: bool) {
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-card")));
+    let screen = ctx.content_rect();
+    painter.rect_filled(screen, 0, egui::Color32::from_black_alpha(150));
+    let card = egui::Rect::from_center_size(screen.center(), egui::vec2(400.0, 180.0));
+    let colour = if project { theme::ACCENT } else { theme::WEAK };
+    let stroke = egui::Stroke::new(2.0, colour);
+    painter.rect(card, theme::BIG_RADIUS, theme::PANEL, stroke, egui::StrokeKind::Inside);
+    let (glyph, title, note) = if project {
+        (icon::FILE_ARROW_DOWN, "Drop to open the project", "RedForge asks before closing the one open")
+    } else {
+        (icon::PROHIBIT, "Not a RedForge project", "Only projects (.rfproj) open here")
+    };
+    let at = |dy: f32| card.center() + egui::vec2(0.0, dy);
+    let centre = egui::Align2::CENTER_CENTER;
+    painter.text(at(-38.0), centre, glyph, egui::FontId::proportional(46.0), colour);
+    painter.text(at(20.0), centre, title, theme::heading(theme::SIZE + 6.0), theme::TEXT);
+    painter.text(at(50.0), centre, note, egui::FontId::proportional(theme::SIZE - 1.0), theme::WEAK);
+}
+
+/// An install in the game folder's dialog: the launcher and the folder.
+fn install_row(ui: &mut egui::Ui, selected: bool, launcher: &str, path: &str) -> egui::Response {
+    let glyph = if launcher == "Steam" { icon::STEAM_LOGO } else { icon::GAME_CONTROLLER };
+    let frame = egui::Frame::new()
+        .fill(if selected { theme::WIDGET } else { theme::CARD })
+        .stroke(egui::Stroke::new(1.0, if selected { theme::ACCENT } else { theme::CARD }))
+        .corner_radius(egui::CornerRadius::same(theme::RADIUS))
+        .inner_margin(egui::Margin::symmetric(12, 8));
+    let shown = frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            let colour = if selected { theme::ACCENT } else { theme::WEAK };
+            ui.label(egui::RichText::new(glyph).size(22.0).color(colour));
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(launcher).font(theme::strong(theme::SIZE)));
+                ui.add(egui::Label::new(egui::RichText::new(path).small().color(theme::WEAK)).truncate());
+            });
+        });
+    });
+    let row = shown.response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    if row.hovered() && !selected {
+        ui.painter().rect_stroke(
+            row.rect,
+            egui::CornerRadius::same(theme::RADIUS),
+            egui::Stroke::new(1.0, theme::HOVER),
+            egui::StrokeKind::Inside,
+        );
+    }
+    row
 }
 
 /// The fixed tabs' titles.
@@ -375,6 +555,18 @@ impl RedForgeApp {
             "drag test: undo has {:?}, the entity moved from {before:?} to {after:?}",
             ed.undo_labels().collect::<Vec<_>>()
         );
+    }
+
+    /// `REDFORGE_OPEN=folder`: the game folder's dialog's screenshot.
+    fn folder_shot(&mut self, ctx: &egui::Context) {
+        let Some(a) = self.auto.as_mut().filter(|a| a.open == "folder") else { return };
+        ctx.request_repaint();
+        let opened = *a.opened.get_or_insert_with(Instant::now);
+        if !a.requested && opened.elapsed().as_secs_f32() > a.delay {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            a.requested = true;
+        }
+        self.save_shot(ctx);
     }
 
     fn auto_shot(&mut self, ctx: &egui::Context, game: &Arc<Game>) {
@@ -452,6 +644,11 @@ impl RedForgeApp {
             }
             _ => {}
         }
+        self.save_shot(ctx);
+    }
+
+    /// Saves the screenshot asked for, when it comes, and quits.
+    fn save_shot(&mut self, ctx: &egui::Context) {
         let shot = ctx.input(|i| {
             i.raw.events.iter().find_map(|e| match e {
                 egui::Event::Screenshot { image, .. } => Some(image.clone()),
@@ -664,6 +861,10 @@ impl TabViewer for Tabs<'_> {
 
 impl eframe::App for RedForgeApp {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // The game folder's screenshot: no clicks from the real mouse.
+        if self.auto.as_ref().is_some_and(|a| a.open == "folder") {
+            raw.events.retain(|e| !matches!(e, egui::Event::PointerButton { .. }));
+        }
         let Some(d) = self.auto.as_mut().and_then(|a| a.drag_test.as_mut()) else { return };
         let Some((start, dir)) = d.start else { return };
         let button = |pos, pressed| egui::Event::PointerButton {
@@ -709,13 +910,15 @@ impl eframe::App for RedForgeApp {
                         Err(e) => {
                             self.loading = None;
                             let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
-                            self.game = GameState::NoFolder { input, error: Some(format!("{e:#}")) };
+                            self.game = GameState::ask(input, Some(format!("{e:#}")), None);
                             break;
                         }
                     },
                 }
             }
         }
+
+        self.take_projects(ctx);
 
         let game_ready = matches!(self.game, GameState::Ready(_));
         let bar = egui::Frame::new().fill(crate::theme::BG).inner_margin(egui::Margin::symmetric(8, 4));
@@ -725,7 +928,11 @@ impl eframe::App for RedForgeApp {
                 ui.menu_button("File", |ui| {
                     if ui.button("Game folder…").clicked() {
                         let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
-                        self.game = GameState::NoFolder { input, error: None };
+                        let previous = match &self.game {
+                            GameState::Ready(g) => Some(g.clone()),
+                            _ => None,
+                        };
+                        self.game = GameState::ask(input, None, previous);
                         ui.close();
                     }
                     if ui.button("Quit").clicked() {
@@ -832,6 +1039,7 @@ impl eframe::App for RedForgeApp {
             GameState::Ready(g) => Some(g.clone()),
             GameState::NoFolder { .. } => {
                 self.folder_ui(ui);
+                self.folder_shot(ctx);
                 return;
             }
             GameState::Loading { status, started, .. } => {
@@ -886,6 +1094,17 @@ impl eframe::App for RedForgeApp {
             && let Some(ed) = &mut self.editor
         {
             self.project_pane.save_all(ed, &mut self.settings);
+        }
+        // The project to open at start, or from outside, with the Project
+        // pane in front; and its questions.
+        if let Some(ed) = &mut self.editor {
+            let incoming = self.incoming.take();
+            if incoming.is_some()
+                && let Some(path) = self.dock.find_tab_from(|t| matches!(t, Tab::Project))
+            {
+                let _ = self.dock.set_active_tab(path);
+            }
+            self.project_pane.update(ctx, ed, &mut self.settings, incoming);
         }
 
         // The tour: the first time the game is open (once the loading screen

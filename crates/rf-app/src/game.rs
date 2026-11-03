@@ -150,3 +150,116 @@ pub fn start_loading(folder: PathBuf, repaint: impl Fn() + Send + 'static) -> Re
 pub fn is_game_folder(folder: &Path) -> bool {
     rf_formats::rpf8::find_case_insensitive(folder, "rdr2.exe").is_some()
 }
+
+/// Where the launchers say the game is installed, as the C# looks for it:
+/// the folders that have RDR2.exe, with the launcher's name.
+pub fn find_installs() -> Vec<(PathBuf, &'static str)> {
+    let mut found: Vec<(PathBuf, &'static str)> = Vec::new();
+    for (dir, launcher) in install_candidates() {
+        let same = |d: &PathBuf| d == &dir || d.canonicalize().ok() == dir.canonicalize().ok();
+        if is_game_folder(&dir) && !found.iter().any(|(d, _)| same(d)) {
+            found.push((dir, launcher));
+        }
+    }
+    found
+}
+
+const STEAM_FOLDER: &str = "steamapps/common/Red Dead Redemption 2";
+
+/// Steam's libraries: its own folder and the ones `libraryfolders.vdf` lists.
+fn steam_libraries(steam: &Path) -> Vec<PathBuf> {
+    let mut libraries = vec![steam.to_path_buf()];
+    if let Ok(vdf) = std::fs::read_to_string(steam.join("steamapps").join("libraryfolders.vdf")) {
+        libraries.extend(quoted_values(&vdf, "path").into_iter().map(PathBuf::from));
+    }
+    libraries
+}
+
+/// The values of a key's `"key" "value"` (VDF) or `"key": "value"` (JSON)
+/// pairs, their `\\` unescaped.
+fn quoted_values(text: &str, key: &str) -> Vec<String> {
+    let quoted = format!("\"{key}\"");
+    let value = |at: usize| {
+        let rest = text[at + quoted.len()..].trim_start().trim_start_matches(':').trim_start();
+        let value = rest.strip_prefix('"')?;
+        let end = value.find('"')?;
+        Some(value[..end].replace("\\\\", "\\"))
+    };
+    text.match_indices(&quoted).filter_map(|(at, _)| value(at)).collect()
+}
+
+#[cfg(windows)]
+fn install_candidates() -> Vec<(PathBuf, &'static str)> {
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    let read = |root, key: &str, value: &str| -> Option<PathBuf> {
+        RegKey::predef(root).open_subkey(key).ok()?.get_value::<String, _>(value).ok().map(PathBuf::from)
+    };
+    let mut found = Vec::new();
+    if let Some(dir) =
+        read(HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Rockstar Games\Red Dead Redemption 2", "InstallFolder")
+    {
+        found.push((dir, "Rockstar Games Launcher"));
+    }
+    found.push((PathBuf::from(r"C:\Program Files\Rockstar Games\Red Dead Redemption 2"), "Rockstar Games Launcher"));
+    let steam = read(HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath")
+        .or_else(|| read(HKEY_CURRENT_USER, r"SOFTWARE\Valve\Steam", "SteamPath"))
+        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files (x86)\Steam"));
+    for library in steam_libraries(&steam) {
+        found.push((library.join(STEAM_FOLDER), "Steam"));
+    }
+    let program_data = std::env::var_os("ProgramData").map_or_else(|| PathBuf::from(r"C:\ProgramData"), PathBuf::from);
+    let manifests = program_data.join(r"Epic\EpicGamesLauncher\Data\Manifests");
+    for item in std::fs::read_dir(manifests).into_iter().flatten().flatten() {
+        let Ok(text) = std::fs::read_to_string(item.path()) else { continue };
+        if text.contains("Red Dead Redemption 2") {
+            found.extend(
+                quoted_values(&text, "InstallLocation").into_iter().map(|d| (PathBuf::from(d), "Epic Games Launcher")),
+            );
+        }
+    }
+    found.push((PathBuf::from(r"C:\Program Files\Epic Games\RedDeadRedemption2"), "Epic Games Launcher"));
+    found
+}
+
+/// On Linux: Steam's libraries (native and Flatpak), Heroic's and
+/// Legendary's Epic installs, and the Rockstar Games Launcher in the Wine
+/// prefixes under `~/Games` (Lutris').
+#[cfg(not(windows))]
+fn install_candidates() -> Vec<(PathBuf, &'static str)> {
+    let Some(home) = dirs::home_dir() else { return Vec::new() };
+    let mut found = Vec::new();
+    for steam in [".local/share/Steam", ".steam/steam", ".var/app/com.valvesoftware.Steam/.local/share/Steam"] {
+        for library in steam_libraries(&home.join(steam)) {
+            found.push((library.join(STEAM_FOLDER), "Steam"));
+        }
+    }
+    for (installed, launcher) in [
+        (".config/heroic/legendaryConfig/legendary/installed.json", "Heroic"),
+        (".var/app/com.heroicgameslauncher.hgl/config/heroic/legendaryConfig/legendary/installed.json", "Heroic"),
+        (".config/legendary/installed.json", "Legendary"),
+    ] {
+        if let Ok(text) = std::fs::read_to_string(home.join(installed)) {
+            found.extend(quoted_values(&text, "install_path").into_iter().map(|d| (PathBuf::from(d), launcher)));
+        }
+    }
+    for prefix in std::fs::read_dir(home.join("Games")).into_iter().flatten().flatten() {
+        let dir = prefix.path().join("drive_c/Program Files/Rockstar Games/Red Dead Redemption 2");
+        found.push((dir, "Rockstar Games Launcher"));
+    }
+    found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quoted_values;
+
+    #[test]
+    fn library_folders() {
+        let vdf = "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"/home/me/.local/share/Steam\"\n\t}\n\t\"1\"\n\t{\n\t\t\"path\"\t\t\"D:\\\\SteamLibrary\"\n\t}\n}";
+        let paths = quoted_values(vdf, "path");
+        assert_eq!(paths, ["/home/me/.local/share/Steam", "D:\\SteamLibrary"]);
+        let json = r#"{"Heroic": {"install_path": "/home/me/Games/Heroic/RDR2", "title": "x"}}"#;
+        assert_eq!(quoted_values(json, "install_path"), ["/home/me/Games/Heroic/RDR2"]);
+    }
+}

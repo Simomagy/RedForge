@@ -54,10 +54,22 @@ fn entry_key(e: &ProjectEntry) -> String {
     }
 }
 
-/// Something that waits for "discard unsaved changes?".
+/// Something that waits for "close the project?" or "discard unsaved changes?".
 enum Pending {
     Open(PathBuf),
     Close,
+}
+
+/// Whether two paths are the same file.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+fn file_name(file: &Path) -> String {
+    file.file_stem().unwrap_or(file.as_os_str()).to_string_lossy().into_owned()
 }
 
 #[derive(Default)]
@@ -87,10 +99,42 @@ struct ExportForm {
 }
 
 impl ProjectPane {
-    pub fn ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, settings: &mut Settings) {
+    /// Every frame, whether the pane shows or not: at start, the project to
+    /// open (`incoming`, from the command line) or the last one; then the
+    /// projects opened from outside (the file manager, dropped on the
+    /// window), and the question before closing the open one.
+    pub fn update(
+        &mut self,
+        ctx: &egui::Context,
+        editor: &mut Editor,
+        settings: &mut Settings,
+        incoming: Option<PathBuf>,
+    ) {
         if !std::mem::replace(&mut self.started, true) {
-            self.reopen(editor, settings);
+            match incoming {
+                Some(file) => self.open(editor, settings, &file),
+                None => self.reopen(editor, settings),
+            }
+        } else if let Some(file) = incoming {
+            self.open_from_outside(editor, settings, file);
         }
+        self.confirm_ui(ctx, editor, settings);
+    }
+
+    /// A project opened from outside RedForge: the open project closes, if
+    /// the answer is yes.
+    fn open_from_outside(&mut self, editor: &mut Editor, settings: &mut Settings, file: PathBuf) {
+        let open = editor.project.as_ref().and_then(|p| p.file.clone());
+        if open.as_deref().is_some_and(|f| same_file(f, &file)) {
+            self.status = Some(format!("{} is open already", file_name(&file)));
+        } else if editor.project.is_some() || editor.has_unsaved() {
+            self.confirm = Some(Pending::Open(file));
+        } else {
+            self.open(editor, settings, &file);
+        }
+    }
+
+    pub fn ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, settings: &mut Settings) {
         let title = match &editor.project {
             Some(p) => p.name(),
             None => "No project".into(),
@@ -117,11 +161,7 @@ impl ProjectPane {
             if ui.button(theme::icon_text(icon::FOLDER_OPEN, "Open…")).clicked()
                 && let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).pick_file()
             {
-                if editor.has_unsaved() {
-                    self.confirm = Some(Pending::Open(file));
-                } else {
-                    self.open(editor, settings, &file);
-                }
+                self.open_asking(editor, settings, file);
             }
             if ui.button(theme::icon_text(icon::FLOPPY_DISK, "Save all")).on_hover_text("Ctrl+S").clicked() {
                 self.save_all(editor, settings);
@@ -176,7 +216,6 @@ impl ProjectPane {
                 }
             }
         });
-        self.confirm_ui(ui, editor, settings);
         ui.separator();
 
         let entries = editor.project_entries();
@@ -188,7 +227,7 @@ impl ProjectPane {
                 for file in recent.iter().take(6) {
                     let name = file.file_stem().unwrap_or_default().to_string_lossy();
                     if ui.link(name).on_hover_text(file.display().to_string()).clicked() {
-                        self.open(editor, settings, file);
+                        self.open_asking(editor, settings, file.clone());
                     }
                 }
             }
@@ -380,32 +419,97 @@ impl ProjectPane {
         }
     }
 
-    fn confirm_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, settings: &mut Settings) {
+    /// Opens a project from the pane, asking first if files have unsaved
+    /// changes.
+    fn open_asking(&mut self, editor: &mut Editor, settings: &mut Settings, file: PathBuf) {
+        if editor.has_unsaved() {
+            self.confirm = Some(Pending::Open(file));
+        } else {
+            self.open(editor, settings, &file);
+        }
+    }
+
+    /// "Open X? Y will be closed", with saving first when files have unsaved
+    /// changes.
+    fn confirm_ui(&mut self, ctx: &egui::Context, editor: &mut Editor, settings: &mut Settings) {
         let Some(pending) = &self.confirm else { return };
-        let what = match pending {
-            Pending::Open(_) => "Open another project",
-            Pending::Close => "Close the project",
+        let open = editor.project.as_ref().map(|p| p.name());
+        let unsaved = editor.has_unsaved();
+        let (title, go, save) = match pending {
+            Pending::Open(file) => (format!("Open {}?", file_name(file)), "Open", "Save and open"),
+            Pending::Close => {
+                (format!("Close {}?", open.as_deref().unwrap_or("the project")), "Close", "Save and close")
+            }
         };
-        let mut answer = None;
-        egui::Modal::new(egui::Id::new("discard-changes")).show(ui.ctx(), |ui| {
-            ui.heading(what);
-            ui.label("Some files have unsaved changes. Discard them?");
-            ui.horizontal(|ui| {
-                if ui.button("Discard").clicked() {
-                    answer = Some(true);
+        let mut text = match (pending, &open) {
+            (Pending::Open(_), Some(name)) => vec![format!("{name} will be closed.")],
+            _ => vec![],
+        };
+        if unsaved {
+            text.push(
+                if open.is_some() {
+                    "Some of its files have unsaved changes."
+                } else {
+                    "Some files have unsaved changes."
                 }
-                if ui.button("Cancel").clicked() {
-                    answer = Some(false);
+                .into(),
+            );
+        }
+        let text = text.join(" ");
+        #[derive(PartialEq)]
+        enum Answer {
+            Save,
+            Go,
+            Cancel,
+        }
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new("close-project")).frame(theme::card(20)).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.horizontal(|ui| {
+                let glyph = if unsaved { icon::WARNING } else { icon::FOLDER_OPEN };
+                ui.label(RichText::new(glyph).size(26.0).color(theme::ACCENT));
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(&title).font(theme::heading(theme::SIZE + 4.0)));
+                    if !text.is_empty() {
+                        ui.label(RichText::new(&text).color(theme::WEAK));
+                    }
+                });
+            });
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if unsaved {
+                    if ui.add(theme::primary(save)).clicked() {
+                        answer = Some(Answer::Save);
+                    }
+                    if ui.add(theme::secondary("Don't save")).clicked() {
+                        answer = Some(Answer::Go);
+                    }
+                } else if ui.add(theme::primary(go)).clicked() {
+                    answer = Some(Answer::Go);
+                }
+                if ui.add(theme::secondary("Cancel")).clicked() {
+                    answer = Some(Answer::Cancel);
                 }
             });
         });
-        match answer {
-            Some(true) => match self.confirm.take() {
-                Some(Pending::Open(file)) => self.open(editor, settings, &file),
-                Some(Pending::Close) => self.close(editor, settings),
-                None => {}
-            },
-            Some(false) => self.confirm = None,
+        if modal.should_close() && answer.is_none() {
+            answer = Some(Answer::Cancel);
+        }
+        let Some(answer) = answer else { return };
+        let pending = self.confirm.take();
+        if answer == Answer::Cancel {
+            return;
+        }
+        if answer == Answer::Save {
+            self.save_all(editor, settings);
+            // Not saved (cancelled, or it failed): the project stays.
+            if editor.has_unsaved() {
+                return;
+            }
+        }
+        match pending {
+            Some(Pending::Open(file)) => self.open(editor, settings, &file),
+            Some(Pending::Close) => self.close(editor, settings),
             None => {}
         }
     }
