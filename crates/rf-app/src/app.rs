@@ -394,7 +394,7 @@ impl RedForgeApp {
                     for (_, tab) in self.dock.iter_all_tabs_mut() {
                         if let Tab::Map(v) = tab
                             && v.is_world()
-                            && v.select_centre(&self.gpu, ed)
+                            && v.select_centre(&self.gpu, ed, &mut self.tools)
                         {
                             self.tools.tool = crate::map::tools::Tool::Move;
                             // The X arrow: from the entity along world X on screen.

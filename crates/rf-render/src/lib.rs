@@ -31,8 +31,8 @@ pub use camera::{CameraView, FlyCamera, Frustum, OrbitCamera, Ray};
 pub use context::{GpuContext, wanted_features};
 pub use helpers::{HelperBatch, HelperMesh, HelperVertex};
 pub use model::{
-    AlphaMode, DecalMode, GpuModel, MaterialDesc, ModelOptions, NoTextures, Slot, TerrainDesc, TextureSource,
-    WaterDesc, WaterParams,
+    AlphaMode, DecalMode, GpuModel, MaterialDesc, ModelOptions, NoTextures, SkeletonBone, Slot, TerrainDesc,
+    TextureSource, WaterDesc, WaterParams,
 };
 pub use outline::MAX_OUTLINES;
 pub use post::{Post, PostSettings, PostTargets, Tonemap};

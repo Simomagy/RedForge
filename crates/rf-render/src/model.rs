@@ -790,6 +790,21 @@ pub struct GpuModel {
     /// The skeleton's bones at rest (model space) by tag, for what's placed
     /// on a bone (an archetype's lights).
     pub bones: Vec<(u16, glam::Mat4)>,
+    /// The skeleton, in its order (the editor's "Skeleton" mode shows it).
+    pub skeleton: Vec<SkeletonBone>,
+}
+
+/// A bone of a model's skeleton.
+#[derive(Clone, Debug)]
+pub struct SkeletonBone {
+    pub name: String,
+    pub tag: u16,
+    /// The parent's index in the skeleton, or -1.
+    pub parent: i16,
+    /// Where it is from its parent.
+    pub position: [f32; 3],
+    /// At rest, in the model's space.
+    pub rest: glam::Mat4,
 }
 
 impl GpuModel {
@@ -992,6 +1007,19 @@ impl GpuModel {
             (min, max) = (d.bounding_box_min, d.bounding_box_max);
         }
         let rest = d.skeleton.as_ref().map(crate::anim::Pose::from_skeleton);
+        let skeleton = match &rest {
+            Some(p) => bones
+                .iter()
+                .map(|b| SkeletonBone {
+                    name: b.name.clone().unwrap_or_default(),
+                    tag: b.tag,
+                    parent: b.parent_index,
+                    position: b.position,
+                    rest: p.bone_transform(b.tag).unwrap_or(glam::Mat4::IDENTITY),
+                })
+                .collect(),
+            None => Vec::new(),
+        };
         let bones = match &rest {
             Some(p) => bones.iter().filter_map(|b| Some((b.tag, p.bone_transform(b.tag)?))).collect(),
             None => Vec::new(),
@@ -1005,6 +1033,7 @@ impl GpuModel {
             lod_dists: d.lod_dists,
             missing_textures: resolver.missing,
             bones,
+            skeleton,
         }
     }
 }

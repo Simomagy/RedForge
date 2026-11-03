@@ -7,6 +7,7 @@
 //! what's streamed around the camera ([`Helpers::collect`]).
 
 mod amv;
+mod entities;
 mod maps;
 mod navmesh;
 mod physics;
@@ -16,7 +17,7 @@ pub mod shapes;
 use std::sync::Arc;
 
 use glam::{Mat4, Vec3};
-use rf_render::HelperMesh;
+use rf_render::{GpuModel, HelperMesh};
 
 use crate::game::Game;
 use crate::viewers::Gpu;
@@ -65,6 +66,12 @@ impl Mode {
             Mode::AmbientMaskVolume => "Ambient Mask Volume",
             Mode::Scenario => "Scenario",
         }
+    }
+
+    /// Whether it needs the entities in view and their models
+    /// ([`Collect::entities`]).
+    pub fn wants_models(self) -> bool {
+        matches!(self, Mode::Light | Mode::Skeleton)
     }
 
     /// What the mode shows, for its menu.
@@ -134,14 +141,24 @@ pub struct HelperPart {
     pub info: Arc<PartInfo>,
 }
 
+/// An entity in view with its model loaded, for the modes that show what
+/// the entities have (lights, skeletons).
+pub struct VisibleModel {
+    pub id: rf_world::EntityId,
+    pub archetype: u32,
+    pub transform: Mat4,
+    pub model: Arc<GpuModel>,
+}
+
 /// What a mode's source has to make its parts from.
 pub struct Collect<'a> {
     pub gpu: &'a Gpu,
     pub game: &'a Arc<Game>,
     pub world: &'a rf_world::World,
     /// The camera, which the streamed modes load around.
-    #[allow(dead_code)]
     pub eye: Vec3,
+    /// With [`Mode::wants_models`]: the entities in view.
+    pub entities: &'a [VisibleModel],
 }
 
 /// The modes' sources, and the parts of the last [`Helpers::collect`].
@@ -149,6 +166,7 @@ pub struct Collect<'a> {
 pub struct Helpers {
     pub shapes: Shapes,
     maps: maps::MapParts,
+    entities: entities::EntityParts,
     physics: physics::Physics,
     navmesh: navmesh::Navmesh,
     scenario: scenario::Scenario,
@@ -168,7 +186,8 @@ impl Helpers {
             Mode::Navmesh => self.navmesh.collect(c, &mut self.shapes, &mut self.parts),
             Mode::Scenario => self.scenario.collect(c, &mut self.shapes, &mut self.parts),
             Mode::AmbientMaskVolume => self.amv.collect(c, &mut self.shapes, &mut self.parts),
-            Mode::Entity | Mode::Light | Mode::Skeleton => {}
+            Mode::Light | Mode::Skeleton => self.entities.collect(mode, c, &mut self.shapes, &mut self.parts),
+            Mode::Entity => {}
         }
         &self.parts
     }

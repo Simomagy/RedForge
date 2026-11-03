@@ -339,9 +339,14 @@ impl MapView {
     }
 
     /// Selects what's drawn in the middle of the view (for testing).
-    pub fn select_centre(&mut self, gpu: &Gpu, editor: &mut Editor) -> bool {
+    pub fn select_centre(&mut self, gpu: &Gpu, editor: &mut Editor, tools: &mut Tools) -> bool {
         let Some(t) = &self.targets else { return false };
         let pick = gpu.renderer.pick(&gpu.ctx, t, t.width / 2, t.height / 2);
+        if tools.mode != helpers::Mode::Entity {
+            let hit = pick.and_then(|p| self.drawn.helper(p.id));
+            tools.helper_selection = hit.into_iter().collect();
+            return hit.is_some();
+        }
         let hit = pick.and_then(|p| self.drawn.get(p.id));
         if let Some(id) = hit {
             editor.select(vec![id]);
@@ -550,6 +555,7 @@ impl MapView {
             editor.as_deref().map(|e| e.selection().iter().copied().collect()).unwrap_or_default();
         let hovered = tools.hover.filter(|id| !selection.contains(id) && tools.tool != Tool::Place);
         let mut outlined: [Groups; 2] = Default::default();
+        let mut visible_models = Vec::new();
         let data = self.game.data();
         let hour = self.hour as u32 % 24;
         for e in &visible {
@@ -577,6 +583,14 @@ impl MapView {
             }
             drawn.push(e.id);
             let id = drawn.len() as u32;
+            if tools.mode.wants_models() {
+                visible_models.push(helpers::VisibleModel {
+                    id: e.id,
+                    archetype: e.archetype,
+                    transform: t,
+                    model: model.clone(),
+                });
+            }
             let layer = if hovered == Some(e.id) { Some(0) } else { selection.contains(&e.id).then_some(1) };
             if let Some(l) = layer {
                 outlined[l]
@@ -646,7 +660,13 @@ impl MapView {
         if tools.mode != helpers::Mode::Entity
             && let (Source::World, Some(ed)) = (&self.source, editor.as_deref())
         {
-            let c = helpers::Collect { gpu, game: &self.game, world: &ed.world, eye: camera.eye };
+            let c = helpers::Collect {
+                gpu,
+                game: &self.game,
+                world: &ed.world,
+                eye: camera.eye,
+                entities: &visible_models,
+            };
             self.helpers.collect(tools.mode, &c);
             for p in &self.helpers.parts {
                 if !frustum.sphere_visible(p.centre, p.radius) {
@@ -762,6 +782,14 @@ impl MapView {
                 "\nmap nodes {} loaded (+{} loading) of {}",
                 s.nodes_loaded, s.nodes_loading, s.nodes
             ));
+            if tools.mode != helpers::Mode::Entity {
+                text.push_str(&format!(
+                    "
+{}: {} helpers",
+                    tools.mode.name(),
+                    self.helpers.parts.len()
+                ));
+            }
             if let Some(id) = tools.hover {
                 let name = ed.world.entity(id).map(|e| ed.hashes().name(e.archetype)).unwrap_or_default();
                 let map = ed.world.map_file_name(id.node).unwrap_or_default();

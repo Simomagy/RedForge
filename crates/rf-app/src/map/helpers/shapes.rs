@@ -130,7 +130,6 @@ impl Geometry {
     }
 
     /// A cylinder from `a` to `b`, open (`ends` closes it).
-    #[allow(dead_code)] // for the collisions' shapes
     fn add_tube(&mut self, a: Vec3, b: Vec3, radius: f32, ends: bool, colour: [u8; 4]) {
         let axis = (b - a).normalize_or(Vec3::Z);
         let q = Quat::from_rotation_arc(Vec3::Z, axis);
@@ -162,13 +161,45 @@ impl Geometry {
         }
     }
 
+    /// The C#'s `Shape.CreateOctahedron`: points `sizep` along +X, +Y, +Z
+    /// and `sizen` along -X, -Y, -Z, moved by `offset`.
+    pub fn add_octahedron(&mut self, sizep: Vec3, sizen: Vec3, offset: Vec3, colour: [u8; 4]) {
+        let (px, py, pz) = (Vec3::X * sizep.x, Vec3::Y * sizep.y, Vec3::Z * sizep.z);
+        let (nx, ny, nz) = (Vec3::X * -sizen.x, Vec3::Y * -sizen.y, Vec3::Z * -sizen.z);
+        for [a, b, c] in [
+            [px, py, pz],
+            [px, nz, py],
+            [px, pz, ny],
+            [px, ny, nz],
+            [nx, pz, py],
+            [nx, py, nz],
+            [nx, ny, pz],
+            [nx, nz, ny],
+        ] {
+            self.add_triangle(a + offset, b + offset, c + offset, colour);
+        }
+    }
+
+    /// A spot light's reach: a cone from the origin along +Z, `angle` (radians)
+    /// from its axis, closed by a cap of the unit sphere.
+    pub fn add_spot(&mut self, angle: f32, colour: [u8; 4]) {
+        let angle = angle.clamp(0.01, PI * 0.5);
+        let rim = |k: u32| {
+            let phi = TAU * k as f32 / SLICES as f32;
+            Vec3::new(angle.sin() * phi.cos(), angle.sin() * phi.sin(), angle.cos())
+        };
+        for k in 0..SLICES {
+            self.add_triangle(Vec3::ZERO, rim(k + 1), rim(k), colour);
+        }
+        self.add_cap(Vec3::ZERO, 1.0, Quat::IDENTITY, 0.0, angle, colour);
+    }
+
     #[allow(dead_code)] // for the collisions' shapes
     pub fn add_cylinder(&mut self, a: Vec3, b: Vec3, radius: f32, colour: [u8; 4]) {
         self.add_tube(a, b, radius, true, colour);
     }
 
     /// A cylinder from `a` to `b` with half spheres on its ends.
-    #[allow(dead_code)] // for the collisions' shapes
     pub fn add_capsule(&mut self, a: Vec3, b: Vec3, radius: f32, colour: [u8; 4]) {
         let axis = (b - a).normalize_or(Vec3::Z);
         let q = Quat::from_rotation_arc(Vec3::Z, axis);
