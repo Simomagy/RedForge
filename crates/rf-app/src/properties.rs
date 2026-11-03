@@ -397,7 +397,7 @@ impl Properties {
             }
             None => {
                 ui.label(
-                    RichText::new("Choose an archetype in Objects (View → Objects), then click in the map.").weak(),
+                    RichText::new("Choose an archetype in Objects (View > Objects), then click in the map.").weak(),
                 );
             }
         }

@@ -1,0 +1,30 @@
+name: Feature request
+description: Something RedForge could do, or do better.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you'd like to do
+      description: What you're trying to make or change in your map, and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How RedForge could help
+      description: How you picture it working.
+  - type: dropdown
+    id: previous
+    attributes:
+      label: RedForge 1.x (C#)
+      description: Did the old RedForge have it?
+      options:
+        - Yes, RedForge 1.x has it
+        - No, it's new
+        - I don't know
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Other tools that do it, screenshots, examples.

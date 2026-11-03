@@ -1,0 +1,84 @@
+name: Bug report
+description: Something in RedForge doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. The more of the fields below you fill in, the faster it can be fixed.
+        For a file that doesn't open, convert or export right, use the **File format problem** template instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What went wrong. Screenshots help a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, step by step, from opening RedForge.
+      placeholder: |
+        1. Open the world map (View → World map)
+        2. Go to Valentine
+        3. Select ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: dropdown
+    id: previous
+    attributes:
+      label: RedForge 1.x (C#)
+      description: Does the old RedForge do the same?
+      options:
+        - It works in RedForge 1.x
+        - It's the same in RedForge 1.x
+        - RedForge 1.x doesn't have this
+        - I didn't try
+  - type: input
+    id: version
+    attributes:
+      label: RedForge version
+      description: The version, or the commit if you built it yourself.
+      placeholder: "2.0, or a commit like 625a112"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux (Arch or an Arch-based distro)
+        - Linux (another distro)
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      placeholder: "NVIDIA RTX 3070, driver 580.xx"
+  - type: dropdown
+    id: game
+    attributes:
+      label: Where the game is from
+      options:
+        - Steam
+        - Rockstar Games Launcher
+        - Epic Games Store
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log
+      description: On Linux, start RedForge from a terminal (`redforge`) and paste what it prints around the problem.
+      render: text
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: If it happens with a project or a file of yours, attach it (zip it if GitHub won't take it).

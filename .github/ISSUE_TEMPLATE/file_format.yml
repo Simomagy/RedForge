@@ -1,0 +1,74 @@
+name: File format problem
+description: A game file that doesn't open, convert to or from XML, save or work in game as it should.
+labels: ["file format"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        RedForge reads and writes the game's files as RedForge 1.x (C#) does, and its XML is the CodeX/Sollumz XML.
+        Telling how 1.x, CodeX or Sollumz handle the same file helps find the difference.
+  - type: dropdown
+    id: format
+    attributes:
+      label: Format
+      options:
+        - ymap
+        - ytyp
+        - ydr
+        - ydd
+        - yft
+        - ytd
+        - ybn
+        - ycd
+        - ynv
+        - ymt / meta
+        - Other (say which below)
+    validations:
+      required: true
+  - type: input
+    id: file
+    attributes:
+      label: Which file
+      description: Its path in the game (as Game Files shows it), or say it's your own file and attach it below.
+      placeholder: "x64/levels/rdr3/... /p_barrel01x.ydr"
+    validations:
+      required: true
+  - type: dropdown
+    id: operation
+    attributes:
+      label: What goes wrong
+      multiple: true
+      options:
+        - Opening or viewing it
+        - Exporting it to XML
+        - Importing it from XML
+        - Saving it
+        - Exporting it as a RedM resource
+        - It's wrong in game or in RedM
+        - The rf command-line tool
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: The error, what looks wrong, or what's different from what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: compare
+    attributes:
+      label: Compared with
+      description: What RedForge 1.x, CodeX or Sollumz do with the same file, if you know.
+  - type: input
+    id: version
+    attributes:
+      label: RedForge version
+      placeholder: "2.0, or a commit like 625a112"
+    validations:
+      required: true
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: Attach the file (and its XML, if it's about XML). Zip them if GitHub won't take them.

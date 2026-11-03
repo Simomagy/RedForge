@@ -132,7 +132,7 @@ impl Ready {
         };
         ui.horizontal_wrapped(|ui| {
             ui.strong(&tex.name);
-            ui.label(format!("{}×{} {:?} → {:?}", tex.width, tex.height, tex.source_format, tex.gpu_format));
+            ui.label(format!("{}×{} {:?} to {:?}", tex.width, tex.height, tex.source_format, tex.gpu_format));
         });
         ui.horizontal_wrapped(|ui| {
             let mut changed = false;

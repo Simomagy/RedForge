@@ -14,6 +14,7 @@ mod objects;
 mod project_pane;
 mod properties;
 mod settings;
+mod tour;
 mod viewers;
 
 use std::sync::Arc;
@@ -22,7 +23,7 @@ use eframe::egui_wgpu::{WgpuSetup, WgpuSetupCreateNew};
 use eframe::wgpu;
 
 /// The C# RedForge's icon, its largest size.
-fn icon() -> eframe::egui::IconData {
+pub(crate) fn icon() -> eframe::egui::IconData {
     let ico = include_bytes!("../assets/redforge.ico");
     match image::load_from_memory_with_format(ico, image::ImageFormat::Ico) {
         Ok(img) => {

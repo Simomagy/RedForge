@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
@@ -18,6 +19,7 @@ use crate::objects::Objects;
 use crate::project_pane::ProjectPane;
 use crate::properties::Properties;
 use crate::settings::{GAME_FOLDER, Settings};
+use crate::tour::{self, Tour, TourEvent};
 use crate::viewers::Gpu;
 use crate::viewers::anim::AnimViewer;
 use crate::viewers::hex::HexViewer;
@@ -70,7 +72,7 @@ impl Tab {
 /// For testing without anyone at the screen: opens a file, takes a screenshot
 /// of the window and quits (`REDFORGE_OPEN=<path> REDFORGE_SCREENSHOT=<png>`).
 ///
-/// `REDFORGE_OPEN` can also be `world`, `world:<place>` or
+/// `REDFORGE_OPEN` can also be `welcome` (nothing opened), `world`, `world:<place>` or
 /// `world:x,y,z[,yaw,pitch]` for the world map, and
 /// `REDFORGE_SCREENSHOT_DELAY` sets the seconds to wait (6 by default), and
 /// `REDFORGE_SELECT_CENTRE=1` selects what's in the middle of the world map
@@ -123,7 +125,15 @@ pub struct RedForgeApp {
     objects: Objects,
     /// The loading screen, while the game loads and as it fades away.
     loading: Option<crate::loading::LoadingScreen>,
+    /// The tour of the panels, and where each panel was drawn last frame.
+    tour: Tour,
+    panel_rects: HashMap<&'static str, egui::Rect>,
+    /// The app's icon, for the welcome page.
+    icon: egui::TextureHandle,
 }
+
+/// The setting that's set once the tour was seen (or skipped).
+const TOUR_DONE: &str = "Onboarding.Done";
 
 impl RedForgeApp {
     pub fn new(cc: &eframe::CreationContext) -> Self {
@@ -171,6 +181,13 @@ impl RedForgeApp {
             blender: None,
             objects: Objects::new(tile_size.unwrap_or(crate::objects::DEFAULT_TILE)),
             loading: None,
+            tour: Tour::default(),
+            panel_rects: HashMap::new(),
+            icon: {
+                let i = crate::icon();
+                let image = egui::ColorImage::from_rgba_unmultiplied([i.width as usize, i.height as usize], &i.rgba);
+                cc.egui_ctx.load_texture("redforge icon", image, egui::TextureOptions::LINEAR)
+            },
         };
         if let Some(f) = folder {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
@@ -379,6 +396,10 @@ impl RedForgeApp {
                     }
                     return;
                 }
+                // `welcome`: the app as it starts.
+                if a.open == "welcome" {
+                    return;
+                }
                 let (path, hex) = match a.open.strip_prefix("hex:") {
                     Some(p) => (p.to_owned(), true),
                     None => (a.open.clone(), false),
@@ -463,6 +484,61 @@ struct Tabs<'a> {
     /// What the Game Files browser asked to open.
     action: &'a mut Option<BrowserAction>,
     objects: &'a mut Objects,
+    /// The welcome page asked for the world map (at a place, or where it starts).
+    open_world: &'a mut Option<String>,
+    /// Where each panel is drawn ([`crate::tour`]'s names).
+    rects: &'a mut HashMap<&'static str, egui::Rect>,
+    icon: &'a egui::TextureHandle,
+}
+
+impl Tabs<'_> {
+    /// The welcome page: the world map a click away (and at a town), and
+    /// what else there is to open.
+    fn welcome_ui(&mut self, ui: &mut egui::Ui) {
+        let places: Vec<String> =
+            self.editor.as_deref().map(|e| e.world.places().into_iter().map(|p| p.0).collect()).unwrap_or_default();
+        ui.vertical_centered(|ui| {
+            ui.add_space((ui.available_height() * 0.2).max(24.0));
+            ui.add(egui::Image::new(self.icon).fit_to_exact_size(egui::vec2(96.0, 96.0)));
+            ui.heading(egui::RichText::new("RedForge").size(32.0).strong());
+            ui.label(egui::RichText::new("A map editor for RedM").weak());
+            ui.add_space(24.0);
+            let open = egui::Button::new(egui::RichText::new("🗺  Open the world map").size(18.0))
+                .min_size(egui::vec2(260.0, 44.0));
+            let enabled = self.game.is_some();
+            if ui
+                .add_enabled(enabled, open)
+                .on_hover_text("The game's map, streamed around you (View > World map)")
+                .clicked()
+            {
+                *self.open_world = Some(String::new());
+            }
+            if enabled && !places.is_empty() {
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new("or start at").weak());
+                ui.add_space(4.0);
+                // The towns, in rows centred under the button.
+                let width = ui.available_width().min(560.0);
+                ui.allocate_ui(egui::vec2(width, 0.0), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for p in &places {
+                            if ui.small_button(p).clicked() {
+                                *self.open_world = Some(p.clone());
+                            }
+                        }
+                    });
+                });
+            }
+            ui.add_space(28.0);
+            ui.label(
+                egui::RichText::new(
+                    "Or open a model (ydr, ydd, yft), a texture dictionary (ytd), a clip dictionary (ycd) or any other \
+                     file from Game Files, and a project from the Project pane.",
+                )
+                .weak(),
+            );
+        });
+    }
 }
 
 impl TabViewer for Tabs<'_> {
@@ -503,15 +579,17 @@ impl TabViewer for Tabs<'_> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
+        let panel = match tab {
+            Tab::Project => tour::PROJECT,
+            Tab::Hierarchy => tour::HIERARCHY,
+            Tab::GameFiles => tour::GAME_FILES,
+            Tab::Properties => tour::PROPERTIES,
+            Tab::Objects => tour::OBJECTS,
+            _ => tour::DOCUMENTS,
+        };
+        self.rects.insert(panel, ui.max_rect());
         match tab {
-            Tab::Welcome => {
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        "Open a model (ydr, ydd, yft), a texture dictionary (ytd), a clip dictionary (ycd) or any \
-                         other file from Game Files.",
-                    );
-                });
-            }
+            Tab::Welcome => self.welcome_ui(ui),
             Tab::Model(v) => match self.game {
                 Some(g) => v.ui(ui, self.gpu, &g.hashes),
                 None => {
@@ -633,6 +711,7 @@ impl eframe::App for RedForgeApp {
             }
         }
 
+        let game_ready = matches!(self.game, GameState::Ready(_));
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 if let GameState::Ready(g) = &self.game {
@@ -732,6 +811,12 @@ impl eframe::App for RedForgeApp {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
+                ui.menu_button("Help", |ui| {
+                    if ui.add_enabled(game_ready, egui::Button::new("Tour of the panels")).clicked() {
+                        self.tour.start();
+                        ui.close();
+                    }
+                });
             });
         });
 
@@ -789,7 +874,26 @@ impl eframe::App for RedForgeApp {
             self.project_pane.save_all(ed, &mut self.settings);
         }
 
+        // The tour: the first time the game is open (once the loading screen
+        // is gone), with its step's panel in front.
+        if self.settings.get(TOUR_DONE).is_none() && self.loading.is_none() && !self.tour.is_open() {
+            match (&self.auto, std::env::var("REDFORGE_TOUR").ok().and_then(|s| s.parse().ok())) {
+                (None, _) => self.tour.start(),
+                (Some(_), Some(step)) => self.tour.start_at(step),
+                (Some(_), None) => {}
+            }
+        }
+        match self.tour.target() {
+            Some(tour::PROJECT) => self.show_side_tab(Tab::Project, true),
+            Some(tour::HIERARCHY) => self.show_side_tab(Tab::Hierarchy, true),
+            Some(tour::GAME_FILES) => self.show_side_tab(Tab::GameFiles, true),
+            Some(tour::PROPERTIES) => self.show_side_tab(Tab::Properties, true),
+            Some(tour::OBJECTS) => self.show_side_tab(Tab::Objects, true),
+            _ => {}
+        }
+        self.panel_rects.clear();
         let mut action = None;
+        let mut open_world = None;
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             let mut tabs = Tabs {
                 gpu: &self.gpu,
@@ -803,11 +907,20 @@ impl eframe::App for RedForgeApp {
                 settings: &mut self.settings,
                 action: &mut action,
                 objects: &mut self.objects,
+                open_world: &mut open_world,
+                rects: &mut self.panel_rects,
+                icon: &self.icon,
             };
             DockArea::new(&mut self.dock).style(Style::from_egui(ui.style().as_ref())).show_inside(ui, &mut tabs);
         });
         if let (Some(a), Some(g)) = (action, &game) {
             self.open(ctx, g, a);
+        }
+        if let (Some(place), Some(g)) = (open_world, &game) {
+            self.open_world(g, (!place.is_empty()).then_some(place.as_str()));
+        }
+        if self.tour.ui(ctx, &self.panel_rects) == TourEvent::Closed {
+            self.settings.set(TOUR_DONE, "true");
         }
         if std::mem::take(&mut self.objects.tile_size_changed) {
             self.settings.set(crate::objects::TILE_SIZE, self.objects.tile_size.to_string());
