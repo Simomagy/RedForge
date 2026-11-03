@@ -8,6 +8,7 @@
 
 mod amv;
 mod entities;
+mod fields;
 mod maps;
 mod navmesh;
 mod physics;
