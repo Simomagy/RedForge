@@ -34,6 +34,18 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - The welcome page has **Continue where you left off** (with the project
   and the nearest town), and the projects: New, Open and the recent ones.
 - View > Reset layout.
+- **Ctrl+Shift+D** copies the selection as far again as the last drag, for
+  rows of fences and posts.
+- Gizmo drags show how far they went by the mouse (metres, degrees or
+  scale), and go ten times slower while Alt is held. With a move snap, the
+  object lands on the world's grid along the axes it's dragged on.
+- The arrows move the selection a step of the move snap, or 10 cm (Page Up
+  and Down: up and down; Shift: ten steps).
+- **Go to** takes coordinates (`x, y, z` or `vector3(...)`), and copies the
+  camera's position as `vector3(...)`.
+- Properties: **Place more** next to the archetype (the Place tool with
+  it), and Copy, Paste, Reset rotation and Reset scale for the placement;
+  Copy also puts the position on the clipboard as `vector3(...)`.
 - The game folder is found by itself when Steam, the Rockstar Games Launcher,
   the Epic Games Launcher or Heroic on Linux installed the game.
 
@@ -42,6 +54,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   installs found, and **Cancel** when it's opened from File > Game folder….
 - Over the map, only the camera's position shows; the statistics are in the
   gear menu (**Statistics**).
+- A notch of the wheel changes the speed by about 30% (it took 30 notches
+  to go from 500 to 10 m/s), and the speed shows for a moment.
 
 ### Fixed
 - Quitting with unsaved changes (File > Quit, the window's close button,

@@ -71,6 +71,12 @@ pub struct Tools {
     /// The gizmo drag was cancelled (Esc, or its copies couldn't be made):
     /// the gizmo waits for the button to go up.
     blocked: bool,
+    /// The last drag's move and turn, for Ctrl+Shift+D to copy again.
+    last_move: Option<(Vec3, Quat)>,
+    /// Where the gizmo thinks the mouse is: slower than it while Alt is held.
+    cursor: Option<(Pos2, Pos2)>,
+    /// How far the drag went, shown by the mouse.
+    readout: Option<(String, Pos2)>,
 }
 
 /// A message for a few seconds, over the bottom of the window.
@@ -132,6 +138,9 @@ impl Default for Tools {
             toast: None,
             copied: None,
             blocked: false,
+            last_move: None,
+            cursor: None,
+            readout: None,
         }
     }
 }
@@ -244,6 +253,32 @@ impl Tools {
         }
     }
 
+    /// Ctrl+Shift+D: a copy of the selection, moved and turned as the last
+    /// drag (the next fence of a row).
+    pub fn duplicate_again(&mut self, editor: &mut Editor) {
+        let Some((offset, turn)) = self.last_move else {
+            self.say("Move or copy something first: Ctrl+Shift+D copies the selection that far again");
+            return;
+        };
+        if let Err(e) = editor.duplicate_selected() {
+            self.fail(e);
+            return;
+        }
+        let moved: Vec<(EntityId, Placement)> = editor
+            .selection()
+            .iter()
+            .filter_map(|id| {
+                let mut p = editor.placement(*id)?;
+                p.position += offset;
+                p.orientation = (turn * p.orientation).normalize();
+                Some((*id, p))
+            })
+            .collect();
+        editor.set_placements("Move", &moved);
+        editor.merge_last_steps("Copy again");
+        self.say(format!("Copied {} again", count(moved.len(), "object")));
+    }
+
     pub fn duplicate(&mut self, editor: &mut Editor) {
         match editor.duplicate_selected() {
             Ok(()) => self.say(format!("Duplicated {}", count(editor.selection().len(), "object"))),
@@ -298,7 +333,11 @@ impl Tools {
                 self.paste(editor);
             }
         } else if cmd && pressed(Key::D) {
-            self.duplicate(editor);
+            if shift {
+                self.duplicate_again(editor);
+            } else {
+                self.duplicate(editor);
+            }
         }
         if pressed(Key::Delete) {
             self.delete(editor);
@@ -375,7 +414,16 @@ impl Tools {
             }
             self.blocked = false;
         }
-        let cursor = pointer.hover_pos().unwrap_or_default();
+        let real = pointer.hover_pos().unwrap_or_default();
+        // Alt during a drag: the gizmo follows the mouse a tenth as fast.
+        let cursor = match self.cursor {
+            Some((last, at)) if self.drag.is_some() => {
+                let slow = if ui.input(|i| i.modifiers.alt) { 0.1 } else { 1.0 };
+                at + (real - last) * slow
+            }
+            _ => real,
+        };
+        self.cursor = Some((real, cursor));
         let pressed = pointer.button_pressed(egui::PointerButton::Primary);
         if pressed {
             self.gizmo_press = response.hovered() && self.gizmo.pick_preview((cursor.x, cursor.y));
@@ -417,9 +465,24 @@ impl Tools {
                     .zip(moved)
                     .map(|((id, start), t)| (*id, from_transform(&t).lock_scale_xy(start)))
                     .collect();
+                // The move snap puts the first entity on the world's grid,
+                // along the axes it moves on, and the others with it.
+                if self.tool == Tool::Move && self.snap_move > 0.0 && !self.local {
+                    let (start, now) = (d.start[0].1.position, d.now[0].1.position);
+                    let step = self.snap_move;
+                    let snap = |a: f32, b: f32| if (a - b).abs() > 1e-4 { (a / step).round() * step - a } else { 0.0 };
+                    let fix = Vec3::new(snap(now.x, start.x), snap(now.y, start.y), snap(now.z, start.z));
+                    for (_, p) in &mut d.now {
+                        p.position += fix;
+                    }
+                }
                 editor.preview(&d.now);
+                self.readout = readout(self.tool, &d.start[0].1, &d.now[0].1).map(|t| (t, real));
             }
-            None => self.finish_drag(editor),
+            None => {
+                self.finish_drag(editor);
+                self.readout = None;
+            }
         }
         self.gizmo_press || self.gizmo.is_focused() || self.drag.is_some()
     }
@@ -439,9 +502,56 @@ impl Tools {
             Tool::Scale => "Scale",
             _ => "Move",
         };
+        let (start, now) = (d.start[0].1, d.now[0].1);
+        self.last_move = Some((now.position - start.position, now.orientation * start.orientation.inverse()));
         editor.set_placements(label, &d.now);
         if d.copy {
             editor.merge_last_steps(&format!("Copy and {}", label.to_lowercase()));
+        }
+    }
+
+    /// The arrows (and Page Up / Down) move the selection a step of the move
+    /// snap, or 10 cm (Shift: ten times as far).
+    fn nudge(&mut self, ui: &egui::Ui, editor: &mut Editor, forward: Vec3, shift: bool) {
+        if self.tool == Tool::Place || self.drag.is_some() || editor.selection().is_empty() {
+            return;
+        }
+        let axis = |v: Vec2| {
+            if v.x.abs() >= v.y.abs() { Vec3::X * v.x.signum() } else { Vec3::Y * v.y.signum() }
+        };
+        let ahead = axis(Vec2::new(forward.x, forward.y));
+        let right = Vec3::new(ahead.y, -ahead.x, 0.0);
+        let step = if self.snap_move > 0.0 { self.snap_move } else { 0.1 } * if shift { 10.0 } else { 1.0 };
+        let mut by = Vec3::ZERO;
+        ui.input(|i| {
+            for (key, dir) in [
+                (Key::ArrowUp, ahead),
+                (Key::ArrowDown, -ahead),
+                (Key::ArrowRight, right),
+                (Key::ArrowLeft, -right),
+                (Key::PageUp, Vec3::Z),
+                (Key::PageDown, -Vec3::Z),
+            ] {
+                if i.key_pressed(key) {
+                    by += dir * step;
+                }
+            }
+        });
+        if by == Vec3::ZERO {
+            return;
+        }
+        let moved: Vec<(EntityId, Placement)> = editor
+            .selection()
+            .iter()
+            .filter(|id| editor.is_editable(**id))
+            .filter_map(|id| {
+                let mut p = editor.placement(*id)?;
+                p.position += by;
+                Some((*id, p))
+            })
+            .collect();
+        if !moved.is_empty() {
+            editor.set_placements("Nudge", &moved);
         }
     }
 
@@ -477,7 +587,17 @@ impl Tools {
                 .collect(),
             ..Default::default()
         };
-        ui.painter().with_clip_rect(rect).add(mesh);
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.add(mesh);
+        // How far the drag went, by the mouse.
+        if let Some((text, at)) = &self.readout {
+            let font = egui::FontId::monospace(13.0);
+            let at = *at + egui::vec2(18.0, -26.0);
+            let galley = painter.layout_no_wrap(text.clone(), font, egui::Color32::WHITE);
+            let back = Rect::from_min_size(at, galley.size()).expand(4.0);
+            painter.rect_filled(back, 3.0, egui::Color32::from_black_alpha(170));
+            painter.galley(at, galley, egui::Color32::WHITE);
+        }
     }
 
     /// Takes the last hover pick if the GPU has it, and asks for one at the
@@ -534,13 +654,15 @@ impl Tools {
     }
 
     /// The keys of the tools, when the map has the keyboard (the editing
-    /// keys are [`Tools::edit_keys`]).
-    pub fn keys(&mut self, ui: &egui::Ui, editor: &mut Editor) {
+    /// keys are [`Tools::edit_keys`]). `forward` is the camera's: the arrows
+    /// move the selection along the world's axis nearest it, and its right.
+    pub fn keys(&mut self, ui: &egui::Ui, editor: &mut Editor, forward: Vec3) {
         let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
         let pressed = |k: Key| ui.input(|i| i.key_pressed(k));
         if cmd {
             return;
         }
+        self.nudge(ui, editor, forward, shift);
         if self.tool == Tool::Place {
             // Q and E turn what's placed: a step of the angle snap a press,
             // or 45° a second while held (Shift: 180°).
@@ -582,6 +704,25 @@ impl Tools {
                 self.selected_parts.clear();
             }
         }
+    }
+}
+
+/// How far a drag went: the move, the turn or the scale.
+fn readout(tool: Tool, start: &Placement, now: &Placement) -> Option<String> {
+    match tool {
+        Tool::Move => {
+            let d = now.position - start.position;
+            Some(format!("{:.2} m  ({:+.2}, {:+.2}, {:+.2})", d.length(), d.x, d.y, d.z))
+        }
+        Tool::Rotate => {
+            let turn = now.orientation * start.orientation.inverse();
+            Some(format!("{:.1}°", turn.angle_between(Quat::IDENTITY).to_degrees()))
+        }
+        Tool::Scale => {
+            let s = now.scale / start.scale.max(Vec3::splat(1e-6));
+            Some(format!("× {:.2}, {:.2}", s.x, s.z))
+        }
+        Tool::Select | Tool::Place => None,
     }
 }
 

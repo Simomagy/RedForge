@@ -133,6 +133,10 @@ pub struct MapView {
     preview_shown: bool,
     /// The statistics over the map (the gear menu's).
     show_stats: bool,
+    /// When the wheel last changed the speed, to show it a moment.
+    speed_changed: Option<Instant>,
+    /// Go to's coordinates, as typed.
+    go_to: String,
 }
 
 /// `T * R * S` from a ymap entity's fields. The game stores the inverse
@@ -235,6 +239,11 @@ impl MapView {
         editor.world.set_hide_scripted(!s.scripted);
     }
 
+    /// Looks at a point from close by, from the south and above.
+    pub fn look_at(&mut self, point: Vec3) {
+        self.set_camera(point + Vec3::new(0.0, -14.0, 7.0), 0.0, -0.46);
+    }
+
     /// Puts the camera at a position, looking along `yaw` and `pitch` (radians).
     pub fn set_camera(&mut self, position: Vec3, yaw: f32, pitch: f32) {
         self.camera.position = position;
@@ -287,6 +296,8 @@ impl MapView {
             helpers: Default::default(),
             preview_shown: false,
             show_stats: false,
+            speed_changed: None,
+            go_to: String::new(),
         }
     }
 
@@ -342,8 +353,10 @@ impl MapView {
                 up -= 1.0;
             }
         });
+        // A notch of the wheel is about 30% faster or slower.
         if scroll != 0.0 {
-            self.speed = (self.speed * (scroll * 0.003).exp()).clamp(1.0, 5000.0);
+            self.speed = (self.speed * (scroll * 0.0066).exp()).clamp(1.0, 5000.0);
+            self.speed_changed = Some(Instant::now());
         }
         let factor = if fast { 5.0 } else { 1.0 };
         let c = &mut self.camera;
@@ -519,15 +532,42 @@ impl MapView {
                     });
                     theme::group(ui, |ui| {
                         let places = editor.world.places();
-                        egui::ComboBox::from_id_salt(("places", &self.path))
-                            .selected_text(icon_text(icon::MAP_PIN, "Go to"))
-                            .show_ui(ui, |ui| {
+                        ui.menu_button(icon_text(icon::MAP_PIN, "Go to"), |ui| {
+                            ui.set_min_width(220.0);
+                            // Coordinates, as RedM's scripts write them or as numbers.
+                            let field = ui.add(
+                                egui::TextEdit::singleline(&mut self.go_to)
+                                    .hint_text("x, y, z")
+                                    .desired_width(f32::INFINITY),
+                            );
+                            field.on_hover_text("Coordinates to look at: \"-296, 691, 178\" or vector3(...)");
+                            if ui.input(|i| i.key_pressed(Key::Enter)) && !self.go_to.trim().is_empty() {
+                                match parse_point(&self.go_to) {
+                                    Some(p) => {
+                                        self.look_at(p);
+                                        ui.close();
+                                    }
+                                    None => tools.fail("Three numbers are needed: x, y, z"),
+                                }
+                            }
+                            let p = self.camera.position;
+                            if ui.button(icon_text(icon::COPY, "Copy the camera's position")).clicked() {
+                                ui.ctx().copy_text(format!("vector3({:.2}, {:.2}, {:.2})", p.x, p.y, p.z));
+                                tools.say("Copied the camera's position");
+                                ui.close();
+                            }
+                            ui.separator();
+                            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                                 for (name, p) in &places {
                                     if ui.button(name).clicked() {
                                         self.view_place(Vec3::from(*p));
+                                        ui.close();
                                     }
                                 }
                             });
+                        })
+                        .response
+                        .on_hover_text("A town, or coordinates");
                         // The hour and the weather, in a menu of their own.
                         let weather = self.timecycle.as_ref().map_or("sunny", |t| t.weather.as_str()).to_owned();
                         let mut chosen = weather.clone();
@@ -622,8 +662,11 @@ impl MapView {
         if let Some(ed) = editor.as_deref_mut()
             && has_keys
         {
-            tools.keys(ui, ed);
+            tools.keys(ui, ed, self.camera.forward());
         }
+        // The arrows and Esc stay the map's while it has the focus.
+        let filter = egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, escape: true, tab: false };
+        ui.memory_mut(|m| m.set_focus_lock_filter(response.id, filter));
         if let Some(ed) = editor.as_deref_mut()
             && std::mem::take(&mut tools.focus)
         {
@@ -909,6 +952,9 @@ impl MapView {
         let (ready, loading, textures) = self.models.stats();
         let p = self.camera.position;
         let mut text = format!("{:.0} {:.0} {:.0}", p.x, p.y, p.z);
+        if self.speed_changed.is_some_and(|t| t.elapsed() < Duration::from_millis(1500)) {
+            text.push_str(&format!("   {:.0} m/s", self.speed));
+        }
         if self.show_stats {
             text = format!(
                 "{:.0} {:.0} {:.0}   {:.1} ms\n{} entities, {} drawn in {} draw calls, {} lights\n{} instanced props and grass drawn, of {} batches\nmodels {ready} (+{loading} loading), textures {textures}",
@@ -1053,5 +1099,29 @@ impl MapView {
             tools::draw_box(&painter, camera, rect, p.matrix(), a.bb_min.into(), a.bb_max.into(), stroke);
         }
         tools.paint_gizmo(ui, rect);
+    }
+}
+
+/// Three numbers in a text: `-296, 691, 178`, `-296 691 178` or `vector3(...)`.
+fn parse_point(text: &str) -> Option<Vec3> {
+    let text = text.rsplit_once('(').map_or(text, |(_, inside)| inside);
+    let numbers: Vec<f32> =
+        text.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-')).filter_map(|n| n.parse().ok()).collect();
+    match numbers[..] {
+        [x, y, z, ..] => Some(Vec3::new(x, y, z)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn points() {
+        assert_eq!(parse_point("-296, 691, 178"), Some(Vec3::new(-296.0, 691.0, 178.0)));
+        assert_eq!(parse_point("vector3(-296.5, 691.0, 178.25)"), Some(Vec3::new(-296.5, 691.0, 178.25)));
+        assert_eq!(parse_point("1 2 3"), Some(Vec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(parse_point("1, 2"), None);
     }
 }

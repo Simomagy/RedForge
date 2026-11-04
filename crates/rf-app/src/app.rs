@@ -227,12 +227,19 @@ impl RedForgeApp {
                     .map(|v| DragTest { copy: v == "copy", ..Default::default() }),
                 quit_test: std::env::var("REDFORGE_TEST_QUIT").is_ok().then_some(false),
                 key_test: std::env::var("REDFORGE_TEST_KEY").ok().and_then(|k| {
-                    let (ctrl, name) = match k.to_lowercase().strip_prefix("ctrl+") {
-                        Some(n) => (true, n.to_owned()),
-                        None => (false, k.clone()),
-                    };
-                    let key = egui::Key::from_name(&name.to_uppercase()).or_else(|| egui::Key::from_name(&name))?;
-                    Some((key, if ctrl { egui::Modifiers::COMMAND } else { egui::Modifiers::NONE }, 0))
+                    let mut parts: Vec<&str> = k.split('+').collect();
+                    let name = parts.pop()?;
+                    let mut modifiers = egui::Modifiers::NONE;
+                    for m in parts {
+                        match m.to_lowercase().as_str() {
+                            "ctrl" => modifiers |= egui::Modifiers::COMMAND,
+                            "shift" => modifiers |= egui::Modifiers::SHIFT,
+                            "alt" => modifiers |= egui::Modifiers::ALT,
+                            _ => return None,
+                        }
+                    }
+                    let key = egui::Key::from_name(&name.to_uppercase()).or_else(|| egui::Key::from_name(name))?;
+                    Some((key, modifiers, 0))
                 }),
                 tab_shown: false,
                 objects_search: std::env::var("REDFORGE_OBJECTS_SEARCH").ok(),

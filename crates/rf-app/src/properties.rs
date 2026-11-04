@@ -59,6 +59,10 @@ pub struct Properties {
     /// A text field being typed in (entity, field, text): kept as typed
     /// until it's let go.
     text: Option<(EntityId, u32, String)>,
+    /// A placement copied, to paste on another entity.
+    copied: Option<Placement>,
+    /// "Place more" was clicked: the Place tool with this archetype.
+    place_more: Option<u32>,
 }
 
 /// The selected helpers of the selection mode (the last one's fields).
@@ -96,6 +100,10 @@ impl Properties {
             }
             ui.separator();
             if let Some(tools) = tools {
+                if let Some(a) = self.place_more.take() {
+                    tools.place_archetype = Some(a);
+                    tools.tool = crate::map::tools::Tool::Place;
+                }
                 self.place_ui(ui, editor, tools);
                 ui.separator();
             }
@@ -178,6 +186,12 @@ impl Properties {
         }
         ui.horizontal(|ui| {
             ui.label("Archetype");
+            let place = ui
+                .button(crate::theme::icon::STAMP)
+                .on_hover_text("Place more of this: the Place tool, with this archetype");
+            if place.clicked() {
+                self.place_more = editor.entity_def(id).map(|d| d.hash("archetypeName"));
+            }
             let r = ui.text_edit_singleline(&mut self.archetype_text);
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 let h = parse_hash(&self.archetype_text);
@@ -232,6 +246,30 @@ impl Properties {
         row(ui, "Position", &mut pos, 0.05);
         row(ui, "Rotation °", &mut euler, 0.5);
         row(ui, "Scale XY, Z", &mut scale, 0.01);
+        // Copy, paste and reset the placement.
+        let mut set = None;
+        ui.horizontal(|ui| {
+            let tip = "Copy the placement (to paste on another object), and the position as vector3(...)";
+            if ui.small_button("Copy").on_hover_text(tip).clicked() {
+                self.copied = Some(p);
+                let v = p.position;
+                ui.ctx().copy_text(format!("vector3({:.3}, {:.3}, {:.3})", v.x, v.y, v.z));
+            }
+            if ui.add_enabled(self.copied.is_some(), egui::Button::new("Paste").small()).clicked() {
+                set = self.copied.map(|c| ("Paste placement", c));
+            }
+            if ui.small_button("Reset rotation").clicked() {
+                set = Some(("Reset rotation", Placement { orientation: Quat::IDENTITY, ..p }));
+            }
+            if ui.small_button("Reset scale").clicked() {
+                set = Some(("Reset scale", Placement { scale: Vec3::ONE, ..p }));
+            }
+        });
+        if let Some((label, to)) = set {
+            self.pending = None;
+            editor.set_placements(label, &[(id, to)]);
+            return;
+        }
         if changed {
             let [x, y, z] = euler.map(f32::to_radians);
             p = Placement {
