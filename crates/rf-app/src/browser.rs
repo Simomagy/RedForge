@@ -14,6 +14,8 @@ pub struct Browser {
     searched: String,
     results: Vec<FileRef>,
     pub selected: Option<FileRef>,
+    /// "Copy path" was clicked on this file.
+    copy_path: Option<FileRef>,
 }
 
 /// What the user asked for.
@@ -82,6 +84,9 @@ impl Browser {
                 }
             });
         }
+        if let Some(f) = self.copy_path.take() {
+            ui.ctx().copy_text(game.path(f));
+        }
         action
     }
 
@@ -114,7 +119,7 @@ impl Browser {
                 ui.close();
             }
             if ui.button("Copy path").clicked() {
-                ui.ctx().copy_text(name.to_owned());
+                self.copy_path = Some(f);
                 ui.close();
             }
         });

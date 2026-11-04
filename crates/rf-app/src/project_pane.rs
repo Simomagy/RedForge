@@ -18,6 +18,8 @@ const AUTHOR: &str = "RedM.Author";
 const RECENT: &str = "Project.Recent";
 const LAST: &str = "Project.Last";
 const REOPEN_LAST: &str = "Project.ReopenLast";
+/// The project's `export` setting for the ymap new things go in (its file name).
+const PLACE_IN: &str = "placeIn";
 
 /// Files go in groups by what they are, as in the C#'s pane, with an icon
 /// for the group and one for its files; the last group takes everything else.
@@ -58,6 +60,8 @@ fn entry_key(e: &ProjectEntry) -> String {
 enum Pending {
     Open(PathBuf),
     Close,
+    /// A new project, in place of the one open.
+    New,
     App(Ask),
 }
 
@@ -97,6 +101,8 @@ pub struct ProjectPane {
     pub picked_map: Option<u32>,
     /// Whether the last project was opened again at start.
     started: bool,
+    /// The ymap new things go in, as last kept in the project.
+    target: Option<u32>,
 }
 
 #[derive(Default, Clone)]
@@ -130,7 +136,36 @@ impl ProjectPane {
         } else if let Some(file) = incoming {
             self.open_from_outside(editor, settings, file);
         }
+        self.keep_target(editor);
         self.confirm_ui(ctx, editor, settings)
+    }
+
+    /// The ymap new things go in, when it changes: kept in the project, to
+    /// choose it again when the project opens.
+    fn keep_target(&mut self, editor: &mut Editor) {
+        if editor.target == self.target || editor.project.is_none() {
+            return;
+        }
+        self.target = editor.target;
+        let name = editor.target.and_then(|t| map_names(editor).into_iter().find(|m| m.0 == t)).map(|m| m.1);
+        let Some(p) = &mut editor.project else { return };
+        let changed = match name {
+            Some(n) => p.export.insert(PLACE_IN.into(), n.clone()).as_ref() != Some(&n),
+            None => p.export.remove(PLACE_IN).is_some(),
+        };
+        if changed && p.file.is_some() {
+            let _ = editor.save_project_file();
+        }
+    }
+
+    /// Just opened: the ymap new things go in, as kept, or the only one.
+    fn restore_target(&mut self, editor: &mut Editor) {
+        let maps = map_names(editor);
+        let kept = editor.project.as_ref().and_then(|p| p.export.get(PLACE_IN)).cloned();
+        let kept = kept.and_then(|n| maps.iter().find(|m| m.1.eq_ignore_ascii_case(&n)));
+        let only = (maps.len() == 1).then(|| &maps[0]);
+        editor.target = kept.or(only).map(|m| m.0);
+        self.target = editor.target;
     }
 
     /// Asks before `what`, as files have unsaved changes.
@@ -162,18 +197,17 @@ impl ProjectPane {
                 .on_hover_text(path.as_deref().unwrap_or("Not saved yet"));
         });
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .button(theme::icon_text(icon::PLUS, "New…"))
-                .on_hover_text("A new project, saved as an .rfproj; what's edited now goes in it")
-                .clicked()
-                && let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).save_file()
-            {
-                let file = with_extension(file, "rfproj");
-                let made = editor.new_project(&file);
-                if made.is_ok() {
-                    remember(settings, &file);
+            let tip = if editor.project.is_some() {
+                "A new, empty project, in place of this one"
+            } else {
+                "A new project, saved as an .rfproj; what's edited now goes in it"
+            };
+            if ui.button(theme::icon_text(icon::PLUS, "New…")).on_hover_text(tip).clicked() {
+                if editor.project.is_some() && editor.has_unsaved() {
+                    self.confirm = Some(Pending::New);
+                } else {
+                    self.new_project(editor, settings);
                 }
-                self.report(made.map(|_| "Project made".into()));
             }
             if ui.button(theme::icon_text(icon::FOLDER_OPEN, "Open…")).clicked()
                 && let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).pick_file()
@@ -340,6 +374,25 @@ impl ProjectPane {
         });
     }
 
+    /// Asks where the new project goes, and makes it: empty, as the one open
+    /// closes, or with what's edited now when none is.
+    fn new_project(&mut self, editor: &mut Editor, settings: &mut Settings) {
+        let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).save_file() else {
+            return;
+        };
+        let file = with_extension(file, "rfproj");
+        if editor.project.is_some() {
+            self.close(editor, settings);
+        }
+        let made = editor.new_project(&file);
+        if made.is_ok() {
+            remember(settings, &file);
+        }
+        self.export = None;
+        self.restore_target(editor);
+        self.report(made.map(|_| "Project made".into()));
+    }
+
     fn save_as(&mut self, editor: &mut Editor, doc: DocKey, name: &str) {
         let ext = Path::new(name).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let mut dialog = rfd::FileDialog::new().set_file_name(name).add_filter(&ext, &[&ext]);
@@ -361,6 +414,7 @@ impl ProjectPane {
         }
         self.export = None;
         self.selected.clear();
+        self.restore_target(editor);
     }
 
     fn close(&mut self, editor: &mut Editor, settings: &mut Settings) {
@@ -378,6 +432,7 @@ impl ProjectPane {
                 Ok(problems) => self.after_load(editor, problems),
                 Err(e) => self.status = Some(e),
             }
+            self.restore_target(editor);
             return;
         }
         let last = settings.get(LAST).map(PathBuf::from).filter(|f| f.is_file());
@@ -457,11 +512,12 @@ impl ProjectPane {
             Pending::Close => {
                 (format!("Close {}?", open.as_deref().unwrap_or("the project")), "Close", "Save and close")
             }
+            Pending::New => ("A new project?".into(), "Continue", "Save and continue"),
             Pending::App(Ask::Quit) => ("Quit RedForge?".into(), "Quit", "Save and quit"),
             Pending::App(Ask::GameFolder) => ("Change the game folder?".into(), "Continue", "Save and continue"),
         };
         let mut text = match (pending, &open) {
-            (Pending::Open(_), Some(name)) => vec![format!("{name} will be closed.")],
+            (Pending::Open(_) | Pending::New, Some(name)) => vec![format!("{name} will be closed.")],
             (Pending::App(Ask::GameFolder), _) => vec!["The game loads again, and changes not saved are lost.".into()],
             _ => vec![],
         };
@@ -540,34 +596,42 @@ impl ProjectPane {
         match pending {
             Some(Pending::Open(file)) => self.open(editor, settings, &file),
             Some(Pending::Close) => self.close(editor, settings),
+            Some(Pending::New) => self.new_project(editor, settings),
             Some(Pending::App(what)) => return Some(what),
             None => {}
         }
         None
     }
 
+    /// The export form, filled the first time from the project (and an
+    /// existing resource, and the last export's folder and author).
+    fn form(&mut self, editor: &Editor, settings: &Settings) -> Option<&mut ExportForm> {
+        let project = editor.project.as_ref()?;
+        Some(self.export.get_or_insert_with(|| {
+            let saved = &project.export;
+            let get = |k: &str| saved.get(k).cloned();
+            let folder = get("folder").unwrap_or_else(|| settings.get(RESOURCES_FOLDER).unwrap_or_default().into());
+            let resource = get("resource").unwrap_or_else(|| redm::safe_name(&project.name()));
+            let existing = redm::read_info(&Path::new(&folder).join(&resource));
+            let info = |k: &str| get(k).or_else(|| existing.get(k).cloned());
+            ExportForm {
+                author: info("author").unwrap_or_else(|| settings.get(AUTHOR).unwrap_or_default().into()),
+                version: info("version").unwrap_or_else(|| "1.0.0".into()),
+                description: info("description").unwrap_or_default(),
+                resource,
+                folder,
+            }
+        }))
+    }
+
     /// Exporting as a RedM resource; the choices are kept in the project.
     fn export_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, settings: &mut Settings) {
         egui::CollapsingHeader::new("RedM resource").default_open(false).show(ui, |ui| {
-            let Some(project) = &editor.project else {
+            let Some(form) = self.form(editor, settings) else {
                 ui.label(RichText::new("Make or open a project first.").weak());
                 return;
             };
-            let form = self.export.get_or_insert_with(|| {
-                let saved = &project.export;
-                let get = |k: &str| saved.get(k).cloned();
-                let folder = get("folder").unwrap_or_else(|| settings.get(RESOURCES_FOLDER).unwrap_or_default().into());
-                let resource = get("resource").unwrap_or_else(|| redm::safe_name(&project.name()));
-                let existing = redm::read_info(&Path::new(&folder).join(&resource));
-                let info = |k: &str| get(k).or_else(|| existing.get(k).cloned());
-                ExportForm {
-                    author: info("author").unwrap_or_else(|| settings.get(AUTHOR).unwrap_or_default().into()),
-                    version: info("version").unwrap_or_else(|| "1.0.0".into()),
-                    description: info("description").unwrap_or_default(),
-                    resource,
-                    folder,
-                }
-            });
+            let Some(project) = &editor.project else { return };
             egui::Grid::new("redm-export").num_columns(2).show(ui, |ui| {
                 ui.label("Resource name");
                 ui.text_edit_singleline(&mut form.resource);
@@ -629,10 +693,8 @@ impl ProjectPane {
     /// Exports the project's saved files (after saving them, unless this is
     /// the export that comes with saving).
     fn export(&mut self, editor: &mut Editor, settings: &mut Settings, after_save: bool) {
-        let Some(form) = self.export.clone() else {
-            if !after_save {
-                self.status = Some("Fill in the RedM resource first".into());
-            }
+        let Some(form) = self.form(editor, settings).cloned() else {
+            self.status = Some("Make or open a project first".into());
             return;
         };
         if !after_save && editor.has_unsaved() {
@@ -673,6 +735,17 @@ impl ProjectPane {
             Err(e) => format!("The export failed: {e}"),
         });
     }
+}
+
+/// The project's ymaps: name hash and file name.
+fn map_names(editor: &Editor) -> Vec<(u32, String)> {
+    let entries = editor.project_entries().into_iter();
+    entries
+        .filter_map(|e| match e.doc {
+            Some(DocKey::Map(name)) => Some((name, e.name)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The recent projects that are still there.

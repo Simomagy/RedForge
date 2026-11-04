@@ -28,6 +28,15 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   Alt+F4) asks first, listing the files, with **Save and quit**; so does
   changing the game folder. The project open goes on in the new game folder,
   and choosing the same folder again doesn't load the game again.
+- **Export when saving** works as soon as a project opens; it used to wait
+  until the RedM resource section had been opened once.
+- **New…** with a project open makes a new, empty project in place of it,
+  asking about unsaved changes first; it used to copy the open project, its
+  RedM resource included.
+- The ymap new things go in ("Place in") is kept in the project and chosen
+  again when it opens; a project with one ymap has it chosen. Placing or
+  pasting without one says where to choose it.
+- Game Files' **Copy path** copies the whole path, not only the file's name.
 
 ## [2.1.0] - 2026-11-03
 

@@ -1262,9 +1262,21 @@ impl Editor {
         !self.clipboard.is_empty()
     }
 
+    /// The ymap new things go in, or what to do to have one.
+    fn target_map(&self) -> Result<u32, String> {
+        if let Some(t) = self.target.filter(|t| self.map(*t).is_some()) {
+            return Ok(t);
+        }
+        Err(if self.maps.values().any(|m| m.in_project && m.exists) {
+            "Choose the ymap new things go in: its circle in the Project pane, or Place in under Objects".into()
+        } else {
+            "Make a ymap for new things first: New ymap in the Project pane".into()
+        })
+    }
+
     /// Pastes copied entities where they were, into the target ymap.
     pub fn paste(&mut self) -> Result<(), String> {
-        let target = self.target.filter(|t| self.map(*t).is_some()).ok_or("choose a ymap to place into first")?;
+        let target = self.target_map()?;
         let mut root = (*self.maps[&target].root).clone();
         let list = lod::entities_mut(&mut root);
         let mut ids = Vec::new();
@@ -1279,7 +1291,7 @@ impl Editor {
     /// A new entity of an archetype in the target ymap, with the C#'s
     /// defaults: standalone, its archetype's `lodDist`.
     pub fn place(&mut self, archetype: u32, placement: Placement) -> Result<EntityId, String> {
-        let target = self.target.filter(|t| self.map(*t).is_some()).ok_or("choose a ymap to place into first")?;
+        let target = self.target_map()?;
         let arch = self.data.archetypes.get(&archetype).ok_or("unknown archetype")?;
         if arch.class == rf_game::Archetype::MLO_CLASS {
             return Err("interiors can't be placed yet".into());
