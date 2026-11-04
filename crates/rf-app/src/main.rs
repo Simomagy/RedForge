@@ -6,6 +6,7 @@
 mod app;
 mod blender;
 mod browser;
+mod export;
 mod game;
 mod help;
 mod hierarchy;

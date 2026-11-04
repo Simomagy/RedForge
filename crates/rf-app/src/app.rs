@@ -107,6 +107,9 @@ struct AutoShot {
     out: PathBuf,
     delay: f32,
     select_centre: bool,
+    /// `REDFORGE_TEST_BLENDER=<seconds>`: Edit in Blender on what's selected
+    /// in the middle, then that much longer before the screenshot.
+    blender_test: Option<f32>,
     drag_test: Option<DragTest>,
     /// Whether to close the window before the screenshot, and if it was.
     quit_test: Option<bool>,
@@ -171,6 +174,8 @@ pub struct RedForgeApp {
     hierarchy: Hierarchy,
     /// The Blender add-on's link, from when the game is loaded.
     blender: Option<BlenderLink>,
+    /// Game files or the selection's models being exported.
+    export: Option<crate::export::Job>,
     objects: Objects,
     /// The loading screen, while the game loads and as it fades away.
     loading: Option<crate::loading::LoadingScreen>,
@@ -230,9 +235,12 @@ impl RedForgeApp {
                 out: out.into(),
                 delay: std::env::var("REDFORGE_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(6.0),
                 select_centre: std::env::var("REDFORGE_SELECT_CENTRE").is_ok(),
-                drag_test: std::env::var("REDFORGE_TEST_DRAG")
-                    .ok()
-                    .map(|v| DragTest { copy: v == "copy", ..Default::default() }),
+                blender_test: std::env::var("REDFORGE_TEST_BLENDER").ok().and_then(|s| s.parse().ok()),
+                drag_test: std::env::var("REDFORGE_TEST_DRAG").ok().map(|v| DragTest {
+                    copy: v == "copy",
+                    grab: v == "grab",
+                    ..Default::default()
+                }),
                 quit_test: std::env::var("REDFORGE_TEST_QUIT").is_ok().then_some(false),
                 again: std::env::var("REDFORGE_SCREENSHOT_AGAIN").ok().map(PathBuf::from),
                 key_test: std::env::var("REDFORGE_TEST_KEY").ok().and_then(|k| {
@@ -271,6 +279,7 @@ impl RedForgeApp {
             project_pane: ProjectPane::default(),
             hierarchy: Hierarchy::default(),
             blender: None,
+            export: None,
             objects: Objects::new(tile_size.unwrap_or(crate::objects::DEFAULT_TILE)),
             loading: None,
             tour: Tour::default(),
@@ -366,6 +375,7 @@ impl RedForgeApp {
         // Open already: brought to the front.
         let path = game.path(match action {
             BrowserAction::Open(f) | BrowserAction::OpenXml(f) | BrowserAction::OpenHex(f) => f,
+            BrowserAction::Export(..) => return,
         });
         let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
         let kind = match (&action, ext.as_str()) {
@@ -380,6 +390,7 @@ impl RedForgeApp {
             return;
         }
         let tab = match action {
+            BrowserAction::Export(..) => return,
             BrowserAction::OpenXml(f) => Tab::Text(Box::new(TextViewer::open_xml(ctx, game, f))),
             BrowserAction::OpenHex(f) => Tab::Hex(Box::new(HexViewer::open(ctx, game, f))),
             BrowserAction::Open(f) => {
@@ -810,6 +821,8 @@ struct DragTest {
     step: u32,
     /// With Shift held (`REDFORGE_TEST_DRAG=copy`): copies are dragged.
     copy: bool,
+    /// `REDFORGE_TEST_DRAG=grab`: the gizmo is where the entity was hit.
+    grab: bool,
 }
 
 impl RedForgeApp {
@@ -845,6 +858,28 @@ impl RedForgeApp {
         match a.opened {
             None => {
                 a.opened = Some(Instant::now());
+                // REDFORGE_TEST_EXPORT_FILES=<how>:<path start>: those files, as
+                // Game Files' menus export them (a folder's under its name).
+                if let Ok(spec) = std::env::var("REDFORGE_TEST_EXPORT_FILES")
+                    && let Some((how, start)) = spec.split_once(':')
+                {
+                    let how = match how {
+                        "xml" => crate::export::How::Xml,
+                        "loose" => crate::export::How::Loose,
+                        _ => crate::export::How::Uncompressed,
+                    };
+                    let base = start.rsplit_once('/').map_or("", |(b, _)| b);
+                    let files: Vec<_> = game
+                        .paths
+                        .iter()
+                        .filter(|(p, _)| p.starts_with(start))
+                        .map(|(p, f)| (*f, PathBuf::from(p.strip_prefix(base).unwrap_or(p).trim_start_matches('/'))))
+                        .collect();
+                    log::info!("export test: {} files", files.len());
+                    if let Some(folder) = crate::export::choose_folder(&mut self.settings, "") {
+                        self.export = Some(crate::export::game_files(game, files, how, folder));
+                    }
+                }
                 if let Some(target) = a.open.strip_prefix("world") {
                     let target = target.to_owned();
                     let search = a.objects_search.clone();
@@ -885,11 +920,15 @@ impl RedForgeApp {
                             && v.select_centre(&self.gpu, ed, &mut self.tools)
                         {
                             self.tools.tool = crate::map::tools::Tool::Move;
-                            // The X arrow: from the entity along world X on screen.
+                            // The X arrow: from the entity along world X on screen
+                            // (`=grab`: from where the middle of the view hit it).
                             if let (Some(d), Some(id)) = (&mut a.drag_test, ed.selection().first().copied())
                                 && let Some(p) = ed.placement(id)
-                                && let (Some(o), Some(x)) =
-                                    (v.screen_point(p.position), v.screen_point(p.position + glam::Vec3::X))
+                                && let at = match self.tools.grab {
+                                    Some((g, offset)) if d.grab && g == id => p.position + offset,
+                                    _ => p.position,
+                                }
+                                && let (Some(o), Some(x)) = (v.screen_point(at), v.screen_point(at + glam::Vec3::X))
                             {
                                 let dir = (x - o).normalized();
                                 d.start = Some((o + dir * 50.0, dir));
@@ -897,6 +936,14 @@ impl RedForgeApp {
                             }
                         }
                     }
+                }
+                if let Some(wait) = a.blender_test {
+                    self.tools.blender = true;
+                    a.delay += wait;
+                }
+                // REDFORGE_TEST_EXPORT with a selection: Export selection.
+                if std::env::var_os("REDFORGE_TEST_EXPORT").is_some() && a.drag_test.is_none() {
+                    self.tools.export_selection = true;
                 }
             }
             Some(t) if a.quit_test == Some(false) && t.elapsed().as_secs_f32() > a.delay - 1.5 => {
@@ -1384,7 +1431,6 @@ impl eframe::App for RedForgeApp {
                             }
                             ui.separator();
                             let any = !ed.selection().is_empty();
-                            let mut result = Ok(());
                             if ui.add_enabled(any, egui::Button::new("Cut").shortcut_text("Ctrl+X")).clicked() {
                                 self.tools.copy(ctx, ed);
                                 self.tools.delete(ed);
@@ -1414,18 +1460,18 @@ impl eframe::App for RedForgeApp {
                                 self.tools.drop = true;
                             }
                             ui.separator();
-                            if ui.add_enabled(any, egui::Button::new("Edit in Blender")).clicked() {
-                                result = match self.blender.as_ref().map(BlenderLink::edit_selection) {
-                                    Some(Ok(msg)) => {
-                                        self.tools.say(msg);
-                                        Ok(())
-                                    }
-                                    Some(Err(e)) => Err(e),
-                                    None => Ok(()),
-                                };
+                            if ui
+                                .add_enabled(any, egui::Button::new("Edit in Blender").shortcut_text("Ctrl+B"))
+                                .clicked()
+                            {
+                                self.tools.blender = true;
                             }
-                            if let Err(e) = result {
-                                self.tools.fail(e);
+                            if ui
+                                .add_enabled(any, egui::Button::new("Export selection…"))
+                                .on_hover_text("The models as XML, with the textures they use as DDS files")
+                                .clicked()
+                            {
+                                self.tools.export_selection = true;
                             }
                         });
                     }
@@ -1545,6 +1591,17 @@ impl eframe::App for RedForgeApp {
                 self.tools.edit_keys(ctx, ed);
             }
         }
+        // Edit in Blender, from the menu, the map's toolbar, Hierarchy or Ctrl+B.
+        self.tools.blender_connected = self.blender.as_ref().is_some_and(BlenderLink::connected);
+        if std::mem::take(&mut self.tools.blender) {
+            let any = self.editor.as_ref().is_some_and(|ed| !ed.selection().is_empty());
+            match self.blender.as_ref().filter(|_| any).map(BlenderLink::edit_selection) {
+                Some(Ok(msg)) => self.tools.say(msg),
+                Some(Err(e)) => self.tools.fail(e),
+                None if !any => self.tools.fail("Select the objects to edit in Blender first"),
+                None => {}
+            }
+        }
         // The project to open at start, or from outside, with the Project
         // pane in front; and its questions.
         if let Some(ed) = &mut self.editor {
@@ -1622,8 +1679,45 @@ impl eframe::App for RedForgeApp {
             };
             DockArea::new(&mut self.dock).style(crate::theme::dock(ui.style())).show_inside(ui, &mut tabs);
         });
-        if let (Some(a), Some(g)) = (action, &game) {
-            self.open(ctx, g, a);
+        match (action, &game) {
+            (Some(BrowserAction::Export(files, how)), Some(g)) => {
+                let title = match how {
+                    crate::export::How::Xml => "Export as XML to",
+                    _ => "Extract to",
+                };
+                if let Some(folder) = crate::export::choose_folder(&mut self.settings, title) {
+                    self.export = Some(crate::export::game_files(g, files, how, folder));
+                    self.tools.say("Exporting…");
+                }
+            }
+            (Some(a), Some(g)) => self.open(ctx, g, a),
+            _ => {}
+        }
+        // The selection's models (Edit > Export selection…), and the export's end.
+        if std::mem::take(&mut self.tools.export_selection)
+            && let (Some(g), Some(ed)) = (&game, &self.editor)
+        {
+            let archetypes: Vec<u32> =
+                ed.selection().iter().filter_map(|id| ed.world.entity(*id).map(|e| e.archetype)).collect();
+            if archetypes.is_empty() {
+                self.tools.fail("Select the objects whose models to export first");
+            } else if let Some(folder) = crate::export::choose_folder(&mut self.settings, "Export the models to") {
+                self.export = Some(crate::export::models(g, archetypes, folder));
+                self.tools.say("Exporting…");
+            }
+        }
+        if self.export.is_some() {
+            match self.export.as_mut().and_then(crate::export::Job::poll) {
+                Some(done) => {
+                    self.export = None;
+                    log::info!("export: {done:?}");
+                    match done {
+                        Ok(text) => self.tools.say(text),
+                        Err(e) => self.tools.fail(e),
+                    }
+                }
+                None => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
+            }
         }
         if let (Some(place), Some(g)) = (open_world, &game) {
             self.open_world(g, (!place.is_empty()).then_some(place.as_str()));

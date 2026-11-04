@@ -63,8 +63,18 @@ pub struct Tools {
     pub focus: bool,
     /// Asks the world map to drop the selection to the ground (End).
     pub drop: bool,
+    /// Asks the app to send the selection to Blender (Ctrl+B).
+    pub blender: bool,
+    /// Whether a Blender with the add-on is listening, for the toolbar.
+    pub blender_connected: bool,
+    /// Asks the app to export the selection's models (Edit > Export selection…).
+    pub export_selection: bool,
     /// Where the mouse points at the scene, from the last pick.
     pub hover_point: Option<Vec3>,
+    /// The entity last clicked in the map, and where on it from its
+    /// position: the Move gizmo goes there when the position is out of view
+    /// (a big model seen from close by).
+    pub grab: Option<(EntityId, Vec3)>,
     pending: Option<Pending>,
     /// Where the mouse was and how the camera looked for the last pick, and
     /// when: a still mouse over a still map isn't picked again (for a while).
@@ -105,6 +115,9 @@ struct Drag {
     /// Copies are dragged (Shift at the start): their duplicate is a step
     /// already, which the move joins.
     copy: bool,
+    /// The gizmo's offset from the first entity's position, when it's at
+    /// the clicked point rather than at the selection's ([`Tools::grab`]).
+    grab: Option<Vec3>,
 }
 
 /// A hover pick on its way back from the GPU, with what was drawn then.
@@ -140,6 +153,10 @@ impl Default for Tools {
             focus: false,
             drop: false,
             hover_point: None,
+            grab: None,
+            blender: false,
+            blender_connected: false,
+            export_selection: false,
             pending: None,
             picked: None,
             toast: None,
@@ -356,6 +373,9 @@ impl Tools {
         if pressed(Key::End) {
             self.drop = true;
         }
+        if cmd && pressed(Key::B) {
+            self.blender = true;
+        }
     }
 
     pub fn is_dragging(&self) -> bool {
@@ -404,8 +424,10 @@ impl Tools {
         }
         self.gizmo_shown = true;
         // The gizmo works in OpenGL's clip space: give it its own projection.
+        // Its mouse ray starts at the near plane, so a gizmo nearer than that
+        // can't be picked: keep it a centimetre away.
         let aspect = rect.width() / rect.height().max(1.0);
-        let projection = glam::camera::rh::proj::opengl::perspective(fov_y, aspect, 0.5, 20_000.0);
+        let projection = glam::camera::rh::proj::opengl::perspective(fov_y, aspect, 0.01, 20_000.0);
         let snapping = match self.tool {
             Tool::Move => self.snap_move > 0.0,
             Tool::Rotate => self.snap_angle > 0.0,
@@ -444,7 +466,31 @@ impl Tools {
         if pressed {
             self.gizmo_press = response.hovered() && self.gizmo.pick_preview((cursor.x, cursor.y));
         }
-        let targets: Vec<Transform> = current.iter().map(|(_, p)| to_transform(p)).collect();
+        // Moving, with the selection's position out of view: the gizmo goes
+        // where its entity was clicked, and the drag moves them all as much.
+        let grab = match &self.drag {
+            Some(d) => d.grab,
+            None if self.tool == Tool::Move => {
+                let pivot = current.iter().map(|(_, p)| p.position).sum::<Vec3>() / current.len() as f32;
+                let in_view = |p: Vec3| view.project(p).is_some_and(|n| n.abs().max_element() < 0.95);
+                self.grab
+                    .filter(|_| !in_view(pivot))
+                    .and_then(|(id, offset)| {
+                        let p = current.iter().find(|(i, _)| *i == id)?.1;
+                        Some(p.position + offset)
+                    })
+                    .filter(|&at| in_view(at))
+                    .map(|at| at - current[0].1.position)
+            }
+            None => None,
+        };
+        let targets: Vec<Transform> = match grab {
+            Some(offset) => {
+                let at = Placement { position: current[0].1.position + offset, ..current[0].1 };
+                vec![to_transform(&at)]
+            }
+            None => current.iter().map(|(_, p)| to_transform(p)).collect(),
+        };
         let interaction = GizmoInteraction {
             cursor_pos: (cursor.x, cursor.y),
             hovered: response.hovered() || self.drag.is_some(),
@@ -472,15 +518,22 @@ impl Tools {
                             }
                         }
                     }
-                    self.drag = Some(Drag { start: current.clone(), now: current, copy });
+                    self.drag = Some(Drag { start: current.clone(), now: current, copy, grab });
                 }
                 let d = self.drag.as_mut().unwrap();
-                d.now = d
-                    .start
-                    .iter()
-                    .zip(moved)
-                    .map(|((id, start), t)| (*id, from_transform(&t).lock_scale_xy(start)))
-                    .collect();
+                d.now = match d.grab {
+                    Some(offset) => {
+                        let from = d.start[0].1.position + offset;
+                        let by = moved.first().map_or(from, |t| from_transform(t).position) - from;
+                        d.start.iter().map(|(id, p)| (*id, Placement { position: p.position + by, ..*p })).collect()
+                    }
+                    None => d
+                        .start
+                        .iter()
+                        .zip(moved)
+                        .map(|((id, start), t)| (*id, from_transform(&t).lock_scale_xy(start)))
+                        .collect(),
+                };
                 // The move snap puts the first entity on the world's grid,
                 // along the axes it moves on, and the others with it.
                 if self.tool == Tool::Move && self.snap_move > 0.0 && !self.local {

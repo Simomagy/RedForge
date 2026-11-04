@@ -42,6 +42,7 @@ const SHORTCUTS: [(&str, &[(&str, &str)]); 4] = [
             ("End", "Drop the selection onto the ground or building under it"),
             ("Ctrl+Shift+D", "Copy the selection as far again as the last drag"),
             ("Arrows, Page Up / Down", "Move the selection a snap step (Shift: ten)"),
+            ("Ctrl+B", "Edit the selection in Blender (the RedForge Bridge add-on)"),
         ],
     ),
     (

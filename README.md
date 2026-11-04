@@ -44,7 +44,8 @@ This is RedForge 2, rewritten in Rust. What changed in each version is in the
 - **Blender**: send the selection to Blender, edit it, and see it back on the
   map immediatly.
 - **Viewers** for models, textures, animations (played on peds and animals),
-  XML and hex, and `rf`, a command-line tool for the game's archives.
+  XML and hex; any game file exported as XML or extracted, and `rf`, a
+  command-line tool for the game's archives.
 
 ## Install
 
@@ -90,6 +91,7 @@ Vulkan (Linux) or DirectX 12 / Vulkan (Windows).
 | Ctrl+S, Ctrl+O, Ctrl+E | Save the project's files, open a project, export the RedM resource |
 | Home | Look at the selection |
 | End | Drop the selection onto the ground, building or interior floor under it |
+| Ctrl+B | Edit the selection in Blender (also the map's **Blender** button) |
 | Esc | Cancel a drag; clear the selection; leave the Place tool |
 | F1 | All the shortcuts |
 
@@ -148,10 +150,20 @@ ytyps your ymaps need.
 ## Blender
 
 Install `blender/redforge_bridge` (in the installed RedForge's folder, or
-`/usr/share/redforge/blender` on Linux) as an extension in Blender. While both
-run, **Edit > Edit in Blender** sends the selection's models (as Sollumz XML)
-and their placements; the models Blender sends back go in the project's folder
-and show on the map, and moving objects in Blender moves them in RedForge.
+`/usr/share/redforge/blender` on Linux) as an extension in Blender 5, with
+Sollumz RDR. While both run, the map's **Blender** button (Ctrl+B, or Edit >
+Edit in Blender; its dot is lit while a Blender is connected) sends the
+selection's models (as Sollumz XML) and their placements; the models Blender
+sends back go in the project's folder and show on the map, and moving objects
+in Blender moves them in RedForge.
+
+## Exporting game files
+
+In Game Files, a file's or a folder's right click exports it into a folder of
+your choice: **Export as XML** (as Sollumz and CodeX read it, textures as DDS
+files next to it), **Extract** (as a RedM resource streams it) or **Extract
+uncompressed**. **Edit > Export selection** writes the selected objects'
+models as XML, with the textures they use.
 
 ## Command-line tool
 

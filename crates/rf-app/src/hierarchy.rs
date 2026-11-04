@@ -219,6 +219,15 @@ impl Hierarchy {
                                     tools.delete(editor);
                                     ui.close();
                                 }
+                                ui.separator();
+                                if ui.add(egui::Button::new("Edit in Blender").shortcut_text("Ctrl+B")).clicked() {
+                                    tools.blender = true;
+                                    ui.close();
+                                }
+                                if ui.button("Export the models…").clicked() {
+                                    tools.export_selection = true;
+                                    ui.close();
+                                }
                             });
                         });
                     }

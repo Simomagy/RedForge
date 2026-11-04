@@ -8,6 +8,27 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Added
+- Game Files' right click exports a file, or a folder's files: **Export as
+  XML** (textures as DDS files next to it), **Extract** (as a RedM resource
+  streams it) or **Extract uncompressed**, as in RedForge 1.x.
+- **Edit > Export selection** writes the selected objects' models as XML,
+  with the textures they use, as in 1.x.
+- A **Blender** button in the map's toolbar, its dot lit while a Blender is
+  connected; Ctrl+B and Hierarchy's right click send the selection to Blender
+  too.
+
+### Fixed
+- The gizmo works right up close to an object: within half a metre of it,
+  it couldn't be grabbed.
+- With the selection's position out of view (a big model seen from close
+  by), the Move gizmo is where the object was clicked.
+- Edit in Blender works with Blender 5.2 (update the RedForge Bridge
+  add-on in Blender): Sollumz RDR stopped halfway through importing tinted
+  models, most props, and models with textures named like hexadecimal
+  numbers (`d_93_c`); the add-on works around both. A model Sollumz can't
+  import leaves nothing half made, and the other objects still come in.
+
 ## [2.3.0] - 2026-11-04
 
 ### Added

@@ -422,6 +422,13 @@ impl MapView {
         let hit = pick.and_then(|p| self.drawn.get(p.id));
         if let Some(id) = hit {
             editor.select(vec![id]);
+            // As a click there: where on it, for the Move gizmo.
+            tools.grab = match (pick, &self.last_view, editor.placement(id)) {
+                (Some(p), Some((view, _)), Some(at)) if p.depth > 0.0 => {
+                    Some((id, view.unproject(glam::Vec2::ZERO, p.depth) - at.position))
+                }
+                _ => None,
+            };
         }
         hit.is_some()
     }
@@ -542,6 +549,30 @@ impl MapView {
                             .inner;
                         if redone.clicked() {
                             tools.redo(editor);
+                        }
+                    });
+                    theme::group(ui, |ui| {
+                        // Edit in Blender, with a dot that's lit while a Blender listens.
+                        let any = !editor.selection().is_empty();
+                        let tip = match (tools.blender_connected, any) {
+                            (true, true) => "Edit the selection in Blender (Ctrl+B)",
+                            (true, false) => "Edit in Blender (Ctrl+B): select objects first",
+                            (false, _) => {
+                                "Edit in Blender (Ctrl+B): open Blender with the RedForge Bridge add-on and Sollumz RDR"
+                            }
+                        };
+                        let button = ui
+                            .add_enabled(any, egui::Button::new(icon_text(icon::ARROW_SQUARE_OUT, "Blender")))
+                            .on_hover_text(tip)
+                            .on_disabled_hover_text(tip);
+                        let dot = if tools.blender_connected {
+                            egui::Color32::from_rgb(110, 200, 120)
+                        } else {
+                            ui.visuals().weak_text_color()
+                        };
+                        ui.painter().circle_filled(button.rect.right_top() + egui::vec2(-4.0, 4.0), 3.0, dot);
+                        if button.clicked() {
+                            tools.blender = true;
                         }
                     });
                     theme::group(ui, |ui| {
@@ -1123,6 +1154,14 @@ impl MapView {
             } else {
                 let hit = pick.and_then(|p| self.drawn.get(p.id));
                 let add = ui.input(|i| i.modifiers.command);
+                // Where it was clicked, for a Move gizmo when its position is
+                // out of view.
+                tools.grab = match (hit, pick.filter(|p| p.depth > 0.0)) {
+                    (Some(id), Some(p)) => {
+                        editor.placement(id).map(|at| (id, camera.unproject(ndc, p.depth) - at.position))
+                    }
+                    _ => None,
+                };
                 match (hit, add) {
                     (Some(id), true) => editor.toggle(id),
                     (Some(id), false) => editor.select(vec![id]),

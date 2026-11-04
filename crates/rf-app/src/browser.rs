@@ -1,6 +1,7 @@
 //! The Game Files pane: the archives as folders, and search over every path
 //! (on a thread of its own: half a million paths take a moment).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, channel};
@@ -8,6 +9,7 @@ use std::sync::mpsc::{Receiver, channel};
 use eframe::egui;
 use rf_formats::rpf8::FileRef;
 
+use crate::export::How;
 use crate::game::{Folder, Game};
 
 /// Most files a folder or a search lists at once.
@@ -31,6 +33,29 @@ pub enum BrowserAction {
     Open(FileRef),
     OpenXml(FileRef),
     OpenHex(FileRef),
+    /// Files to write into a folder, each at its path there.
+    Export(Vec<(FileRef, PathBuf)>, How),
+}
+
+/// The export commands of a file's or a folder's menu.
+fn export_menu(
+    ui: &mut egui::Ui,
+    action: &mut Option<BrowserAction>,
+    all: bool,
+    files: impl Fn() -> Vec<(FileRef, PathBuf)>,
+) {
+    let items = [
+        (How::Xml, "Export as XML…", "As Sollumz and CodeX read it, textures as DDS files in a folder next to it"),
+        (How::Loose, "Extract…", "As a RedM resource streams it"),
+        (How::Uncompressed, "Extract uncompressed…", "Decrypted and decompressed"),
+    ];
+    for (how, label, tip) in items {
+        let label = if all { label.replace('…', " all…") } else { label.to_owned() };
+        if ui.button(label).on_hover_text(tip).clicked() {
+            *action = Some(BrowserAction::Export(files(), how));
+            ui.close();
+        }
+    }
 }
 
 fn file_colour(name: &str, ui: &egui::Ui) -> egui::Color32 {
@@ -171,6 +196,8 @@ impl Browser {
                 self.copy_path = Some(f);
                 ui.close();
             }
+            ui.separator();
+            export_menu(ui, action, false, || vec![(f, PathBuf::from(name))]);
         });
         r
     }
@@ -184,7 +211,7 @@ impl Browser {
         action: &mut Option<BrowserAction>,
     ) {
         let icon = if name.ends_with(".rpf") { crate::theme::icon::PACKAGE } else { crate::theme::icon::FOLDER };
-        egui::CollapsingHeader::new(format!("{icon} {name}")).id_salt(id).show(ui, |ui| {
+        let shown = egui::CollapsingHeader::new(format!("{icon} {name}")).id_salt(id).show(ui, |ui| {
             for (sub, f) in &folder.folders {
                 self.folder_ui(ui, &format!("{id}/{sub}"), sub, f, action);
             }
@@ -197,5 +224,23 @@ impl Browser {
                 );
             }
         });
+        // A folder's files, in a folder of its name.
+        shown.header_response.context_menu(|ui| {
+            export_menu(ui, action, true, || {
+                let mut files = Vec::new();
+                folder_files(folder, &PathBuf::from(name), &mut files);
+                files
+            });
+        });
+    }
+}
+
+/// Every file under a folder, with its path from `at`.
+fn folder_files(folder: &Folder, at: &std::path::Path, out: &mut Vec<(FileRef, PathBuf)>) {
+    for (name, f) in &folder.files {
+        out.push((*f, at.join(name)));
+    }
+    for (name, sub) in &folder.folders {
+        folder_files(sub, &at.join(name), out);
     }
 }
