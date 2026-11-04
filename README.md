@@ -31,15 +31,16 @@ This is RedForge 2, rewritten in Rust. What changed in each version is in the
   interiors, terrain, water, instanced trees and grass, lights, shadows, sky
   and weather, at any hour.
 - **Editing with undo**: select, move, rotate, scale, duplicate, copy, delete,
-  edit every field in Properties; LOD links kept right.
+  drop to the ground, edit every field in Properties; LOD links kept right.
+  Shortcuts for everything (F1 lists them).
 - **Placing**: every archetype of the game and of your mod, with 3D
   thumbnails; its model shows where a click will put it.
 - **Selection modes**: collisions, navmeshes, occluders, interiors' rooms and
   portals, time cycle modifiers, ambient mask volumes, scenario points,
   lights and skeletons, to see and inspect.
 - **Projects**: `.rfproj` files (compatible with RedForge 1.x) hold your
-  ymaps, ytyps, models and textures, and export as a ready-to-stream RedM
-  resource.
+  ymaps, ytyps, models and textures (drop them, or their Sollumz XML, on the
+  window), are autosaved, and export as a ready-to-stream RedM resource.
 - **Blender**: send the selection to Blender, edit it, and see it back on the
   map immediatly.
 - **Viewers** for models, textures, animations (played on peds and animals),

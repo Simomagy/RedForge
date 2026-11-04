@@ -14,39 +14,27 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   RedForge's window. A RedForge already running opens it, and asks before
   closing the project open, with **Save and open** when files have unsaved
   changes.
+- `.rfproj` files have an icon of their own in the file manager: a page with
+  "PROJ" and RedForge's anvil.
 - Game files dropped on the window, or chosen with **Add files…**, join the
   project: ydr, ytd, ybn, ymap, ytyp… and their XML from Sollumz or CodeX,
   converted to the game's file next to the XML (as in RedForge 1.x), and
   folders. Files from another folder are copied into the project's, so the
   project keeps them (Project pane, More).
+- Autosave: every two minutes, the files with unsaved changes are written
+  aside; if RedForge closes before they're saved (a crash, a power cut),
+  opening the project asks to restore them.
+- Saving keeps the file it replaces as `<name>.bak`, and writes the new one
+  whole or not at all: a crash while saving no longer leaves half a file.
 - The RedM export takes out of the resource's `stream` the files an earlier
   export wrote that have left the project (and their ytyps' requests in
   `fxmanifest.lua`), so they don't load in game any more; other files there
   stay. It makes the project's `_manifest.ymf` again first.
 - Files of the project that aren't on disk any more show with a warning,
   and a right click locates them; the export says which it left out.
-- Hierarchy: the object selected on the map is scrolled to, with its group
-  opened; Shift selects a range; a right click looks at, hides, duplicates
-  or deletes.
-- New ymap: Enter makes it, and with no name it's named after the project
-  (`<project>_01`).
-- Autosave: every two minutes, the files with unsaved changes are written
-  aside; if RedForge closes before they're saved (a crash, a power cut),
-  opening the project asks to restore them.
-- Saving keeps the file it replaces as `<name>.bak`, and writes the new one
-  whole or not at all: a crash while saving no longer leaves half a file.
-- `.rfproj` files have an icon of their own in the file manager: a page with
-  "PROJ" and RedForge's anvil.
 - A File menu with the project's commands: New project, Open project
   (Ctrl+O), Open recent, Save all, Export RedM resource (Ctrl+E), Close
   project; and Quit with Ctrl+Q.
-- Help > Keyboard shortcuts (F1), and About RedForge with the version.
-- Messages over the bottom of the window, errors in red, wherever the focus
-  is: saving and exporting say what they did, copying, pasting, duplicating
-  and deleting say how many objects.
-- The window's title shows the project, with a dot while files have
-  unsaved changes.
-- Cut (Ctrl+X); T for the Scale tool and P for Place.
 - RedForge remembers the window's size, the panes' layout, the world map
   (camera, hour, weather, speed, statistics, scripted maps) and the tools
   (selection mode, snaps, axes). The world map opens again where it was if
@@ -54,7 +42,6 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   project's ymaps.
 - The welcome page has **Continue where you left off** (with the project
   and the nearest town), and the projects: New, Open and the recent ones.
-- View > Reset layout.
 - **Drop to ground** (End, or Edit > Drop to ground): the selection goes
   straight down, or up, onto the terrain, building or interior floor under
   its middle, as in RedForge 1.x.
@@ -70,6 +57,19 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - Properties: **Place more** next to the archetype (the Place tool with
   it), and Copy, Paste, Reset rotation and Reset scale for the placement;
   Copy also puts the position on the clipboard as `vector3(...)`.
+- Hierarchy: the object selected on the map is scrolled to, with its group
+  opened; Shift selects a range; a right click looks at, hides, duplicates
+  or deletes.
+- New ymap: Enter makes it, and with no name it's named after the project
+  (`<project>_01`).
+- Cut (Ctrl+X); T for the Scale tool and P for Place.
+- Messages over the bottom of the window, errors in red, wherever the focus
+  is: saving and exporting say what they did, copying, pasting, duplicating
+  and deleting say how many objects.
+- The window's title shows the project, with a dot while files have
+  unsaved changes.
+- Help > Keyboard shortcuts (F1), and About RedForge with the version.
+- View > Reset layout.
 - The game folder is found by itself when Steam, the Rockstar Games Launcher,
   the Epic Games Launcher or Heroic on Linux installed the game.
 
