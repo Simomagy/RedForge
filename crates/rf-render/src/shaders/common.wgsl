@@ -35,10 +35,23 @@ struct Frame {
     // x: seconds, for what moves (water); y: the time of day (0-24, or -1
     // for every glow on).
     time: vec4<f32>,
+    // view_proj for positions relative to camera_pos (see clip_of).
+    view_proj_rel: mat4x4<f32>,
     shadows: Shadows,
 };
 
 @group(0) @binding(0) var<uniform> frame: Frame;
+
+// A model-space position's clip position, worked out relative to the camera
+// as the C# does: the model's translation less the camera's (floats close to
+// each other subtract exactly) before the view's rotation. Hundreds of metres
+// from the world's origin, positions in the world's space lose a tenth of a
+// millimetre, and decals on walls flickered as the camera moved.
+fn clip_of(model: mat4x4<f32>, position: vec3<f32>) -> vec4<f32> {
+    let turned = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz) * position;
+    let relative = turned + (model[3].xyz - frame.camera_pos.xyz);
+    return frame.view_proj_rel * vec4<f32>(relative, 1.0);
+}
 
 const PI: f32 = 3.14159265;
 

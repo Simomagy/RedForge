@@ -71,7 +71,7 @@ fn vs_main(v: VertexIn) -> VertexOut {
     let world = model * vec4<f32>(v.position, 1.0);
     let normal_m = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
     var o: VertexOut;
-    o.clip = frame.view_proj * world;
+    o.clip = clip_of(model, v.position);
     o.world = world.xyz;
     o.normal = normal_m * v.normal;
     o.tangent0 = vec4<f32>(normal_m * v.tangent.xyz, v.tangent.w);

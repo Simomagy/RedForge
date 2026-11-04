@@ -79,7 +79,7 @@ fn vertex_out(v: VertexIn, position: vec3<f32>, normal: vec3<f32>, tangent: vec3
     let world = model * vec4<f32>(position, 1.0);
     let normal_m = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
     var o: VertexOut;
-    o.clip = frame.view_proj * world;
+    o.clip = clip_of(model, position);
     o.world = world.xyz;
     o.normal = normal_m * normal;
     if (v.inst_normal >> 24u) != 0u {

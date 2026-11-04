@@ -151,7 +151,13 @@ impl TextureSource for CachedTextures<'_> {
             let found = dict.textures.as_ref().and_then(|v| {
                 v.iter().flatten().find(|t| t.base.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(name)))
             });
-            let uploaded = found.and_then(|t| GpuTexture::upload(self.ctx, &t.base).ok().map(Arc::new));
+            let uploaded = found.and_then(|t| match GpuTexture::upload(self.ctx, &t.base) {
+                Ok(t) => Some(Arc::new(t)),
+                Err(e) => {
+                    log::warn!("{name}: {e}");
+                    None
+                }
+            });
             self.cache.insert(key, uploaded.clone());
             if uploaded.is_some() {
                 return uploaded;

@@ -757,6 +757,11 @@ pub struct GpuDraw {
     pub rig: Option<u16>,
     /// For drawing posed, the bone (by tag) an unskinned mesh moves with.
     pub bone: Option<u16>,
+    /// The views its model is drawn in (the model's render mask): 1 the
+    /// main view, 2 the shadows, 4 the reflections. Some props have a plain
+    /// shell (`cpv_only`) for the shadows only, which the main view mustn't
+    /// draw over them (the C#'s `RenderInMainView`, `RenderInShadowView`).
+    pub views: u8,
 }
 
 /// What [`GpuModel::from_drawable_with`] does beyond uploading a drawable.
@@ -852,40 +857,57 @@ impl Resolver<'_, '_> {
         }
     }
 
+    /// A drawable's own texture, uploaded once.
+    fn embedded(&mut self, i: usize) -> Option<Arc<GpuTexture>> {
+        if self.uploaded.len() <= i {
+            self.uploaded.resize(i + 1, None);
+        }
+        if self.uploaded[i].is_none() {
+            let tex = self.embedded?.textures.as_ref()?.get(i)?.as_ref()?;
+            self.uploaded[i] = self.upload(&tex.base);
+        }
+        self.uploaded[i].clone()
+    }
+
+    /// A shader's texture, as the C#'s `Piece.ApplyTextures` finds it: the
+    /// texture dictionaries' of that name first (best first, the HD ones
+    /// before the others), then the drawable's own (often a smaller copy,
+    /// the HD one being in its `+hi`/`+hifr`/`+hidr` dictionary).
     fn resolve(&mut self, t: Option<&ShaderTexture>) -> Option<Arc<GpuTexture>> {
         let t = t?;
-        let name = match t {
-            ShaderTexture::Embedded(i) => {
-                let i = *i;
-                if self.uploaded.len() <= i {
-                    self.uploaded.resize(i + 1, None);
-                }
-                if self.uploaded[i].is_none() {
-                    let tex = self.embedded?.textures.as_ref()?.get(i)?.as_ref()?;
-                    self.uploaded[i] = self.upload(&tex.base);
-                }
-                return self.uploaded[i].clone();
-            }
+        let embedded_name = |i: usize| {
+            let d = self.embedded?;
+            d.textures.as_ref()?.get(i)?.as_ref()?.base.name.clone()
+        };
+        let (name, own) = match t {
+            ShaderTexture::Embedded(i) => (embedded_name(*i).unwrap_or_default(), Some(*i)),
             ShaderTexture::External(base) => {
                 if base.data.is_some() {
                     return self.upload(base);
                 }
-                base.name.clone().unwrap_or_default()
+                (base.name.clone().unwrap_or_default(), None)
             }
         };
-        // A name can also be one of the drawable's own textures.
-        if let Some(i) = self.embedded.and_then(|d| {
-            d.textures.as_ref()?.iter().position(|t| {
-                t.as_ref().and_then(|t| t.base.name.as_deref()).is_some_and(|n| n.eq_ignore_ascii_case(&name))
-            })
-        }) {
-            return self.resolve(Some(&ShaderTexture::Embedded(i)));
+        if !name.is_empty()
+            && let Some(found) = self.source.texture(&name)
+        {
+            return Some(found);
         }
-        let found = self.source.texture(&name);
-        if found.is_none() && !name.is_empty() && !self.missing.contains(&name) {
+        // The drawable's own: by index, or by name.
+        let own = own.or_else(|| {
+            self.embedded.and_then(|d| {
+                d.textures.as_ref()?.iter().position(|t| {
+                    t.as_ref().and_then(|t| t.base.name.as_deref()).is_some_and(|n| n.eq_ignore_ascii_case(&name))
+                })
+            })
+        });
+        if let Some(i) = own {
+            return self.embedded(i);
+        }
+        if !name.is_empty() && !self.missing.contains(&name) {
             self.missing.push(name);
         }
-        found
+        None
     }
 }
 
@@ -999,7 +1021,7 @@ impl GpuModel {
                         max[i] = max[i].max(mesh.max[i]);
                     }
                     let rig = rig.filter(|_| mesh.skin.is_some());
-                    lods[li].push(GpuDraw { mesh, material, alpha, rig, bone });
+                    lods[li].push(GpuDraw { mesh, material, alpha, rig, bone, views: model.mask });
                 }
             }
         }

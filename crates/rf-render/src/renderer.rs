@@ -61,6 +61,9 @@ struct FrameUniform {
     options: [u32; 4],
     viewport: [f32; 4],
     time: [f32; 4],
+    /// `view_proj` for positions relative to `camera_pos`: the projection
+    /// times the view's rotation (the shaders' `clip_of`).
+    view_proj_rel: [[f32; 4]; 4],
     shadows: ShadowsUniform,
 }
 
@@ -527,6 +530,11 @@ fn draw_phase(draw: &GpuDraw) -> AlphaMode {
 fn in_pass(draw: &GpuDraw, pass: Pass) -> Option<bool> {
     let phase = draw_phase(draw);
     let water = draw.material.kind == MaterialKind::Water;
+    // Its model's views: the shadows' and the main one's.
+    let view = if matches!(pass, Pass::Shadow(_)) { 2 } else { 1 };
+    if draw.views & view == 0 {
+        return None;
+    }
     match pass {
         Pass::Helpers => None,
         Pass::Outline(_) => (!draw.mesh.lines).then_some(false),
@@ -1677,6 +1685,8 @@ impl Renderer {
             shadows.params = [CASCADES as f32, CASCADE_BLEND, 1.0 / SHADOW_SIZE as f32, 0.0];
         }
         let [r, g, b] = settings.background.map(|c| c as f32);
+        let mut turn = camera.view;
+        turn.w_axis = glam::Vec4::W;
         FrameUniform {
             view_proj: view_proj.to_cols_array_2d(),
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
@@ -1691,6 +1701,7 @@ impl Renderer {
             options: [settings.debug as u32, settings.ssao as u32, 0, 0],
             viewport: [w, h, 1.0 / w, 1.0 / h],
             time: [self.start.elapsed().as_secs_f32() % 4096.0, settings.hour.unwrap_or(-1.0), 0.0, 0.0],
+            view_proj_rel: (camera.projection * turn).to_cols_array_2d(),
             shadows,
         }
     }
@@ -1717,7 +1728,14 @@ impl Renderer {
         if let Some(c) = cascades {
             let mut bytes = vec![0u8; (FRAME_STRIDE * CASCADES as u64) as usize];
             for (i, cascade) in c.cascades.iter().enumerate() {
-                let f = FrameUniform { view_proj: cascade.view_proj.to_cols_array_2d(), ..frame };
+                // The shadows need no more precision: their view as it is,
+                // for positions relative to the camera.
+                let rel = cascade.view_proj * Mat4::from_translation(camera.eye);
+                let f = FrameUniform {
+                    view_proj: cascade.view_proj.to_cols_array_2d(),
+                    view_proj_rel: rel.to_cols_array_2d(),
+                    ..frame
+                };
                 let at = i * FRAME_STRIDE as usize;
                 bytes[at..at + size_of::<FrameUniform>()].copy_from_slice(bytemuck::bytes_of(&f));
             }

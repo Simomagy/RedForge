@@ -34,7 +34,7 @@ fn vs_helper(v: HelperIn) -> HelperOut {
     let model = mat4x4<f32>(v.m0, v.m1, v.m2, v.m3);
     let world = model * vec4<f32>(v.position, 1.0);
     var o: HelperOut;
-    o.clip = frame.view_proj * world;
+    o.clip = clip_of(model, v.position);
     o.world = world.xyz;
     o.normal = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz) * v.normal;
     var tint = vec4<f32>(1.0);

@@ -112,6 +112,10 @@ struct AutoShot {
     quit_test: Option<bool>,
     /// A key to press before the screenshot, and how far its press got.
     key_test: Option<(egui::Key, egui::Modifiers, u8)>,
+    /// A second screenshot half a second after the first
+    /// (`REDFORGE_SCREENSHOT_AGAIN=<png>`), to see what changes between
+    /// frames of a still view (flickering).
+    again: Option<PathBuf>,
     tab_shown: bool,
     objects_search: Option<String>,
     opened: Option<Instant>,
@@ -196,6 +200,8 @@ pub struct RedForgeApp {
     title: String,
     /// The world map was open last time: it opens again once the game is.
     reopen_world: bool,
+    /// Frames since the start, to look at the window's size once.
+    frames: u32,
 }
 
 /// The setting that's set once the tour was seen (or skipped).
@@ -228,6 +234,7 @@ impl RedForgeApp {
                     .ok()
                     .map(|v| DragTest { copy: v == "copy", ..Default::default() }),
                 quit_test: std::env::var("REDFORGE_TEST_QUIT").is_ok().then_some(false),
+                again: std::env::var("REDFORGE_SCREENSHOT_AGAIN").ok().map(PathBuf::from),
                 key_test: std::env::var("REDFORGE_TEST_KEY").ok().and_then(|k| {
                     let mut parts: Vec<&str> = k.split('+').collect();
                     let name = parts.pop()?;
@@ -290,6 +297,7 @@ impl RedForgeApp {
             about_open: false,
             title: "RedForge".into(),
             reopen_world: false,
+            frames: 0,
         };
         // The layout, the world map and the tools as they were last time.
         if app.keeps_session() {
@@ -923,12 +931,19 @@ impl RedForgeApp {
         });
         if let Some(img) = shot {
             self.report_drag();
-            let a = self.auto.as_ref().unwrap();
+            let a = self.auto.as_mut().unwrap();
             let [w, h] = img.size;
             let bytes: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
             match image::save_buffer(&a.out, &bytes, w as u32, h as u32, image::ColorType::Rgba8) {
                 Ok(()) => log::info!("screenshot saved to {}", a.out.display()),
                 Err(e) => log::error!("screenshot: {e}"),
+            }
+            // The second one, a little later.
+            if let Some(again) = a.again.take() {
+                a.out = again;
+                a.requested = false;
+                a.delay = a.opened.map_or(0.0, |t| t.elapsed().as_secs_f32()) + 0.5;
+                return;
             }
             self.quitting = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1169,6 +1184,11 @@ impl TabViewer for Tabs<'_> {
 }
 
 impl eframe::App for RedForgeApp {
+    /// egui's memory (what's open, scrolled...) is kept with the session.
+    fn persist_egui_memory(&self) -> bool {
+        self.keeps_session()
+    }
+
     /// Now and then and when quitting: the layout (in eframe's storage, with
     /// the window), and the world map (in the settings).
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -1259,6 +1279,16 @@ impl eframe::App for RedForgeApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = &ui.ctx().clone();
+        // A window the compositor remembered tiny (KWin keeps sizes by app)
+        // gets a usable size.
+        self.frames = self.frames.saturating_add(1);
+        if self.frames == 10 {
+            let size = ctx.content_rect().size();
+            if size.x < 640.0 || size.y < 400.0 {
+                log::info!("the window is {size:?}: making it bigger");
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1600.0, 950.0)));
+            }
+        }
         if let GameState::Loading { rx, status, .. } = &mut self.game {
             while let Ok(msg) = rx.try_recv() {
                 match msg {

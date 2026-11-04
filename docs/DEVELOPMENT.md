@@ -66,6 +66,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | `REDFORGE_GAME_DIR` | The game folder (instead of the saved one) |
 | `REDFORGE_OPEN` | `welcome` (nothing), `folder` (the game folder's dialog), a game path (a model, texture, clip dictionary or ymap; `hex:<path>` for the hex viewer), `world`, `world:<place>` or `world:x,y,z[,yaw,pitch]` |
 | `REDFORGE_SCREENSHOT`, `REDFORGE_SCREENSHOT_DELAY` | Where the screenshot goes, and how many seconds after opening (6 by default) |
+| `REDFORGE_SCREENSHOT_AGAIN` | A second screenshot half a second later, to compare frames of a still view (flickering) |
 | `REDFORGE_HOUR` | The map's hour |
 | `REDFORGE_MODE` | A selection mode to start in (`Physics`, `Navmesh`...) |
 | `REDFORGE_SELECT_CENTRE=1` | Selects what's in the middle of the map (the helper, in a selection mode) |

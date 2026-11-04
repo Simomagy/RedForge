@@ -122,6 +122,19 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - Esc clears selected helpers too, and an archetype error in Properties goes
   when the selection changes.
 - **Remove from project** asks first when the file has unsaved changes.
+- Props no longer show a plain shell over themselves (white, or another flat
+  colour): the models a drawable has only for shadows (`cpv_only` shells,
+  whose render mask leaves out the main view) are left out of the view, as
+  in RedForge 1.x.
+- Props show their HD textures: textures come from the model's texture
+  dictionaries first, the HD ones (`+hi`, `+hifr`, `+hidr`) before the
+  smaller copies inside the model, as in 1.x.
+- Decals on walls and floors no longer flicker as the camera moves:
+  positions are worked out relative to the camera, as in 1.x (far from the
+  world's origin they lost a tenth of a millimetre), and the map draws its
+  objects in the same order every frame.
+- The window opens at least 800×500; one the compositor remembered tiny gets
+  a usable size.
 - The weather can be chosen again: its list closed the hour's menu instead
   of opening. It's a submenu now.
 - Properties' flags stay open while ticking them; each tick closed the list.

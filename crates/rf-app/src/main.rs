@@ -54,10 +54,19 @@ fn main() -> eframe::Result {
     let mut options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("RedForge")
-            // The desktop entry the window goes with: the Flatpak's is named after its id.
-            .with_app_id(std::env::var("FLATPAK_ID").unwrap_or_else(|_| "redforge".into()))
+            // The desktop entry the window goes with: the Flatpak's is named
+            // after its id. Screenshots for testing go as another app, so the
+            // compositor doesn't remember their windows as RedForge's.
+            .with_app_id(match std::env::var("REDFORGE_SCREENSHOT") {
+                Ok(_) => "redforge-test".into(),
+                Err(_) => std::env::var("FLATPAK_ID").unwrap_or_else(|_| "redforge".into()),
+            })
             .with_icon(icon())
-            .with_inner_size([1600.0, 950.0]),
+            .with_inner_size([1600.0, 950.0])
+            // Also keeps a size saved before the window had one from being used.
+            .with_min_inner_size([800.0, 500.0]),
+        // The window's size is kept between runs, but not for screenshots.
+        persist_window: std::env::var("REDFORGE_SCREENSHOT").is_err() || std::env::var("REDFORGE_SESSION").is_ok(),
         ..Default::default()
     };
     // RDR2's textures are block compressed: ask for BC support.

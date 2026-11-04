@@ -715,7 +715,11 @@ impl MapView {
         // instances. Each instance's id is its entity's place in `drawn`, + 1.
         // What casts into each of the sun's shadow cascades goes in groups of
         // its own (the C#'s shadow views of the same entities).
-        type Groups = HashMap<(usize, usize), (Arc<GpuModel>, Vec<Instance>)>;
+        // Each group keeps when it was first seen: groups are drawn in the
+        // scene's order, the same every frame (a map's own order changes
+        // with every new map, and surfaces at the same depth, decals among
+        // them, flickered as the one drawn last changed).
+        type Groups = HashMap<(usize, usize), (Arc<GpuModel>, Vec<Instance>, usize)>;
         let cascades = self.view.shadows.then(|| Cascades::new(&camera, self.view.sun_dir));
         let mut groups: Groups = HashMap::new();
         let mut casters: [Groups; CASCADES] = Default::default();
@@ -745,7 +749,11 @@ impl MapView {
             if let Some(c) = &cascades {
                 for (i, g) in casters.iter_mut().enumerate() {
                     if c.casts(i, centre, radius) {
-                        g.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint, 0));
+                        let seen = g.len();
+                        g.entry(key)
+                            .or_insert_with(|| (model.clone(), Vec::new(), seen))
+                            .1
+                            .push(Instance::new(t, e.tint, 0));
                     }
                 }
             }
@@ -764,18 +772,22 @@ impl MapView {
             }
             let layer = if hovered == Some(e.id) { Some(0) } else { selection.contains(&e.id).then_some(1) };
             if let Some(l) = layer {
+                let seen = outlined[l].len();
                 outlined[l]
                     .entry(key)
-                    .or_insert_with(|| (model.clone(), Vec::new()))
+                    .or_insert_with(|| (model.clone(), Vec::new(), seen))
                     .1
                     .push(Instance::new(t, e.tint, id));
             }
-            groups.entry(key).or_insert_with(|| (model.clone(), Vec::new())).1.push(Instance::new(t, e.tint, id));
+            let seen = groups.len();
+            groups.entry(key).or_insert_with(|| (model.clone(), Vec::new(), seen)).1.push(Instance::new(t, e.tint, id));
         }
         let mut instances = Vec::new();
         let mut ranges = |groups: &Groups| {
             let mut out = Vec::new();
-            for ((_, lod), (model, list)) in groups {
+            let mut in_order: Vec<_> = groups.iter().collect();
+            in_order.sort_unstable_by_key(|(_, (_, _, seen))| *seen);
+            for ((_, lod), (model, list, _)) in in_order {
                 let start = instances.len() as u32;
                 instances.extend_from_slice(list);
                 out.push((model.clone(), *lod, start..instances.len() as u32));
@@ -823,7 +835,7 @@ impl MapView {
 
         // The selection mode's helpers in view, each with a pick id of its own;
         // the hovered and selected ones outlined too.
-        type HelperGroups = HashMap<usize, (Arc<HelperMesh>, Vec<Instance>)>;
+        type HelperGroups = HashMap<usize, (Arc<HelperMesh>, Vec<Instance>, usize)>;
         let mut helper_keys = Vec::new();
         let mut helper_groups: HelperGroups = HashMap::new();
         let mut helper_outlined: [HelperGroups; 2] = Default::default();
@@ -847,8 +859,10 @@ impl MapView {
                 helper_keys.push(p.key);
                 let inst = Instance::helper(p.transform, id, p.colour);
                 let key = Arc::as_ptr(&p.mesh) as usize;
-                let add =
-                    |g: &mut HelperGroups| g.entry(key).or_insert_with(|| (p.mesh.clone(), Vec::new())).1.push(inst);
+                let add = |g: &mut HelperGroups| {
+                    let seen = g.len();
+                    g.entry(key).or_insert_with(|| (p.mesh.clone(), Vec::new(), seen)).1.push(inst)
+                };
                 add(&mut helper_groups);
                 let selected = tools.helper_selection.contains(&p.key);
                 if selected {
@@ -860,9 +874,11 @@ impl MapView {
             tools.selected_parts = self.helpers.parts_of(&tools.helper_selection).cloned().collect();
         }
         let mut helper_ranges = |groups: &HelperGroups| -> Vec<(Arc<HelperMesh>, std::ops::Range<u32>)> {
-            groups
-                .values()
-                .map(|(mesh, list)| {
+            let mut in_order: Vec<_> = groups.values().collect();
+            in_order.sort_unstable_by_key(|(_, _, seen)| *seen);
+            in_order
+                .into_iter()
+                .map(|(mesh, list, _)| {
                     let start = instances.len() as u32;
                     instances.extend_from_slice(list);
                     (mesh.clone(), start..instances.len() as u32)
