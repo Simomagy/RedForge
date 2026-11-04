@@ -7,7 +7,7 @@
 //! The files are read and made into parts on worker threads ([`loader`]),
 //! uploaded a few at a time, and kept a while after they go out of range.
 
-mod bounds;
+pub(crate) mod bounds;
 mod loader;
 
 use std::collections::HashMap;

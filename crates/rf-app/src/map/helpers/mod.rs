@@ -11,7 +11,7 @@ mod entities;
 mod fields;
 mod maps;
 mod navmesh;
-mod physics;
+pub(crate) mod physics;
 mod scenario;
 pub mod shapes;
 

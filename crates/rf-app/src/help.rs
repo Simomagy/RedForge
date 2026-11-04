@@ -39,6 +39,7 @@ const SHORTCUTS: [(&str, &[(&str, &str)]); 4] = [
             ("Ctrl+Z, Ctrl+Y", "Undo, redo"),
             ("Ctrl+X, Ctrl+C, Ctrl+V", "Cut, copy, paste (into the ymap chosen in Project)"),
             ("Ctrl+D, Del", "Duplicate, delete"),
+            ("End", "Drop the selection onto the ground or building under it"),
             ("Ctrl+Shift+D", "Copy the selection as far again as the last drag"),
             ("Arrows, Page Up / Down", "Move the selection a snap step (Shift: ten)"),
         ],

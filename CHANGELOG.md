@@ -34,6 +34,9 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - The welcome page has **Continue where you left off** (with the project
   and the nearest town), and the projects: New, Open and the recent ones.
 - View > Reset layout.
+- **Drop to ground** (End, or Edit > Drop to ground): the selection goes
+  straight down, or up, onto the terrain, building or interior floor under
+  its middle, as in RedForge 1.x.
 - **Ctrl+Shift+D** copies the selection as far again as the last drag, for
   rows of fences and posts.
 - Gizmo drags show how far they went by the mouse (metres, degrees or

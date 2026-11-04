@@ -61,6 +61,8 @@ pub struct Tools {
     pub selected_parts: Vec<HelperPart>,
     /// Asks the map view to look at the selection (Hierarchy's double click).
     pub focus: bool,
+    /// Asks the world map to drop the selection to the ground (End).
+    pub drop: bool,
     /// Where the mouse points at the scene, from the last pick.
     pub hover_point: Option<Vec3>,
     pending: Option<Pending>,
@@ -133,6 +135,7 @@ impl Default for Tools {
             helper_selection: Vec::new(),
             selected_parts: Vec::new(),
             focus: false,
+            drop: false,
             hover_point: None,
             pending: None,
             toast: None,
@@ -299,7 +302,8 @@ impl Tools {
 
     /// The editing keys, wherever the focus is (the app calls this when no
     /// text field has it): undo, redo, cut, copy, paste, duplicate, delete,
-    /// and Home (or Alt+F) to look at the selection.
+    /// Home (or Alt+F) to look at the selection, End to drop it to the
+    /// ground.
     pub fn edit_keys(&mut self, ctx: &egui::Context, editor: &mut Editor) {
         let (cmd, shift, alt) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift, i.modifiers.alt));
         let pressed = |k: Key| ctx.input(|i| i.key_pressed(k));
@@ -344,6 +348,9 @@ impl Tools {
         }
         if pressed(Key::Home) || (alt && pressed(Key::F)) {
             self.focus = true;
+        }
+        if pressed(Key::End) {
+            self.drop = true;
         }
     }
 

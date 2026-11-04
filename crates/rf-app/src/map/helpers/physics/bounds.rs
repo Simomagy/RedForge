@@ -183,7 +183,7 @@ pub fn geometry_mesh(g: &BoundGeometry, materials: &Materials) -> Geometry {
 
 /// A box polygon's unit box transform, from the 4 corners it's stored as (no
 /// two on the same edge).
-fn poly_box(v1: Vec3, v2: Vec3, v3: Vec3, v4: Vec3) -> Mat4 {
+pub fn poly_box(v1: Vec3, v2: Vec3, v3: Vec3, v4: Vec3) -> Mat4 {
     let x = (v1 + v2) - (v3 + v4);
     let y = (v1 + v3) - (v2 + v4);
     let z = (v1 + v4) - (v2 + v3);

@@ -3,6 +3,7 @@
 
 mod batches;
 mod globals;
+pub mod ground;
 pub mod helpers;
 pub mod models;
 pub mod tools;
@@ -137,6 +138,8 @@ pub struct MapView {
     speed_changed: Option<Instant>,
     /// Go to's coordinates, as typed.
     go_to: String,
+    /// The collisions under the selection, for End.
+    ground: ground::Ground,
 }
 
 /// `T * R * S` from a ymap entity's fields. The game stores the inverse
@@ -298,6 +301,7 @@ impl MapView {
             show_stats: false,
             speed_changed: None,
             go_to: String::new(),
+            ground: Default::default(),
         }
     }
 
@@ -671,6 +675,14 @@ impl MapView {
             && std::mem::take(&mut tools.focus)
         {
             self.focus_selection(ed);
+        }
+        if let Some(ed) = editor.as_deref_mut()
+            && std::mem::take(&mut tools.drop)
+        {
+            match self.ground.drop_selection(&self.game, ed) {
+                Ok(done) => tools.say(done),
+                Err(e) => tools.fail(e),
+            }
         }
 
         // What to draw.

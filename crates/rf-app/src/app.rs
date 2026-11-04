@@ -1336,6 +1336,15 @@ impl eframe::App for RedForgeApp {
                                 self.tools.delete(ed);
                             }
                             ui.separator();
+                            let drop = egui::Button::new("Drop to ground").shortcut_text("End");
+                            if ui
+                                .add_enabled(any, drop)
+                                .on_hover_text("Onto the terrain or building under it")
+                                .clicked()
+                            {
+                                self.tools.drop = true;
+                            }
+                            ui.separator();
                             if ui.add_enabled(any, egui::Button::new("Edit in Blender")).clicked() {
                                 result = match self.blender.as_ref().map(BlenderLink::edit_selection) {
                                     Some(Ok(msg)) => {

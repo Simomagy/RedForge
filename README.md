@@ -88,6 +88,7 @@ Vulkan (Linux) or DirectX 12 / Vulkan (Windows).
 | Ctrl+Z, Ctrl+Y | Undo, redo |
 | Ctrl+S, Ctrl+O, Ctrl+E | Save the project's files, open a project, export the RedM resource |
 | Home | Look at the selection |
+| End | Drop the selection onto the ground, building or interior floor under it |
 | Esc | Cancel a drag; clear the selection; leave the Place tool |
 | F1 | All the shortcuts |
 
