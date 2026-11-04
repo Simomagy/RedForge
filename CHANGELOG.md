@@ -8,6 +8,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-11-04
+
 ### Added
 - Projects open from the file manager: double-click an `.rfproj` (the
   packages and the Windows installer make RedForge open them), or drop it on
@@ -209,6 +211,7 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.3.0...HEAD
+[2.3.0]: https://github.com/Simomagy/RedForge/compare/v2.1.0...v2.3.0
 [2.1.0]: https://github.com/Simomagy/RedForge/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Simomagy/RedForge/releases/tag/v2.0.0

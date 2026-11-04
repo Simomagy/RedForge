@@ -1,6 +1,6 @@
 pkgbase = redforge-git
 	pkgdesc = A map editor for RedM: Red Dead Redemption 2's maps, models and textures
-	pkgver = 2.1.0.r0.g0000000
+	pkgver = 2.3.0.r0.g0000000
 	pkgrel = 1
 	url = https://github.com/Simomagy/RedForge
 	arch = x86_64

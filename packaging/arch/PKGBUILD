@@ -1,6 +1,6 @@
 # Builds RedForge from this checkout: `makepkg -si` in this folder.
 pkgname=redforge
-pkgver=2.1.0
+pkgver=2.3.0
 pkgrel=1
 pkgdesc="A map editor for RedM: Red Dead Redemption 2's maps, models and textures"
 arch=('x86_64')

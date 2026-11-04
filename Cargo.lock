@@ -3763,7 +3763,7 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "rf-app"
-version = "2.1.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3795,7 +3795,7 @@ dependencies = [
 
 [[package]]
 name = "rf-bridge"
-version = "2.1.0"
+version = "2.3.0"
 dependencies = [
  "glam 0.34.2",
  "log",
@@ -3808,7 +3808,7 @@ dependencies = [
 
 [[package]]
 name = "rf-cli"
-version = "2.1.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3820,7 +3820,7 @@ dependencies = [
 
 [[package]]
 name = "rf-editor"
-version = "2.1.0"
+version = "2.3.0"
 dependencies = [
  "glam 0.34.2",
  "log",
@@ -3834,7 +3834,7 @@ dependencies = [
 
 [[package]]
 name = "rf-formats"
-version = "2.1.0"
+version = "2.3.0"
 dependencies = [
  "aes",
  "bytemuck",
@@ -3849,7 +3849,7 @@ dependencies = [
 
 [[package]]
 name = "rf-game"
-version = "2.1.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -3862,7 +3862,7 @@ dependencies = [
 
 [[package]]
 name = "rf-render"
-version = "2.1.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3879,7 +3879,7 @@ dependencies = [
 
 [[package]]
 name = "rf-ui-lab"
-version = "2.1.0"
+version = "2.3.0"
 dependencies = [
  "eframe",
  "egui-phosphor",
@@ -3891,7 +3891,7 @@ dependencies = [
 
 [[package]]
 name = "rf-world"
-version = "2.1.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "env_logger",
