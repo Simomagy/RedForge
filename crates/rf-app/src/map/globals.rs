@@ -11,8 +11,15 @@ use crate::viewers::Gpu;
 const GRAPHICS: &str = "textures_0.rpf/textures/graphics.ytd";
 const SKYDOME: &str = "textures_0.rpf/textures/skydome.ytd";
 
-/// Gives the renderer the global textures it uses.
+/// Gives the renderer the global textures it uses, once for a game folder
+/// (the renderer keeps them for every map).
 pub fn load(game: &Game, gpu: &Gpu) {
+    static LOADED: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+    let mut loaded = LOADED.lock().unwrap();
+    if loaded.as_deref() == Some(game.folder.as_path()) {
+        return;
+    }
+    *loaded = Some(game.folder.clone());
     let dictionary = |path: &str, without: &str| {
         let file = game.fs.find(path);
         if file.is_none() {

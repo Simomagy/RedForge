@@ -83,8 +83,8 @@ impl Picks {
 
 impl BatchBuffers {
     /// Uploads the batches in range that have no buffer yet, for up to
-    /// `budget`.
-    pub fn upload(&mut self, gpu: &Gpu, visible: &[VisibleBatch], budget: Duration) {
+    /// `budget`; false when some are left for the next frames.
+    pub fn upload(&mut self, gpu: &Gpu, visible: &[VisibleBatch], budget: Duration) -> bool {
         let start = Instant::now();
         let now = Instant::now();
         for v in visible {
@@ -96,7 +96,7 @@ impl BatchBuffers {
                 continue;
             }
             if start.elapsed() > budget {
-                break;
+                return false;
             }
             let first_id = self.next_id;
             self.next_id = self.next_id.wrapping_add(v.batch.len() as u32).max(FIRST_BATCH_ID);
@@ -113,6 +113,12 @@ impl BatchBuffers {
             let buffer = gpu.renderer.create_instance_buffer(&gpu.ctx, &instances);
             self.buffers.insert(v.key, Entry { buffer, used: now, batch: v.batch.clone(), first_id });
         }
+        true
+    }
+
+    /// How many batches have buffers.
+    pub fn count(&self) -> usize {
+        self.buffers.len()
     }
 
     /// The pick ids of the batches' instances, with `entities` for the rest.

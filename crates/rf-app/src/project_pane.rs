@@ -756,7 +756,10 @@ impl ProjectPane {
     }
 
     fn open(&mut self, editor: &mut Editor, settings: &mut Settings, file: &Path) {
-        match editor.open_project(file) {
+        let t = Instant::now();
+        let opened = editor.open_project(file);
+        log::info!("{} opened ({:.2?})", file.display(), t.elapsed());
+        match opened {
             Ok(problems) => {
                 remember(settings, file);
                 self.after_load(editor, problems);
@@ -781,7 +784,10 @@ impl ProjectPane {
     /// remembered), or the last one, as the C# does.
     fn reopen(&mut self, editor: &mut Editor, settings: &mut Settings) {
         if let Ok(file) = std::env::var("REDFORGE_PROJECT") {
-            match editor.open_project(Path::new(&file)) {
+            let t = Instant::now();
+            let opened = editor.open_project(Path::new(&file));
+            log::info!("{file} opened ({:.2?})", t.elapsed());
+            match opened {
                 Ok(problems) => self.after_load(editor, problems),
                 Err(e) => self.status = Some(e),
             }

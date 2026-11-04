@@ -75,6 +75,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | `REDFORGE_SESSION=1` | Keeps the layout, the world map and the tools between runs, as without a screenshot (they're left alone while testing) |
 | `REDFORGE_OBJECTS_SEARCH` | Shows Objects with that search and chooses the first object (the Place tool) |
 | `REDFORGE_SHOW_TAB` | Brings a pane to the front (Project, Hierarchy...) |
+| `REDFORGE_FILES_SEARCH` | Starts Game Files with that search |
 | `REDFORGE_PROJECT` | A project to open instead of the last one (not remembered) |
 | `REDFORGE_HOLD_LOADING` | Keeps the loading screen up that many seconds |
 | `REDFORGE_DROP_HOVER=1` | Shows the card files dragged over the window get |

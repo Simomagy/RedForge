@@ -140,6 +140,13 @@ pub struct MapView {
     go_to: String,
     /// The collisions under the selection, for End.
     ground: ground::Ground,
+    /// What was loaded last frame: while it changes, frames go on.
+    loaded: (usize, usize, usize, usize),
+    /// Whether the last frame had something going on; an idle map draws
+    /// only now and then.
+    busy: bool,
+    /// Frames drawn since when (logged every 5 s, at debug level).
+    frames: (u32, Instant),
 }
 
 /// `T * R * S` from a ymap entity's fields. The game stores the inverse
@@ -302,6 +309,9 @@ impl MapView {
             speed_changed: None,
             go_to: String::new(),
             ground: Default::default(),
+            loaded: (0, 0, 0, 0),
+            busy: true,
+            frames: (0, Instant::now()),
         }
     }
 
@@ -628,7 +638,8 @@ impl MapView {
     /// Draws the map; `editor` is the app's, for the world (`tools` too).
     pub fn ui(&mut self, ui: &mut egui::Ui, gpu: &Gpu, mut editor: Option<&mut Editor>, tools: &mut Tools) {
         let now = Instant::now();
-        let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
+        // After an idle while, the first frame moves as much as one frame.
+        let dt = now.duration_since(self.last_frame).as_secs_f32().min(if self.busy { 0.1 } else { 1.0 / 60.0 });
         self.last_frame = now;
         self.frame_ms = self.frame_ms * 0.9 + dt * 1000.0 * 0.1;
         if self.is_world() && editor.is_none() {
@@ -646,7 +657,6 @@ impl MapView {
         if response.clicked() || response.drag_started() || response.secondary_clicked() {
             response.request_focus();
         }
-        ui.ctx().request_repaint();
 
         let ppp = ui.ctx().pixels_per_point();
         let (w, h) = ((rect.width() * ppp) as u32, (rect.height() * ppp) as u32);
@@ -695,7 +705,7 @@ impl MapView {
                 (Source::Ymap(e, b), _) => (e.clone(), b.clone()),
                 _ => (Vec::new(), Vec::new()),
             };
-        self.batch_buffers.upload(gpu, &visible_batches, Duration::from_millis(6));
+        let batches_done = self.batch_buffers.upload(gpu, &visible_batches, Duration::from_millis(6));
         self.light(camera.eye);
         let targets = self.targets.as_ref().unwrap();
         let frustum = camera.frustum();
@@ -1004,7 +1014,37 @@ impl MapView {
         let backing = egui::Rect::from_min_size(at, galley.size()).expand(4.0);
         painter.rect_filled(backing, 3.0, egui::Color32::from_black_alpha(150));
         painter.galley(at, galley, egui::Color32::WHITE);
-        let _ = &self.game;
+
+        // Frames while something moves or loads; an idle map draws a few
+        // times a second only, and the GPU rests.
+        let streaming =
+            editor.as_deref().map(|ed| ed.world.stats()).map_or((0, 0), |s| (s.nodes_loaded, s.nodes_loading));
+        let loaded = (ready, textures, streaming.0, self.batch_buffers.count());
+        let moving = ui.input(|i| {
+            i.pointer.any_down()
+                || i.smooth_scroll_delta != Vec2::ZERO
+                || [Key::W, Key::A, Key::S, Key::D, Key::R, Key::F, Key::Q, Key::E].iter().any(|k| i.key_down(*k))
+        });
+        self.busy = moving
+            || loading > 0
+            || streaming.1 > 0
+            || !batches_done
+            || loaded != self.loaded
+            || tools.picking()
+            || tools.is_dragging()
+            || tools.mode != helpers::Mode::Entity
+            || self.speed_changed.is_some_and(|t| t.elapsed() < Duration::from_millis(1600));
+        self.loaded = loaded;
+        self.frames.0 += 1;
+        if self.frames.1.elapsed() > Duration::from_secs(5) {
+            log::debug!("the map drew {} frames in 5 s", self.frames.0);
+            self.frames = (0, Instant::now());
+        }
+        if self.busy {
+            ui.ctx().request_repaint();
+        } else {
+            ui.ctx().request_repaint_after(Duration::from_millis(300));
+        }
     }
 
     /// Picking, the boxes of what's hovered and selected, and placing.

@@ -96,10 +96,13 @@ fn load(folder: PathBuf, progress: impl Fn(&str)) -> Result<Game> {
     let hashes = HashIndex::new();
     let strings = strings_file().context("data/rdr2/strings.txt not found")?;
     hashes.load_file(&strings)?;
+    log::info!("names of the files read ({:.2?})", t.elapsed());
     progress("Finding the keys in RDR2.exe…");
     let keys = Rpf8Keys::from_game_folder(&folder)?;
+    log::info!("keys found ({:.2?})", t.elapsed());
     progress("Reading the archives…");
     let fs = Rpf8FileSystem::open(&folder, keys, &hashes)?;
+    log::info!("archives read ({:.2?})", t.elapsed());
     progress("Reading the game's data files…");
     let data = GameData::load(&fs, &hashes);
     progress("Indexing the files…");

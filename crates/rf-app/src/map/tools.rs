@@ -66,6 +66,9 @@ pub struct Tools {
     /// Where the mouse points at the scene, from the last pick.
     pub hover_point: Option<Vec3>,
     pending: Option<Pending>,
+    /// Where the mouse was and how the camera looked for the last pick, and
+    /// when: a still mouse over a still map isn't picked again (for a while).
+    picked: Option<(Pos2, Mat4, Instant)>,
     toast: Option<Toast>,
     /// What copying put on the clipboard: pasting it pastes the copied
     /// objects (Ctrl+V comes as the clipboard's text).
@@ -138,6 +141,7 @@ impl Default for Tools {
             drop: false,
             hover_point: None,
             pending: None,
+            picked: None,
             toast: None,
             copied: None,
             blocked: false,
@@ -356,6 +360,11 @@ impl Tools {
 
     pub fn is_dragging(&self) -> bool {
         self.drag.is_some()
+    }
+
+    /// Whether a hover pick waits on the GPU (a frame more brings it).
+    pub fn picking(&self) -> bool {
+        self.pending.is_some()
     }
 
     /// The gizmo for the selection: moves the entities while it's dragged
@@ -635,6 +644,13 @@ impl Tools {
         if self.pending.is_some() {
             return;
         }
+        let still = self
+            .picked
+            .is_some_and(|(at, v, t)| at == pos && v == view.view && t.elapsed() < Duration::from_millis(500));
+        if still {
+            return;
+        }
+        self.picked = Some((pos, view.view, Instant::now()));
         let ppp = rect.width().max(1.0) / targets.width as f32;
         let (x, y) = (((pos.x - rect.min.x) / ppp) as u32, ((pos.y - rect.min.y) / ppp) as u32);
         if let Some(request) = gpu.renderer.request_pick(&gpu.ctx, targets, x, y) {

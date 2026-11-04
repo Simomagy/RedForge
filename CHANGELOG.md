@@ -78,6 +78,13 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   installs found, and **Cancel** when it's opened from File > Game folder….
 - Over the map, only the camera's position shows; the statistics are in the
   gear menu (**Statistics**).
+- A world map with nothing moving or loading draws a few frames a second
+  instead of all the time, so the GPU and its fans rest.
+- Game Files' search runs aside (typing no longer stutters over half a
+  million paths), finds the files with all the words typed (`coffin ydr`),
+  and shows the archive each one is in.
+- Opening another map no longer loads the sky's and the water's textures
+  again.
 - The Project pane's list of files takes the pane's height (it had room for
   two or three), and the Hierarchy under it starts a little shorter.
 - A notch of the wheel changes the speed by about 30% (it took 30 notches

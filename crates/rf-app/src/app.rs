@@ -257,7 +257,7 @@ impl RedForgeApp {
             gpu,
             game: GameState::ask(folder.clone().unwrap_or_default(), None, None),
             dock: default_dock(),
-            browser: Browser::default(),
+            browser: Browser::with_search(std::env::var("REDFORGE_FILES_SEARCH").unwrap_or_default()),
             editor: None,
             tools: Tools::default(),
             properties: Properties::default(),
@@ -1621,9 +1621,15 @@ impl eframe::App for RedForgeApp {
 
         // Viewers waiting on a background job need frames to notice it finishing.
         let waiting = self.dock.iter_all_tabs().any(|(_, t)| match t {
-            Tab::Model(_) | Tab::Anim(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_) | Tab::Map(_) => true,
-            // Objects asks for frames itself while its thumbnails load.
-            Tab::Welcome | Tab::Properties | Tab::Project | Tab::Hierarchy | Tab::GameFiles | Tab::Objects => false,
+            Tab::Model(_) | Tab::Anim(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_) => true,
+            // The map and Objects ask for frames themselves while they load.
+            Tab::Map(_)
+            | Tab::Welcome
+            | Tab::Properties
+            | Tab::Project
+            | Tab::Hierarchy
+            | Tab::GameFiles
+            | Tab::Objects => false,
         });
         if waiting {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));

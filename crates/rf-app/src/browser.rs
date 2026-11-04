@@ -1,4 +1,9 @@
-//! The Game Files pane: the archives as folders, and search over every path.
+//! The Game Files pane: the archives as folders, and search over every path
+//! (on a thread of its own: half a million paths take a moment).
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui;
 use rf_formats::rpf8::FileRef;
@@ -13,6 +18,9 @@ pub struct Browser {
     search: String,
     searched: String,
     results: Vec<FileRef>,
+    /// The search running, and which one it is (a newer one stops it).
+    running: Option<Receiver<Vec<FileRef>>>,
+    generation: Arc<AtomicU64>,
     pub selected: Option<FileRef>,
     /// "Copy path" was clicked on this file.
     copy_path: Option<FileRef>,
@@ -37,7 +45,42 @@ fn file_colour(name: &str, ui: &egui::Ui) -> egui::Color32 {
 }
 
 impl Browser {
-    pub fn ui(&mut self, ui: &mut egui::Ui, game: &Game) -> Option<BrowserAction> {
+    /// Starts with a search (`REDFORGE_FILES_SEARCH`, for testing).
+    pub fn with_search(search: String) -> Self {
+        Self { search, ..Default::default() }
+    }
+
+    /// Searches every path for all the words of `query`, on a thread; a
+    /// newer search stops it.
+    fn search(&mut self, ctx: &egui::Context, game: &Arc<Game>, query: &str) {
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let words: Vec<String> = query.split_whitespace().map(str::to_owned).collect();
+        if words.iter().map(String::len).sum::<usize>() < 2 {
+            self.running = None;
+            return;
+        }
+        let (tx, rx) = channel();
+        self.running = Some(rx);
+        let (game, latest, ctx) = (game.clone(), self.generation.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let mut found = Vec::new();
+            for (i, (path, f)) in game.paths.iter().enumerate() {
+                if i % 8192 == 0 && latest.load(Ordering::Relaxed) != generation {
+                    return;
+                }
+                if words.iter().all(|w| path.contains(w.as_str())) {
+                    found.push(*f);
+                    if found.len() == MAX_LISTED {
+                        break;
+                    }
+                }
+            }
+            let _ = tx.send(found);
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn ui(&mut self, ui: &mut egui::Ui, game: &Arc<Game>) -> Option<BrowserAction> {
         let mut action = None;
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::theme::icon::MAGNIFYING_GLASS).color(crate::theme::WEAK));
@@ -51,29 +94,35 @@ impl Browser {
         if query != self.searched {
             self.searched = query.clone();
             self.results.clear();
-            if query.len() >= 2 {
-                self.results =
-                    game.paths.iter().filter(|(p, _)| p.contains(&query)).take(MAX_LISTED).map(|(_, f)| *f).collect();
-            }
+            self.search(ui.ctx(), game, &query);
+        }
+        if let Some(rx) = &self.running
+            && let Ok(found) = rx.try_recv()
+        {
+            self.results = found;
+            self.running = None;
         }
         ui.separator();
 
         if !self.searched.is_empty() {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} results{}",
-                    self.results.len(),
-                    if self.results.len() == MAX_LISTED { "+" } else { "" }
-                ))
-                .small(),
-            );
+            let count = if self.running.is_some() {
+                "Searching…".to_owned()
+            } else {
+                format!("{} results{}", self.results.len(), if self.results.len() == MAX_LISTED { "+" } else { "" })
+            };
+            ui.label(egui::RichText::new(count).small());
             let row = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
             let results = std::mem::take(&mut self.results);
             egui::ScrollArea::vertical().auto_shrink(false).show_rows(ui, row, results.len(), |ui, range| {
                 for &f in &results[range] {
                     let path = game.path(f);
-                    let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
-                    self.file_row(ui, &name, f, &mut action).on_hover_text(&path);
+                    let (folder, name) = path.rsplit_once('/').unwrap_or(("", &path));
+                    // Files of the same name apart: where each is, dimmed.
+                    ui.horizontal(|ui| {
+                        self.file_row(ui, name, f, &mut action).on_hover_text(&path);
+                        let folder = folder.rsplit('/').next().unwrap_or(folder);
+                        ui.add(egui::Label::new(egui::RichText::new(folder).small().weak()).truncate());
+                    });
                 }
             });
             self.results = results;
