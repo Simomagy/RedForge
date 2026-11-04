@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, RichText};
 use rf_editor::{DocKey, Editor, ProjectEntry, redm};
+use rf_formats::formats::{self, Kind, XmlContext, externals_folder};
+use rf_formats::hash::HashIndex;
 
 use crate::settings::Settings;
 use crate::theme::{self, icon};
@@ -20,6 +22,30 @@ const LAST: &str = "Project.Last";
 const REOPEN_LAST: &str = "Project.ReopenLast";
 /// The project's `export` setting for the ymap new things go in (its file name).
 const PLACE_IN: &str = "placeIn";
+/// Whether files added from elsewhere are copied into the project's folder.
+const COPY_ADDED: &str = "Project.CopyAdded";
+
+/// Whether a file can join a project: a game file, an XML export of one, or
+/// a folder of them.
+pub fn can_add(file: &Path) -> bool {
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    file.is_dir() || rf_editor::project::is_game_file(file) || Kind::of_xml_name(&name).is_some()
+}
+
+/// An XML export (`x.ydr.xml`, Sollumz's and CodeX's) as its game file,
+/// written next to it (with what's in its folder, the textures).
+fn convert_xml(hashes: &HashIndex, file: &Path) -> Result<PathBuf, String> {
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let xml = std::fs::read_to_string(file).map_err(|e| e.to_string())?;
+    let base = name.strip_suffix(".xml").unwrap_or(&name);
+    let base = base.strip_suffix(".rsc").or(base.strip_suffix(".pso")).or(base.strip_suffix(".rbf")).unwrap_or(base);
+    let dir = file.parent().unwrap_or(Path::new(""));
+    let cx = XmlContext { hashes, folder: Some(externals_folder(dir, base)) };
+    let data = formats::from_xml(&name, &xml, &cx).map_err(|e| e.to_string())?;
+    let to = dir.join(base);
+    std::fs::write(&to, data).map_err(|e| e.to_string())?;
+    Ok(to)
+}
 
 /// Files go in groups by what they are, as in the C#'s pane, with an icon
 /// for the group and one for its files; the last group takes everything else.
@@ -106,6 +132,9 @@ pub struct ProjectPane {
     /// What saving or exporting did, for the app to show (and whether it
     /// failed).
     pub toast: Option<(String, bool)>,
+    /// How tall the RedM resource section and the status were last frame:
+    /// the files' list takes the rest.
+    bottom_height: f32,
 }
 
 #[derive(Default, Clone)]
@@ -223,16 +252,26 @@ impl ProjectPane {
                 if ui.checkbox(&mut reopen, "Reopen the last project at start").changed() {
                     settings.set(REOPEN_LAST, reopen.to_string());
                 }
+                let mut copy = settings.get(COPY_ADDED) != Some("false");
+                let tip = "Files added from another folder are copied into the project's, so the project keeps them";
+                if ui.checkbox(&mut copy, "Copy added files into the project's folder").on_hover_text(tip).changed() {
+                    settings.set(COPY_ADDED, copy.to_string());
+                }
             });
         });
         ui.horizontal_wrapped(|ui| {
-            if ui.button(theme::icon_text(icon::FILE_PLUS, "Add files…")).clicked()
-                && let Some(files) = rfd::FileDialog::new()
-                    .add_filter("Game files", &["ymap", "ytyp", "ydr", "ydd", "yft", "ytd", "ybn", "ymf"])
-                    .pick_files()
-            {
-                let problems = editor.add_project_files(&files);
-                self.after_load(editor, problems);
+            let tip = "Game files, or their XML from Sollumz or CodeX (converted); you can drop them on the window too";
+            if ui.button(theme::icon_text(icon::FILE_PLUS, "Add files…")).on_hover_text(tip).clicked() {
+                let mut dialog = rfd::FileDialog::new().add_filter(
+                    "Game files and their XML",
+                    &["ymap", "ytyp", "ydr", "ydd", "yft", "ytd", "ybn", "ymf", "xml"],
+                );
+                if let Some(dir) = editor.project.as_ref().and_then(|p| p.dir()) {
+                    dialog = dialog.set_directory(dir);
+                }
+                if let Some(files) = dialog.pick_files() {
+                    self.add_files(editor, settings, files);
+                }
             }
             if ui
                 .button(theme::icon_text(icon::FOLDER_PLUS, "Add folder…"))
@@ -280,7 +319,8 @@ impl ProjectPane {
         }
         let filter = self.filter.trim().to_lowercase();
         let root = editor.project.as_ref().and_then(|p| p.dir()).map(Path::to_path_buf);
-        egui::ScrollArea::vertical().id_salt("project-files").max_height(ui.available_height() * 0.6).show(ui, |ui| {
+        let list_height = (ui.available_height() - self.bottom_height - 12.0).max(72.0);
+        egui::ScrollArea::vertical().id_salt("project-files").max_height(list_height).show(ui, |ui| {
             for (g, (name, _, glyph, _)) in GROUPS.iter().enumerate() {
                 let mut rows: Vec<&ProjectEntry> = entries
                     .iter()
@@ -305,12 +345,15 @@ impl ProjectPane {
                 }
             }
         });
-        ui.separator();
-        self.export_ui(ui, editor, settings);
-        if let Some(s) = &self.status {
+        let bottom = ui.scope(|ui| {
             ui.separator();
-            ui.label(RichText::new(s).small());
-        }
+            self.export_ui(ui, editor, settings);
+            if let Some(s) = &self.status {
+                ui.separator();
+                ui.label(RichText::new(s).small());
+            }
+        });
+        self.bottom_height = bottom.response.rect.height();
     }
 
     fn entry_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, e: &ProjectEntry, root: Option<&Path>) {
@@ -430,6 +473,78 @@ impl ProjectPane {
         if ui.add_enabled(open, egui::Button::new("Close project")).clicked() {
             ui.close();
             self.close_asking(editor, settings);
+        }
+    }
+
+    /// Files and folders added (dropped on the window, or Add files…): game
+    /// files join the project, copied into its folder when they're elsewhere
+    /// (unless More says not to); XML exports (`x.ydr.xml`) as their game
+    /// file, converted next to them; folders with what's in them.
+    pub fn add_files(&mut self, editor: &mut Editor, settings: &mut Settings, paths: Vec<PathBuf>) {
+        let (folders, files): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| p.is_dir());
+        let mut problems = Vec::new();
+        for f in &folders {
+            problems.extend(editor.add_project_folder(f));
+        }
+        let (mut games, mut converted) = (Vec::new(), 0);
+        for file in files {
+            let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if Kind::of_xml_name(&name).is_some() {
+                match convert_xml(editor.hashes(), &file) {
+                    Ok(game_file) => {
+                        games.push(game_file);
+                        converted += 1;
+                    }
+                    Err(e) => problems.push(format!("{name}: {e}")),
+                }
+            } else if rf_editor::project::is_game_file(&file) {
+                games.push(file);
+            } else {
+                problems.push(format!("{name} isn't a game file"));
+            }
+        }
+        // Into the project's folder, when it has one.
+        let dir = editor.project.as_ref().and_then(|p| p.dir()).map(Path::to_path_buf);
+        let mut copied = 0;
+        if settings.get(COPY_ADDED) != Some("false")
+            && let Some(dir) = &dir
+        {
+            for f in &mut games {
+                let Some(name) = f.file_name().filter(|_| !f.starts_with(dir)) else { continue };
+                let to = dir.join(name);
+                match std::fs::copy(&*f, &to) {
+                    Ok(_) => {
+                        *f = to;
+                        copied += 1;
+                    }
+                    Err(e) => problems.push(format!("copying {}: {e}", f.display())),
+                }
+            }
+        }
+        let added = games.len();
+        if !games.is_empty() {
+            problems.extend(editor.add_project_files(&games));
+        }
+        if !folders.is_empty() || added > 0 {
+            let _ = editor.save_project_file();
+        }
+        let mut done = vec![format!("Added {}", crate::map::tools::count(added + folders.len(), "file"))];
+        if folders.len() == 1 && added == 0 {
+            done = vec!["Added the folder".into()];
+        }
+        if converted > 0 {
+            done.push(format!("{converted} converted from XML"));
+        }
+        if copied > 0 {
+            done.push(format!("{copied} copied into the project's folder"));
+        }
+        let done = done.join(", ");
+        if problems.is_empty() {
+            self.status = Some(done.clone());
+            self.toast = Some((done, false));
+        } else {
+            self.status = Some(format!("{done}\n{}", problems.join("\n")));
+            self.toast = Some((format!("{done}; {}", problems[0]), true));
         }
     }
 

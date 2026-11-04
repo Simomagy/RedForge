@@ -134,7 +134,8 @@ The Project pane groups them by type; Save all (Ctrl+S) writes them next to
 the `.rfproj`, and RedForge reopens the last project, and the world map
 where you left it, when it starts.
 Double-clicking an `.rfproj`, or dropping it on the window, opens it too (in
-the RedForge already open, if there's one).
+the RedForge already open, if there's one); game files dropped on the window
+join the project, and their XML from Sollumz or CodeX is converted first.
 
 **RedM resource** exports the project to `<resources folder>/<name>/`, with
 a `stream` folder and an `fxmanifest.lua` (an existing manifest keeps your

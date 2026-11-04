@@ -78,6 +78,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | `REDFORGE_PROJECT` | A project to open instead of the last one (not remembered) |
 | `REDFORGE_HOLD_LOADING` | Keeps the loading screen up that many seconds |
 | `REDFORGE_DROP_HOVER=1` | Shows the card files dragged over the window get |
+| `REDFORGE_TEST_DROP` | Files (`;`-separated) as if dropped on the window: added to the project |
 | `REDFORGE_TOUR` | Shows the tour at that step (0-7), when it hasn't been seen |
 | `REDFORGE_ANIM_PED`, `REDFORGE_ANIM_TIME` | For a clip dictionary: the ped, and the time to stop the clip at |
 

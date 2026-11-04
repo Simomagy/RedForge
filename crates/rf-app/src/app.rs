@@ -180,6 +180,8 @@ pub struct RedForgeApp {
     incoming: Option<PathBuf>,
     /// The projects other RedForges hand over.
     from_others: Option<Receiver<PathBuf>>,
+    /// Game files dropped on the window, to add to the project.
+    adding: Vec<PathBuf>,
     /// Files are dragged over the window (Wayland, where egui doesn't say).
     dragging: bool,
     /// The drags over the window on Wayland, which winit doesn't report.
@@ -277,6 +279,10 @@ impl RedForgeApp {
                 crate::instance::listen(move || c.request_repaint())
             },
             dragging: std::env::var("REDFORGE_DROP_HOVER").is_ok(),
+            // REDFORGE_TEST_DROP=<path;path...>: as if they were dropped (for testing).
+            adding: std::env::var("REDFORGE_TEST_DROP")
+                .map(|l| l.split(';').filter(|p| !p.is_empty()).map(PathBuf::from).collect())
+                .unwrap_or_default(),
             #[cfg(target_os = "linux")]
             wayland_drops: crate::wayland_drop::start(cc),
             quitting: false,
@@ -524,7 +530,8 @@ impl RedForgeApp {
     /// The projects from outside: handed over by another RedForge (which
     /// brings this one to the front), or dropped on the window (egui's drops
     /// on X11 and Windows, ours on Wayland), with a card while files are
-    /// dragged over it. They open once the game is loaded.
+    /// dragged over it. They open once the game is loaded; game files
+    /// dropped join the project then.
     fn take_projects(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.from_others {
             while let Ok(file) = rx.try_recv() {
@@ -542,9 +549,13 @@ impl RedForgeApp {
         #[cfg(target_os = "linux")]
         let dropped = self.wayland_drops(dropped);
         if !dropped.is_empty() {
-            match dropped.into_iter().find(|f| is_project(f)) {
-                Some(file) => self.incoming = Some(file),
-                None => self.tools.say("Only RedForge projects (.rfproj) open by dropping them"),
+            match dropped.iter().find(|f| is_project(f)) {
+                Some(file) => self.incoming = Some(file.clone()),
+                None if dropped.iter().any(|f| crate::project_pane::can_add(f)) => self.adding.extend(dropped),
+                None => self.tools.fail(
+                    "Drop a RedForge project (.rfproj) to open it, or game files (ydr, ytd, ymap…, or their XML) \
+                     to add them",
+                ),
             }
         }
         if hovered.is_empty() && !self.dragging {
@@ -553,7 +564,16 @@ impl RedForgeApp {
         // X11 and Windows say which files while they're dragged, Wayland only
         // at the drop.
         let known: Vec<&PathBuf> = hovered.iter().flatten().collect();
-        drop_card(ctx, known.is_empty() || known.iter().any(|f| is_project(f)));
+        let what = if known.is_empty() {
+            Dropping::Unknown
+        } else if known.iter().any(|f| is_project(f)) {
+            Dropping::Project
+        } else if known.iter().any(|f| crate::project_pane::can_add(f)) {
+            Dropping::Files
+        } else {
+            Dropping::Refused
+        };
+        drop_card(ctx, what);
     }
 
     /// What Wayland's drags did since the last frame: whether files are over
@@ -679,20 +699,39 @@ fn is_project(file: &Path) -> bool {
     file.extension().is_some_and(|e| e.eq_ignore_ascii_case("rfproj"))
 }
 
-/// The card over the window while files are dragged over it: whether
-/// dropping them opens a project.
-fn drop_card(ctx: &egui::Context, project: bool) {
+/// What files dragged over the window would do.
+#[derive(PartialEq)]
+enum Dropping {
+    Project,
+    Files,
+    /// Wayland doesn't say which files until they're dropped.
+    Unknown,
+    Refused,
+}
+
+/// The card over the window while files are dragged over it: what dropping
+/// them does.
+fn drop_card(ctx: &egui::Context, what: Dropping) {
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-card")));
     let screen = ctx.content_rect();
     painter.rect_filled(screen, 0, egui::Color32::from_black_alpha(150));
-    let card = egui::Rect::from_center_size(screen.center(), egui::vec2(400.0, 180.0));
-    let colour = if project { theme::ACCENT } else { theme::WEAK };
+    let card = egui::Rect::from_center_size(screen.center(), egui::vec2(440.0, 180.0));
+    let colour = if what == Dropping::Refused { theme::WEAK } else { theme::ACCENT };
     let stroke = egui::Stroke::new(2.0, colour);
     painter.rect(card, theme::BIG_RADIUS, theme::PANEL, stroke, egui::StrokeKind::Inside);
-    let (glyph, title, note) = if project {
-        (icon::FILE_ARROW_DOWN, "Drop to open the project", "RedForge asks before closing the one open")
-    } else {
-        (icon::PROHIBIT, "Not a RedForge project", "Only projects (.rfproj) open here")
+    let (glyph, title, note) = match what {
+        Dropping::Project => {
+            (icon::FILE_ARROW_DOWN, "Drop to open the project", "RedForge asks before closing the one open")
+        }
+        Dropping::Files => {
+            (icon::FILE_PLUS, "Drop to add to the project", "XML from Sollumz or CodeX becomes the game's file")
+        }
+        Dropping::Unknown => {
+            (icon::FILE_ARROW_DOWN, "Drop a project to open it", "or game files and their XML to add them")
+        }
+        Dropping::Refused => {
+            (icon::PROHIBIT, "Not a project or a game file", "Projects open here, game files join the project")
+        }
     };
     let at = |dy: f32| card.center() + egui::vec2(0.0, dy);
     let centre = egui::Align2::CENTER_CENTER;
@@ -750,7 +789,7 @@ fn default_dock() -> DockState<Tab> {
     let mut dock = DockState::new(vec![Tab::Welcome]);
     let surface = dock.main_surface_mut();
     let [_, left] = surface.split_left(NodeIndex::root(), 0.22, vec![Tab::Project, Tab::GameFiles]);
-    surface.split_below(left, 0.5, vec![Tab::Hierarchy]);
+    surface.split_below(left, 0.6, vec![Tab::Hierarchy]);
     dock
 }
 
@@ -1498,6 +1537,14 @@ impl eframe::App for RedForgeApp {
             && let Some(g) = &game
         {
             self.open_world(g, None);
+        }
+        // Game files dropped: into the project, with its pane in front.
+        if !self.adding.is_empty()
+            && let Some(ed) = &mut self.editor
+        {
+            let files = std::mem::take(&mut self.adding);
+            self.project_pane.add_files(ed, &mut self.settings, files);
+            self.focus_tab(|t| matches!(t, Tab::Project));
         }
         if self.keeps_session() {
             crate::session::remember_tools(&self.tools, &mut self.settings);

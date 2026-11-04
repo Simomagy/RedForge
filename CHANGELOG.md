@@ -14,6 +14,11 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   RedForge's window. A RedForge already running opens it, and asks before
   closing the project open, with **Save and open** when files have unsaved
   changes.
+- Game files dropped on the window, or chosen with **Add files…**, join the
+  project: ydr, ytd, ybn, ymap, ytyp… and their XML from Sollumz or CodeX,
+  converted to the game's file next to the XML (as in RedForge 1.x), and
+  folders. Files from another folder are copied into the project's, so the
+  project keeps them (Project pane, More).
 - `.rfproj` files have an icon of their own in the file manager: a page with
   "PROJ" and RedForge's anvil.
 - A File menu with the project's commands: New project, Open project
@@ -57,6 +62,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   installs found, and **Cancel** when it's opened from File > Game folder….
 - Over the map, only the camera's position shows; the statistics are in the
   gear menu (**Statistics**).
+- The Project pane's list of files takes the pane's height (it had room for
+  two or three), and the Hierarchy under it starts a little shorter.
 - A notch of the wheel changes the speed by about 30% (it took 30 notches
   to go from 500 to 10 m/s), and the speed shows for a moment.
 
