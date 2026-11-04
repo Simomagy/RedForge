@@ -17,11 +17,17 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - `.rfproj` files have an icon of their own in the file manager: a page with
   "PROJ" and RedForge's anvil.
 - The game folder is found by itself when Steam, the Rockstar Games Launcher,
-  the Epic Games Launcher or Heroic installed the game.
+  the Epic Games Launcher or Heroic on Linux installed the game.
 
 ### Changed
 - The game folder's dialog, redone in the new look: centred, with the
   installs found, and **Cancel** when it's opened from File > Game folder….
+
+### Fixed
+- Quitting with unsaved changes (File > Quit, the window's close button,
+  Alt+F4) asks first, listing the files, with **Save and quit**; so does
+  changing the game folder. The project open goes on in the new game folder,
+  and choosing the same folder again doesn't load the game again.
 
 ## [2.1.0] - 2026-11-03
 

@@ -58,6 +58,16 @@ fn entry_key(e: &ProjectEntry) -> String {
 enum Pending {
     Open(PathBuf),
     Close,
+    App(Ask),
+}
+
+/// What the app asks about when files have unsaved changes, and does once the
+/// answer is yes ([`ProjectPane::update`] returns it).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ask {
+    Quit,
+    /// File > Game folder…: the game loads again, without the changes.
+    GameFolder,
 }
 
 /// Whether two paths are the same file.
@@ -102,14 +112,16 @@ impl ProjectPane {
     /// Every frame, whether the pane shows or not: at start, the project to
     /// open (`incoming`, from the command line) or the last one; then the
     /// projects opened from outside (the file manager, dropped on the
-    /// window), and the question before closing the open one.
+    /// window), and the question before closing the open one, or before what
+    /// the app [asked](Self::ask) about, which it returns once the answer is
+    /// yes.
     pub fn update(
         &mut self,
         ctx: &egui::Context,
         editor: &mut Editor,
         settings: &mut Settings,
         incoming: Option<PathBuf>,
-    ) {
+    ) -> Option<Ask> {
         if !std::mem::replace(&mut self.started, true) {
             match incoming {
                 Some(file) => self.open(editor, settings, &file),
@@ -118,7 +130,12 @@ impl ProjectPane {
         } else if let Some(file) = incoming {
             self.open_from_outside(editor, settings, file);
         }
-        self.confirm_ui(ctx, editor, settings);
+        self.confirm_ui(ctx, editor, settings)
+    }
+
+    /// Asks before `what`, as files have unsaved changes.
+    pub fn ask(&mut self, what: Ask) {
+        self.confirm = Some(Pending::App(what));
     }
 
     /// A project opened from outside RedForge: the open project closes, if
@@ -431,8 +448,8 @@ impl ProjectPane {
 
     /// "Open X? Y will be closed", with saving first when files have unsaved
     /// changes.
-    fn confirm_ui(&mut self, ctx: &egui::Context, editor: &mut Editor, settings: &mut Settings) {
-        let Some(pending) = &self.confirm else { return };
+    fn confirm_ui(&mut self, ctx: &egui::Context, editor: &mut Editor, settings: &mut Settings) -> Option<Ask> {
+        let pending = self.confirm.as_ref()?;
         let open = editor.project.as_ref().map(|p| p.name());
         let unsaved = editor.has_unsaved();
         let (title, go, save) = match pending {
@@ -440,9 +457,12 @@ impl ProjectPane {
             Pending::Close => {
                 (format!("Close {}?", open.as_deref().unwrap_or("the project")), "Close", "Save and close")
             }
+            Pending::App(Ask::Quit) => ("Quit RedForge?".into(), "Quit", "Save and quit"),
+            Pending::App(Ask::GameFolder) => ("Change the game folder?".into(), "Continue", "Save and continue"),
         };
         let mut text = match (pending, &open) {
             (Pending::Open(_), Some(name)) => vec![format!("{name} will be closed.")],
+            (Pending::App(Ask::GameFolder), _) => vec!["The game loads again, and changes not saved are lost.".into()],
             _ => vec![],
         };
         if unsaved {
@@ -456,6 +476,13 @@ impl ProjectPane {
             );
         }
         let text = text.join(" ");
+        // Which files, as the C# lists them.
+        let dirty: Vec<String> = editor.project_entries().into_iter().filter(|e| e.dirty).map(|e| e.name).collect();
+        let files = match dirty.len() {
+            0 => String::new(),
+            n if n <= 5 => dirty.join(", "),
+            n => format!("{} and {} more", dirty[..4].join(", "), n - 4),
+        };
         #[derive(PartialEq)]
         enum Answer {
             Save,
@@ -472,6 +499,9 @@ impl ProjectPane {
                     ui.label(RichText::new(&title).font(theme::heading(theme::SIZE + 4.0)));
                     if !text.is_empty() {
                         ui.label(RichText::new(&text).color(theme::WEAK));
+                    }
+                    if unsaved && !files.is_empty() {
+                        ui.label(RichText::new(&files).small().color(theme::WEAK));
                     }
                 });
             });
@@ -495,23 +525,25 @@ impl ProjectPane {
         if modal.should_close() && answer.is_none() {
             answer = Some(Answer::Cancel);
         }
-        let Some(answer) = answer else { return };
+        let answer = answer?;
         let pending = self.confirm.take();
         if answer == Answer::Cancel {
-            return;
+            return None;
         }
         if answer == Answer::Save {
             self.save_all(editor, settings);
             // Not saved (cancelled, or it failed): the project stays.
             if editor.has_unsaved() {
-                return;
+                return None;
             }
         }
         match pending {
             Some(Pending::Open(file)) => self.open(editor, settings, &file),
             Some(Pending::Close) => self.close(editor, settings),
+            Some(Pending::App(what)) => return Some(what),
             None => {}
         }
+        None
     }
 
     /// Exporting as a RedM resource; the choices are kept in the project.

@@ -70,6 +70,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | `REDFORGE_MODE` | A selection mode to start in (`Physics`, `Navmesh`...) |
 | `REDFORGE_SELECT_CENTRE=1` | Selects what's in the middle of the map (the helper, in a selection mode) |
 | `REDFORGE_TEST_DRAG=1` | Then drags the gizmo with made-up mouse events and logs what happened |
+| `REDFORGE_TEST_QUIT=1` | Closes the window 1.5 s before the screenshot (to see the question about unsaved changes) |
 | `REDFORGE_OBJECTS_SEARCH` | Shows Objects with that search and chooses the first object (the Place tool) |
 | `REDFORGE_SHOW_TAB` | Brings a pane to the front (Project, Hierarchy...) |
 | `REDFORGE_PROJECT` | A project to open instead of the last one (not remembered) |

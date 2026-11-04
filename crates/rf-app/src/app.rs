@@ -16,7 +16,7 @@ use crate::hierarchy::Hierarchy;
 use crate::map::MapView;
 use crate::map::tools::Tools;
 use crate::objects::Objects;
-use crate::project_pane::ProjectPane;
+use crate::project_pane::{Ask, ProjectPane};
 use crate::properties::Properties;
 use crate::settings::{GAME_FOLDER, Settings};
 use crate::theme::{self, icon};
@@ -99,12 +99,16 @@ impl Tab {
 /// the gizmo's X arrow 100 pixels with made-up mouse events and logs what
 /// happened. `REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside
 /// the world map with that search, and chooses the first object shown.
+/// `REDFORGE_TEST_QUIT=1` closes the window a second and a half before, to
+/// see the question about unsaved changes.
 struct AutoShot {
     open: String,
     out: PathBuf,
     delay: f32,
     select_centre: bool,
     drag_test: Option<DragTest>,
+    /// Whether to close the window before the screenshot, and if it was.
+    quit_test: Option<bool>,
     tab_shown: bool,
     objects_search: Option<String>,
     opened: Option<Instant>,
@@ -159,6 +163,8 @@ pub struct RedForgeApp {
     /// The drags over the window on Wayland, which winit doesn't report.
     #[cfg(target_os = "linux")]
     wayland_drops: Option<Receiver<crate::wayland_drop::WaylandDrop>>,
+    /// The window closes: the unsaved changes were saved or let go.
+    quitting: bool,
 }
 
 /// The setting that's set once the tour was seen (or skipped).
@@ -188,6 +194,7 @@ impl RedForgeApp {
                 delay: std::env::var("REDFORGE_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(6.0),
                 select_centre: std::env::var("REDFORGE_SELECT_CENTRE").is_ok(),
                 drag_test: std::env::var("REDFORGE_TEST_DRAG").is_ok().then(DragTest::default),
+                quit_test: std::env::var("REDFORGE_TEST_QUIT").is_ok().then_some(false),
                 tab_shown: false,
                 objects_search: std::env::var("REDFORGE_OBJECTS_SEARCH").ok(),
                 opened: None,
@@ -226,12 +233,23 @@ impl RedForgeApp {
             dragging: std::env::var("REDFORGE_DROP_HOVER").is_ok(),
             #[cfg(target_os = "linux")]
             wayland_drops: crate::wayland_drop::start(cc),
+            quitting: false,
         };
         // `REDFORGE_OPEN=folder`: the game folder's dialog, for its screenshot.
         if let Some(f) = folder.filter(|_| app.auto.as_ref().is_none_or(|a| a.open != "folder")) {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
         }
         app
+    }
+
+    /// File > Game folder…: the folder's dialog, with Cancel back to the game.
+    fn ask_game_folder(&mut self) {
+        let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
+        let previous = match &self.game {
+            GameState::Ready(g) => Some(g.clone()),
+            _ => None,
+        };
+        self.game = GameState::ask(input, None, previous);
     }
 
     fn load_game(&mut self, ctx: &egui::Context, folder: PathBuf) {
@@ -469,12 +487,23 @@ impl RedForgeApp {
                 });
             },
         );
-        if back && let GameState::NoFolder { previous: Some(g), .. } = &self.game {
+        // The folder of the game open: nothing to load again.
+        let same = |g: &Arc<Game>| chosen.as_deref().is_some_and(|f| same_folder(f, &g.folder));
+        if let GameState::NoFolder { previous: Some(g), .. } = &self.game
+            && (back || same(g))
+        {
             self.game = GameState::Ready(g.clone());
         } else if let Some(f) = chosen {
             let ctx = ui.ctx().clone();
             self.load_game(&ctx, f);
         }
+    }
+}
+
+fn same_folder(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
 }
 
@@ -653,6 +682,10 @@ impl RedForgeApp {
                     }
                 }
             }
+            Some(t) if a.quit_test == Some(false) && t.elapsed().as_secs_f32() > a.delay - 1.5 => {
+                a.quit_test = Some(true);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             Some(t) if !a.requested && t.elapsed().as_secs_f32() > a.delay - 1.0 && !a.tab_shown => {
                 // REDFORGE_SHOW_TAB=<title> brings a tab to the front for the screenshot.
                 a.tab_shown = true;
@@ -688,6 +721,7 @@ impl RedForgeApp {
                 Ok(()) => log::info!("screenshot saved to {}", a.out.display()),
                 Err(e) => log::error!("screenshot: {e}"),
             }
+            self.quitting = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -884,6 +918,23 @@ impl TabViewer for Tabs<'_> {
 }
 
 impl eframe::App for RedForgeApp {
+    /// Closing the window (its X, Alt+F4, File > Quit) asks first when files
+    /// have unsaved changes; here, as this runs when the window is minimised
+    /// too.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.quitting
+            && self.auto.as_ref().is_none_or(|a| a.quit_test.is_some())
+            && matches!(self.game, GameState::Ready(_))
+            && self.editor.as_ref().is_some_and(Editor::has_unsaved)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.project_pane.ask(Ask::Quit);
+        }
+    }
+
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         // The game folder's screenshot: no clicks from the real mouse.
         if self.auto.as_ref().is_some_and(|a| a.open == "folder") {
@@ -924,6 +975,11 @@ impl eframe::App for RedForgeApp {
                             if let Some(l) = &mut self.loading {
                                 l.finish();
                             }
+                            // Another game folder: the project open goes on in it.
+                            let open = self.editor.as_ref().and_then(|e| e.project.as_ref()?.file.clone());
+                            if self.incoming.is_none() {
+                                self.incoming = open;
+                            }
                             let g = Arc::new(g);
                             self.editor = Some(Editor::new(g.fs.clone(), g.hashes.clone(), g.data()));
                             self.blender.get_or_insert_with(|| BlenderLink::start(ctx, &self.settings));
@@ -951,12 +1007,10 @@ impl eframe::App for RedForgeApp {
                 ui.add(egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(18.0, 18.0)));
                 ui.menu_button("File", |ui| {
                     if ui.button("Game folder…").clicked() {
-                        let input = self.settings.get(GAME_FOLDER).unwrap_or_default().to_owned();
-                        let previous = match &self.game {
-                            GameState::Ready(g) => Some(g.clone()),
-                            _ => None,
-                        };
-                        self.game = GameState::ask(input, None, previous);
+                        match &self.editor {
+                            Some(ed) if ed.has_unsaved() && game_ready => self.project_pane.ask(Ask::GameFolder),
+                            _ => self.ask_game_folder(),
+                        }
                         ui.close();
                     }
                     if ui.button("Quit").clicked() {
@@ -1128,7 +1182,14 @@ impl eframe::App for RedForgeApp {
             {
                 let _ = self.dock.set_active_tab(path);
             }
-            self.project_pane.update(ctx, ed, &mut self.settings, incoming);
+            match self.project_pane.update(ctx, ed, &mut self.settings, incoming) {
+                Some(Ask::Quit) => {
+                    self.quitting = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                Some(Ask::GameFolder) => self.ask_game_folder(),
+                None => {}
+            }
         }
 
         // The tour: the first time the game is open (once the loading screen
