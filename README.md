@@ -79,14 +79,15 @@ Vulkan (Linux) or DirectX 12 / Vulkan (Windows).
 |---|---|
 | Drag, WASD, R / F, Shift, wheel | Look around, move, up / down, faster, speed |
 | Right click (or click) | Select; with Ctrl, add or remove |
-| Q, E, toolbar | Move, rotate (Scale and Place are in the toolbar); V back to selecting |
+| Q, E, T, P | Move, rotate, scale, place; V back to selecting |
 | `.` | Gizmo along the world's or the object's axes |
 | Shift at the start of a gizmo drag | Drag copies |
-| Delete, Ctrl+D, Ctrl+C, Ctrl+V | Delete, duplicate, copy, paste (into the ymap chosen in Project) |
+| Delete, Ctrl+D, Ctrl+X, Ctrl+C, Ctrl+V | Delete, duplicate, cut, copy, paste (into the ymap chosen in Project) |
 | Ctrl+Z, Ctrl+Y | Undo, redo |
-| Ctrl+S | Save the project's files |
+| Ctrl+S, Ctrl+O, Ctrl+E | Save the project's files, open a project, export the RedM resource |
 | Home | Look at the selection |
-| Esc | Clear the selection; leave the Place tool |
+| Esc | Cancel a drag; clear the selection; leave the Place tool |
+| F1 | All the shortcuts |
 
 ## Selection modes
 

@@ -103,6 +103,9 @@ pub struct ProjectPane {
     started: bool,
     /// The ymap new things go in, as last kept in the project.
     target: Option<u32>,
+    /// What saving or exporting did, for the app to show (and whether it
+    /// failed).
+    pub toast: Option<(String, bool)>,
 }
 
 #[derive(Default, Clone)]
@@ -203,27 +206,17 @@ impl ProjectPane {
                 "A new project, saved as an .rfproj; what's edited now goes in it"
             };
             if ui.button(theme::icon_text(icon::PLUS, "New…")).on_hover_text(tip).clicked() {
-                if editor.project.is_some() && editor.has_unsaved() {
-                    self.confirm = Some(Pending::New);
-                } else {
-                    self.new_project(editor, settings);
-                }
+                self.new_asking(editor, settings);
             }
-            if ui.button(theme::icon_text(icon::FOLDER_OPEN, "Open…")).clicked()
-                && let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).pick_file()
-            {
-                self.open_asking(editor, settings, file);
+            if ui.button(theme::icon_text(icon::FOLDER_OPEN, "Open…")).on_hover_text("Ctrl+O").clicked() {
+                self.open_dialog(editor, settings);
             }
             if ui.button(theme::icon_text(icon::FLOPPY_DISK, "Save all")).on_hover_text("Ctrl+S").clicked() {
                 self.save_all(editor, settings);
             }
             if ui.add_enabled(editor.project.is_some(), egui::Button::new(theme::icon_text(icon::X, "Close"))).clicked()
             {
-                if editor.has_unsaved() {
-                    self.confirm = Some(Pending::Close);
-                } else {
-                    self.close(editor, settings);
-                }
+                self.close_asking(editor, settings);
             }
             ui.menu_button(theme::icon_text(icon::DOTS_THREE, "More"), |ui| {
                 let mut reopen = settings.get(REOPEN_LAST) != Some("false");
@@ -374,6 +367,83 @@ impl ProjectPane {
         });
     }
 
+    /// New… (the pane's and File's): asks first when the open project has
+    /// unsaved changes.
+    pub fn new_asking(&mut self, editor: &mut Editor, settings: &mut Settings) {
+        if editor.project.is_some() && editor.has_unsaved() {
+            self.confirm = Some(Pending::New);
+        } else {
+            self.new_project(editor, settings);
+        }
+    }
+
+    /// Open…: a project chosen in a dialog.
+    pub fn open_dialog(&mut self, editor: &mut Editor, settings: &mut Settings) {
+        if let Some(file) = rfd::FileDialog::new().add_filter("RedForge project", &["rfproj"]).pick_file() {
+            self.open_asking(editor, settings, file);
+        }
+    }
+
+    /// Close: asks first when files have unsaved changes.
+    pub fn close_asking(&mut self, editor: &mut Editor, settings: &mut Settings) {
+        if editor.project.is_none() {
+            return;
+        }
+        if editor.has_unsaved() {
+            self.confirm = Some(Pending::Close);
+        } else {
+            self.close(editor, settings);
+        }
+    }
+
+    /// The project's part of the File menu.
+    pub fn file_menu(&mut self, ui: &mut egui::Ui, editor: &mut Editor, settings: &mut Settings) {
+        let open = editor.project.is_some();
+        if ui.button("New project…").clicked() {
+            ui.close();
+            self.new_asking(editor, settings);
+        }
+        if ui.add(egui::Button::new("Open project…").shortcut_text("Ctrl+O")).clicked() {
+            ui.close();
+            self.open_dialog(editor, settings);
+        }
+        let recent = recent(settings);
+        ui.add_enabled_ui(!recent.is_empty(), |ui| {
+            ui.menu_button("Open recent", |ui| {
+                for file in recent.iter().take(10) {
+                    if ui.button(file_name(file)).on_hover_text(file.display().to_string()).clicked() {
+                        ui.close();
+                        self.open_asking(editor, settings, file.clone());
+                    }
+                }
+            });
+        });
+        ui.separator();
+        if ui.add(egui::Button::new("Save all").shortcut_text("Ctrl+S")).clicked() {
+            ui.close();
+            self.save_all(editor, settings);
+        }
+        if ui.add_enabled(open, egui::Button::new("Export RedM resource").shortcut_text("Ctrl+E")).clicked() {
+            ui.close();
+            self.export_now(editor, settings);
+        }
+        if ui.add_enabled(open, egui::Button::new("Close project")).clicked() {
+            ui.close();
+            self.close_asking(editor, settings);
+        }
+    }
+
+    /// Whether a question waits for an answer.
+    pub fn asking(&self) -> bool {
+        self.confirm.is_some()
+    }
+
+    /// Export (File's, Ctrl+E): saves first, and exports as the RedM
+    /// resource section says.
+    pub fn export_now(&mut self, editor: &mut Editor, settings: &mut Settings) {
+        self.export(editor, settings, false);
+    }
+
     /// Asks where the new project goes, and makes it: empty, as the one open
     /// closes, or with what's edited now when none is.
     fn new_project(&mut self, editor: &mut Editor, settings: &mut Settings) {
@@ -477,23 +547,31 @@ impl ProjectPane {
             }
             remember(settings, &file);
         }
+        let changed = editor.project_entries().iter().filter(|e| e.dirty).count();
         match editor.save_all() {
             Ok(homeless) if homeless.is_empty() => {
-                self.status = Some("Saved".into());
+                let saved = match changed {
+                    0 => "Nothing to save".to_owned(),
+                    n => format!("Saved {}", crate::map::tools::count(n, "file")),
+                };
+                self.status = Some(saved.clone());
+                self.toast = Some((saved, false));
                 let on_save =
                     editor.project.as_ref().is_some_and(|p| p.export.get("onSave").is_some_and(|v| v == "true"));
                 if on_save {
                     self.export(editor, settings, true);
                 }
             }
-            Ok(homeless) => self.status = Some(format!("{} files have nowhere to go", homeless.len())),
-            Err(e) => self.status = Some(e),
+            Ok(homeless) => {
+                self.fail(format!("{} have nowhere to go", crate::map::tools::count(homeless.len(), "file")))
+            }
+            Err(e) => self.fail(e),
         }
     }
 
     /// Opens a project from the pane, asking first if files have unsaved
     /// changes.
-    fn open_asking(&mut self, editor: &mut Editor, settings: &mut Settings, file: PathBuf) {
+    pub fn open_asking(&mut self, editor: &mut Editor, settings: &mut Settings, file: PathBuf) {
         if editor.has_unsaved() {
             self.confirm = Some(Pending::Open(file));
         } else {
@@ -704,7 +782,7 @@ impl ProjectPane {
             }
         }
         if !Path::new(&form.folder).is_dir() {
-            self.status = Some("Choose the folder to put the resource in".into());
+            self.fail("Choose the folder to put the RedM resource in (Project pane, RedM resource)".into());
             return;
         }
         let name = redm::safe_name(&form.resource);
@@ -727,13 +805,22 @@ impl ProjectPane {
             p.export.extend(info.clone());
         }
         let _ = editor.save_project_file();
-        self.status = Some(match redm::export(&resource, &files, &info) {
+        match redm::export(&resource, &files, &info) {
             Ok(skipped) if skipped.is_empty() => {
-                format!("Exported {name}: add `ensure {name}` to server.cfg and restart the server")
+                self.status =
+                    Some(format!("Exported {name}: add `ensure {name}` to server.cfg and restart the server"));
+                let saved = self.toast.take().map(|(s, _)| format!("{s}, exported {name}"));
+                self.toast = Some((saved.unwrap_or_else(|| format!("Exported {name}")), false));
             }
-            Ok(skipped) => format!("Exported {name} (left out: {})", skipped.join(", ")),
-            Err(e) => format!("The export failed: {e}"),
-        });
+            Ok(skipped) => self.fail(format!("Exported {name}, but left out: {}", skipped.join(", "))),
+            Err(e) => self.fail(format!("The export failed: {e}")),
+        }
+    }
+
+    /// A failure: in the pane, and shown by the app.
+    fn fail(&mut self, text: String) {
+        self.status = Some(text.clone());
+        self.toast = Some((text, true));
     }
 }
 
@@ -749,7 +836,7 @@ fn map_names(editor: &Editor) -> Vec<(u32, String)> {
 }
 
 /// The recent projects that are still there.
-fn recent(settings: &Settings) -> Vec<PathBuf> {
+pub fn recent(settings: &Settings) -> Vec<PathBuf> {
     settings
         .get(RECENT)
         .unwrap_or_default()

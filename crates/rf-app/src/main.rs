@@ -7,6 +7,7 @@ mod app;
 mod blender;
 mod browser;
 mod game;
+mod help;
 mod hierarchy;
 mod instance;
 mod loading;

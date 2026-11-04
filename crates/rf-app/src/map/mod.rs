@@ -118,6 +118,8 @@ pub struct MapView {
     helpers: helpers::Helpers,
     /// Whether the last frame drew the place tool's preview.
     preview_shown: bool,
+    /// The statistics over the map (the gear menu's).
+    show_stats: bool,
 }
 
 /// `T * R * S` from a ymap entity's fields. The game stores the inverse
@@ -245,6 +247,7 @@ impl MapView {
             last_view: None,
             helpers: Default::default(),
             preview_shown: false,
+            show_stats: false,
         }
     }
 
@@ -406,8 +409,8 @@ impl MapView {
                             (Tool::Select, icon::CURSOR, "Select (V): right click or click"),
                             (Tool::Move, icon::ARROWS_OUT_CARDINAL, "Move the selection (Q)"),
                             (Tool::Rotate, icon::ARROW_CLOCKWISE, "Rotate the selection (E)"),
-                            (Tool::Scale, icon::ARROWS_OUT, "Scale the selection"),
-                            (Tool::Place, icon::STAMP, "Place the object chosen in Objects"),
+                            (Tool::Scale, icon::ARROWS_OUT, "Scale the selection (T)"),
+                            (Tool::Place, icon::STAMP, "Place the object chosen in Objects (P)"),
                         ] {
                             if theme::tool(ui, tools.tool == tool, glyph, tip).clicked() {
                                 tools.tool = tool;
@@ -458,7 +461,7 @@ impl MapView {
                             })
                             .inner;
                         if undone.clicked() {
-                            editor.undo();
+                            tools.undo(editor);
                         }
                         let redo = editor.redo_labels().next().map(|l| format!("Redo {l} (Ctrl+Y)"));
                         let redone = ui
@@ -472,7 +475,7 @@ impl MapView {
                             })
                             .inner;
                         if redone.clicked() {
-                            editor.redo();
+                            tools.redo(editor);
                         }
                     });
                     theme::group(ui, |ui| {
@@ -521,6 +524,9 @@ impl MapView {
                         ui.add(egui::Slider::new(&mut self.speed, 1.0..=5000.0).logarithmic(true).fixed_decimals(0));
                         ui.label(theme::icon_text(icon::APERTURE, "Exposure (EV)"));
                         ui.add(egui::Slider::new(&mut self.exposure, -4.0..=4.0).fixed_decimals(1));
+                        ui.separator();
+                        ui.checkbox(&mut self.show_stats, "Statistics")
+                            .on_hover_text("What's drawn and loaded, and the frame time, over the map");
                         if let Some(world) = world_editor {
                             ui.separator();
                             let tip = "Ymaps the game's scripts switch on and off: lockdowns, camps, mission states";
@@ -530,7 +536,7 @@ impl MapView {
                         }
                     })
                     .response
-                    .on_hover_text("View settings: speed, exposure, scripted maps");
+                    .on_hover_text("View settings: speed, exposure, statistics, scripted maps");
                 });
             });
         });
@@ -578,9 +584,6 @@ impl MapView {
             && has_keys
         {
             tools.keys(ui, ed);
-            if ui.input(|i| i.key_pressed(Key::Home) || (i.key_pressed(Key::F) && i.modifiers.alt)) {
-                self.focus_selection(ed);
-            }
         }
         if let Some(ed) = editor.as_deref_mut()
             && std::mem::take(&mut tools.focus)
@@ -863,42 +866,39 @@ impl MapView {
             self.last_evict = Instant::now();
         }
 
+        // Where the camera is; with Statistics (the gear menu), what's drawn.
         let (ready, loading, textures) = self.models.stats();
         let p = self.camera.position;
-        let mut text = format!(
-            "{:.0} {:.0} {:.0}   {:.1} ms\n{} entities, {} drawn in {} draw calls, {} lights\n{} instanced props and grass drawn, of {} batches\nmodels {ready} (+{loading} loading), textures {textures}",
-            p.x,
-            p.y,
-            p.z,
-            self.frame_ms,
-            visible.len(),
-            self.stats.instances,
-            self.stats.draw_calls,
-            self.lights_drawn,
-            self.batch_instances_drawn.0,
-            self.batch_instances_drawn.1
-        );
-        if let Some(ed) = editor.as_deref() {
+        let mut text = format!("{:.0} {:.0} {:.0}", p.x, p.y, p.z);
+        if self.show_stats {
+            text = format!(
+                "{:.0} {:.0} {:.0}   {:.1} ms\n{} entities, {} drawn in {} draw calls, {} lights\n{} instanced props and grass drawn, of {} batches\nmodels {ready} (+{loading} loading), textures {textures}",
+                p.x,
+                p.y,
+                p.z,
+                self.frame_ms,
+                visible.len(),
+                self.stats.instances,
+                self.stats.draw_calls,
+                self.lights_drawn,
+                self.batch_instances_drawn.0,
+                self.batch_instances_drawn.1
+            );
+        }
+        if let Some(ed) = editor.as_deref()
+            && self.show_stats
+        {
             let s = ed.world.stats();
             text.push_str(&format!(
                 "\nmap nodes {} loaded (+{} loading) of {}",
                 s.nodes_loaded, s.nodes_loading, s.nodes
             ));
             if tools.mode != helpers::Mode::Entity {
-                text.push_str(&format!(
-                    "
-{}: {} helpers",
-                    tools.mode.name(),
-                    self.helpers.parts.len()
-                ));
+                text.push_str(&format!("\n{}: {} helpers", tools.mode.name(), self.helpers.parts.len()));
             }
             if let Some(id) = tools.hover {
-                let name = ed.world.entity(id).map(|e| ed.hashes().name(e.archetype)).unwrap_or_default();
                 let map = ed.world.map_file_name(id.node).unwrap_or_default();
-                text.push_str(&format!("\n{name}  ({map})"));
-            }
-            if let Some(s) = tools.status() {
-                text.push_str(&format!("\n{s}"));
+                text.push_str(&format!("\nhovered in {map}"));
             }
         }
         let painter = ui.painter();
@@ -941,10 +941,10 @@ impl MapView {
                 if let Some(placement) = tools.place_at(editor, point, self.camera.yaw) {
                     let archetype = tools.place_archetype.unwrap_or_default();
                     if let Err(e) = editor.place(archetype, placement) {
-                        tools.say(e);
+                        tools.fail(e);
                     }
                 } else {
-                    tools.say("Choose an archetype to place in Objects");
+                    tools.say("Choose what to place in Objects");
                 }
             } else if tools.tool == Tool::Place {
                 tools.tool = Tool::Select; // a right click leaves placing, as in the C#

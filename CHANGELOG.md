@@ -16,12 +16,24 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   changes.
 - `.rfproj` files have an icon of their own in the file manager: a page with
   "PROJ" and RedForge's anvil.
+- A File menu with the project's commands: New project, Open project
+  (Ctrl+O), Open recent, Save all, Export RedM resource (Ctrl+E), Close
+  project; and Quit with Ctrl+Q.
+- Help > Keyboard shortcuts (F1), and About RedForge with the version.
+- Messages over the bottom of the window, errors in red, wherever the focus
+  is: saving and exporting say what they did, copying, pasting, duplicating
+  and deleting say how many objects.
+- The window's title shows the project, with a dot while files have
+  unsaved changes.
+- Cut (Ctrl+X); T for the Scale tool and P for Place.
 - The game folder is found by itself when Steam, the Rockstar Games Launcher,
   the Epic Games Launcher or Heroic on Linux installed the game.
 
 ### Changed
 - The game folder's dialog, redone in the new look: centred, with the
   installs found, and **Cancel** when it's opened from File > Game folder….
+- Over the map, only the camera's position shows; the statistics are in the
+  gear menu (**Statistics**).
 
 ### Fixed
 - Quitting with unsaved changes (File > Quit, the window's close button,
@@ -49,6 +61,9 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - Opening the world map or a file that's open already brings its tab to the
   front, instead of opening it again (two world maps streamed twice).
 - The towns on the welcome page open the map there.
+- Ctrl+C and Ctrl+V copy and paste objects; they only worked from the Edit
+  menu. Undo, redo, duplicate, delete and Home work wherever the focus is,
+  not only with the mouse over the map (but while typing in a field).
 - Esc clears selected helpers too, and an archetype error in Properties goes
   when the selection changes.
 

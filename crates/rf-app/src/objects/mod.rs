@@ -350,7 +350,7 @@ impl Objects {
 fn choose(row: &Row, tools: &mut Tools) {
     tools.place_archetype = Some(row.hash);
     if row.kind == Kind::Interior {
-        tools.say("Interiors (MLO) can't be placed yet");
+        tools.fail("Interiors (MLO) can't be placed yet");
         if tools.tool == Tool::Place {
             tools.tool = Tool::Select;
         }

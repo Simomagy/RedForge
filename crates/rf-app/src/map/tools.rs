@@ -4,13 +4,14 @@
 //! The controls follow the C# RedForge: right click selects (Ctrl adds or
 //! removes; a left click selects too), left drag looks around or drags the
 //! gizmo, Shift at the start of a gizmo drag drags copies. Q moves, E
-//! rotates, V goes back to plain selecting, `.` switches between world and
-//! object axes.
+//! rotates, T scales, P places, V goes back to plain selecting, `.` switches
+//! between world and object axes. The editing keys (undo, copy, delete...)
+//! work wherever the focus is ([`Tools::edit_keys`]).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Key, Pos2, Rect, Stroke};
+use eframe::egui::{self, Event, Key, Pos2, Rect, Stroke};
 use glam::{Mat4, Quat, Vec2, Vec3};
 use rf_editor::{Editor, EntityId, Placement};
 use rf_render::{CameraView, PickRequest};
@@ -63,10 +64,27 @@ pub struct Tools {
     /// Where the mouse points at the scene, from the last pick.
     pub hover_point: Option<Vec3>,
     pending: Option<Pending>,
-    status: Option<(String, Instant)>,
+    toast: Option<Toast>,
+    /// What copying put on the clipboard: pasting it pastes the copied
+    /// objects (Ctrl+V comes as the clipboard's text).
+    copied: Option<String>,
     /// The gizmo drag was cancelled (Esc, or its copies couldn't be made):
     /// the gizmo waits for the button to go up.
     blocked: bool,
+}
+
+/// A message for a few seconds, over the bottom of the window.
+pub struct Toast {
+    pub text: String,
+    pub error: bool,
+    pub at: Instant,
+}
+
+impl Toast {
+    /// How long it shows: errors longer.
+    pub fn lasts(&self) -> Duration {
+        Duration::from_secs(if self.error { 7 } else { 4 })
+    }
 }
 
 /// A gizmo drag: the dragged entities where they started and are now.
@@ -111,7 +129,8 @@ impl Default for Tools {
             focus: false,
             hover_point: None,
             pending: None,
-            status: None,
+            toast: None,
+            copied: None,
             blocked: false,
         }
     }
@@ -165,13 +184,128 @@ pub fn to_ndc(rect: Rect, p: Pos2) -> Vec2 {
 }
 
 impl Tools {
-    /// Shows a message over the map for a few seconds.
+    /// Shows a message for a few seconds.
     pub fn say(&mut self, text: impl Into<String>) {
-        self.status = Some((text.into(), Instant::now()));
+        self.toast = Some(Toast { text: text.into(), error: false, at: Instant::now() });
     }
 
-    pub fn status(&self) -> Option<&str> {
-        self.status.as_ref().filter(|(_, t)| t.elapsed() < Duration::from_secs(5)).map(|(s, _)| s.as_str())
+    /// Shows what went wrong, a little longer, in red.
+    pub fn fail(&mut self, text: impl Into<String>) {
+        self.toast = Some(Toast { text: text.into(), error: true, at: Instant::now() });
+    }
+
+    /// The message showing now.
+    pub fn toast(&self) -> Option<&Toast> {
+        self.toast.as_ref().filter(|t| t.at.elapsed() < t.lasts())
+    }
+
+    pub fn undo(&mut self, editor: &mut Editor) {
+        self.finish_drag(editor);
+        match editor.undo() {
+            Some(l) => self.say(format!("Undid {l}")),
+            None => self.say("Nothing to undo"),
+        }
+    }
+
+    pub fn redo(&mut self, editor: &mut Editor) {
+        match editor.redo() {
+            Some(l) => self.say(format!("Redid {l}")),
+            None => self.say("Nothing to redo"),
+        }
+    }
+
+    /// Copies the selection, with a line about it on the clipboard (which
+    /// [`Tools::paste`] knows again).
+    pub fn copy(&mut self, ctx: &egui::Context, editor: &mut Editor) {
+        let n = editor.selection().len();
+        if n == 0 {
+            self.say("Nothing selected to copy");
+            return;
+        }
+        editor.copy();
+        let names: Vec<String> = editor
+            .selection()
+            .iter()
+            .take(3)
+            .filter_map(|id| editor.world.entity(*id))
+            .map(|e| editor.hashes().name(e.archetype))
+            .collect();
+        let more = if n > names.len() { ", …" } else { "" };
+        let text = format!("RedForge: {} ({}{more})", count(n, "object"), names.join(", "));
+        ctx.copy_text(text.clone());
+        self.copied = Some(text);
+        self.say(format!("Copied {}", count(n, "object")));
+    }
+
+    pub fn paste(&mut self, editor: &mut Editor) {
+        match editor.paste() {
+            Ok(()) => self.say(format!("Pasted {}", count(editor.selection().len(), "object"))),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    pub fn duplicate(&mut self, editor: &mut Editor) {
+        match editor.duplicate_selected() {
+            Ok(()) => self.say(format!("Duplicated {}", count(editor.selection().len(), "object"))),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    pub fn delete(&mut self, editor: &mut Editor) {
+        let n = editor.selection().len();
+        if n == 0 {
+            return;
+        }
+        match editor.delete_selected() {
+            Ok(()) => self.say(format!("Deleted {}", count(n, "object"))),
+            Err(e) => self.fail(e),
+        }
+    }
+
+    /// The editing keys, wherever the focus is (the app calls this when no
+    /// text field has it): undo, redo, cut, copy, paste, duplicate, delete,
+    /// and Home (or Alt+F) to look at the selection.
+    pub fn edit_keys(&mut self, ctx: &egui::Context, editor: &mut Editor) {
+        let (cmd, shift, alt) = ctx.input(|i| (i.modifiers.command, i.modifiers.shift, i.modifiers.alt));
+        let pressed = |k: Key| ctx.input(|i| i.key_pressed(k));
+        // egui-winit turns Ctrl+C, X and V into these (V only when the
+        // clipboard has text); text selected in a label copies itself.
+        let (copy, cut, paste) = ctx.input(|i| {
+            let mut found = (false, false, None);
+            for e in &i.events {
+                match e {
+                    Event::Copy => found.0 = true,
+                    Event::Cut => found.1 = true,
+                    Event::Paste(text) => found.2 = Some(text.clone()),
+                    _ => {}
+                }
+            }
+            found
+        });
+        let label_text =
+            ctx.with_plugin(|s: &mut egui::text_selection::LabelSelectionState| s.has_selection()).unwrap_or(false);
+        if cmd && pressed(Key::Z) && !shift {
+            self.undo(editor);
+        } else if cmd && (pressed(Key::Y) || (pressed(Key::Z) && shift)) {
+            self.redo(editor);
+        } else if (copy || cut) && !label_text {
+            self.copy(ctx, editor);
+            if cut {
+                self.delete(editor);
+            }
+        } else if let Some(text) = paste {
+            if self.copied.as_deref() == Some(text.as_str()) {
+                self.paste(editor);
+            }
+        } else if cmd && pressed(Key::D) {
+            self.duplicate(editor);
+        }
+        if pressed(Key::Delete) {
+            self.delete(editor);
+        }
+        if pressed(Key::Home) || (alt && pressed(Key::F)) {
+            self.focus = true;
+        }
     }
 
     pub fn is_dragging(&self) -> bool {
@@ -268,7 +402,7 @@ impl Tools {
                                 }
                             }
                             Err(e) => {
-                                self.say(e);
+                                self.fail(e);
                                 self.blocked = true;
                                 return true;
                             }
@@ -399,31 +533,12 @@ impl Tools {
         a.map_or(20.0, |a| (Vec3::from(a.bb_max) - Vec3::from(a.bb_min)).length() * 3.0).max(2.0)
     }
 
-    /// The keys of the tools, when the map has the keyboard.
+    /// The keys of the tools, when the map has the keyboard (the editing
+    /// keys are [`Tools::edit_keys`]).
     pub fn keys(&mut self, ui: &egui::Ui, editor: &mut Editor) {
         let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
         let pressed = |k: Key| ui.input(|i| i.key_pressed(k));
         if cmd {
-            if pressed(Key::Z) && !shift {
-                self.finish_drag(editor);
-                if let Some(l) = editor.undo() {
-                    self.say(format!("Undid {l}"));
-                }
-            } else if pressed(Key::Y) || (pressed(Key::Z) && shift) {
-                if let Some(l) = editor.redo() {
-                    self.say(format!("Redid {l}"));
-                }
-            } else if pressed(Key::C) {
-                editor.copy();
-            } else if pressed(Key::V) {
-                if let Err(e) = editor.paste() {
-                    self.say(e);
-                }
-            } else if pressed(Key::D)
-                && let Err(e) = editor.duplicate_selected()
-            {
-                self.say(e);
-            }
             return;
         }
         if self.tool == Tool::Place {
@@ -443,6 +558,14 @@ impl Tools {
             self.tool = if self.tool == Tool::Move { Tool::Select } else { Tool::Move };
         } else if pressed(Key::E) {
             self.tool = if self.tool == Tool::Rotate { Tool::Select } else { Tool::Rotate };
+        } else if pressed(Key::T) {
+            self.tool = if self.tool == Tool::Scale { Tool::Select } else { Tool::Scale };
+        }
+        if pressed(Key::P) {
+            match self.place_archetype {
+                Some(_) => self.tool = if self.tool == Tool::Place { Tool::Select } else { Tool::Place },
+                None => self.say("Choose what to place in Objects first"),
+            }
         }
         if pressed(Key::V) {
             self.tool = Tool::Select;
@@ -459,12 +582,12 @@ impl Tools {
                 self.selected_parts.clear();
             }
         }
-        if pressed(Key::Delete)
-            && let Err(e) = editor.delete_selected()
-        {
-            self.say(e);
-        }
     }
+}
+
+/// "1 object", "3 objects".
+pub fn count(n: usize, what: &str) -> String {
+    format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
 
 /// Draws an entity's box (its archetype's, through its transform).

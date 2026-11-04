@@ -100,7 +100,8 @@ impl Tab {
 /// happened (`=copy`: with Shift, dragging copies). `REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside
 /// the world map with that search, and chooses the first object shown.
 /// `REDFORGE_TEST_QUIT=1` closes the window a second and a half before, to
-/// see the question about unsaved changes.
+/// see the question about unsaved changes; `REDFORGE_TEST_KEY=<key>` (`F1`,
+/// `ctrl+d`...) presses a key a second before.
 struct AutoShot {
     open: String,
     out: PathBuf,
@@ -109,6 +110,8 @@ struct AutoShot {
     drag_test: Option<DragTest>,
     /// Whether to close the window before the screenshot, and if it was.
     quit_test: Option<bool>,
+    /// A key to press before the screenshot, and how far its press got.
+    key_test: Option<(egui::Key, egui::Modifiers, u8)>,
     tab_shown: bool,
     objects_search: Option<String>,
     opened: Option<Instant>,
@@ -184,6 +187,11 @@ pub struct RedForgeApp {
     wayland_drops: Option<Receiver<crate::wayland_drop::WaylandDrop>>,
     /// The window closes: the unsaved changes were saved or let go.
     quitting: bool,
+    /// Help's windows.
+    shortcuts_open: bool,
+    about_open: bool,
+    /// The window's title as last set.
+    title: String,
 }
 
 /// The setting that's set once the tour was seen (or skipped).
@@ -216,6 +224,14 @@ impl RedForgeApp {
                     .ok()
                     .map(|v| DragTest { copy: v == "copy", ..Default::default() }),
                 quit_test: std::env::var("REDFORGE_TEST_QUIT").is_ok().then_some(false),
+                key_test: std::env::var("REDFORGE_TEST_KEY").ok().and_then(|k| {
+                    let (ctrl, name) = match k.to_lowercase().strip_prefix("ctrl+") {
+                        Some(n) => (true, n.to_owned()),
+                        None => (false, k.clone()),
+                    };
+                    let key = egui::Key::from_name(&name.to_uppercase()).or_else(|| egui::Key::from_name(&name))?;
+                    Some((key, if ctrl { egui::Modifiers::COMMAND } else { egui::Modifiers::NONE }, 0))
+                }),
                 tab_shown: false,
                 objects_search: std::env::var("REDFORGE_OBJECTS_SEARCH").ok(),
                 opened: None,
@@ -255,12 +271,29 @@ impl RedForgeApp {
             #[cfg(target_os = "linux")]
             wayland_drops: crate::wayland_drop::start(cc),
             quitting: false,
+            shortcuts_open: false,
+            about_open: false,
+            title: "RedForge".into(),
         };
         // `REDFORGE_OPEN=folder`: the game folder's dialog, for its screenshot.
         if let Some(f) = folder.filter(|_| app.auto.as_ref().is_none_or(|a| a.open != "folder")) {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
         }
         app
+    }
+
+    /// The window's title: the project, with a dot while files have unsaved
+    /// changes.
+    fn set_title(&mut self, ctx: &egui::Context) {
+        let title = match self.editor.as_ref().and_then(|e| Some((e.project.as_ref()?.name(), e.has_unsaved()))) {
+            Some((name, dirty)) => format!("{name}{} – RedForge", if dirty { " •" } else { "" }),
+            None if self.editor.as_ref().is_some_and(Editor::has_unsaved) => "• RedForge".into(),
+            None => "RedForge".into(),
+        };
+        if title != self.title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
     }
 
     /// File > Game folder…: the folder's dialog, with Cancel back to the game.
@@ -1000,6 +1033,30 @@ impl eframe::App for RedForgeApp {
         if self.auto.as_ref().is_some_and(|a| a.open == "folder") {
             raw.events.retain(|e| !matches!(e, egui::Event::PointerButton { .. }));
         }
+        // REDFORGE_TEST_KEY: down a second before the screenshot, then up
+        // (egui takes Ctrl from the modifiers' events).
+        if let Some(a) = &mut self.auto
+            && let Some((key, modifiers, step)) = &mut a.key_test
+            && *step < 2
+            && a.opened.is_some_and(|t| t.elapsed().as_secs_f32() > a.delay - 1.0)
+        {
+            let pressed = *step == 0;
+            let held = if pressed { *modifiers } else { egui::Modifiers::NONE };
+            if pressed {
+                raw.events.push(egui::Event::ModifiersChanged(held));
+            }
+            raw.events.push(egui::Event::Key {
+                key: *key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: *modifiers,
+            });
+            if !pressed {
+                raw.events.push(egui::Event::ModifiersChanged(held));
+            }
+            *step += 1;
+        }
         let Some(d) = self.auto.as_mut().and_then(|a| a.drag_test.as_mut()) else { return };
         let Some((start, dir)) = d.start else { return };
         let button = |pos, pressed| egui::Event::PointerButton {
@@ -1065,6 +1122,14 @@ impl eframe::App for RedForgeApp {
         }
 
         self.take_projects(ctx);
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
+            self.shortcuts_open = !self.shortcuts_open;
+        }
+        crate::help::shortcuts(ctx, &mut self.shortcuts_open);
+        crate::help::about(ctx, &mut self.about_open, &self.icon);
 
         let game_ready = matches!(self.game, GameState::Ready(_));
         let bar = egui::Frame::new().fill(crate::theme::BG).inner_margin(egui::Margin::symmetric(8, 4));
@@ -1072,6 +1137,10 @@ impl eframe::App for RedForgeApp {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.add(egui::Image::new(&self.icon).fit_to_exact_size(egui::vec2(18.0, 18.0)));
                 ui.menu_button("File", |ui| {
+                    if let Some(ed) = self.editor.as_mut().filter(|_| game_ready) {
+                        self.project_pane.file_menu(ui, ed, &mut self.settings);
+                        ui.separator();
+                    }
                     if ui.button("Game folder…").clicked() {
                         match &self.editor {
                             Some(ed) if ed.has_unsaved() && game_ready => self.project_pane.ask(Ask::GameFolder),
@@ -1079,7 +1148,8 @@ impl eframe::App for RedForgeApp {
                         }
                         ui.close();
                     }
-                    if ui.button("Quit").clicked() {
+                    ui.separator();
+                    if ui.add(egui::Button::new("Quit").shortcut_text("Ctrl+Q")).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
@@ -1095,7 +1165,7 @@ impl eframe::App for RedForgeApp {
                                 )
                                 .clicked()
                             {
-                                ed.undo();
+                                self.tools.undo(ed);
                             }
                             let redo = ed.redo_labels().next().map(|l| format!("Redo {l}"));
                             if ui
@@ -1105,25 +1175,29 @@ impl eframe::App for RedForgeApp {
                                 )
                                 .clicked()
                             {
-                                ed.redo();
+                                self.tools.redo(ed);
                             }
                             ui.separator();
                             let any = !ed.selection().is_empty();
                             let mut result = Ok(());
+                            if ui.add_enabled(any, egui::Button::new("Cut").shortcut_text("Ctrl+X")).clicked() {
+                                self.tools.copy(ctx, ed);
+                                self.tools.delete(ed);
+                            }
                             if ui.add_enabled(any, egui::Button::new("Copy").shortcut_text("Ctrl+C")).clicked() {
-                                ed.copy();
+                                self.tools.copy(ctx, ed);
                             }
                             if ui
                                 .add_enabled(ed.can_paste(), egui::Button::new("Paste").shortcut_text("Ctrl+V"))
                                 .clicked()
                             {
-                                result = ed.paste();
+                                self.tools.paste(ed);
                             }
                             if ui.add_enabled(any, egui::Button::new("Duplicate").shortcut_text("Ctrl+D")).clicked() {
-                                result = ed.duplicate_selected();
+                                self.tools.duplicate(ed);
                             }
                             if ui.add_enabled(any, egui::Button::new("Delete").shortcut_text("Del")).clicked() {
-                                result = ed.delete_selected();
+                                self.tools.delete(ed);
                             }
                             ui.separator();
                             if ui.add_enabled(any, egui::Button::new("Edit in Blender")).clicked() {
@@ -1137,7 +1211,7 @@ impl eframe::App for RedForgeApp {
                                 };
                             }
                             if let Err(e) = result {
-                                self.tools.say(e);
+                                self.tools.fail(e);
                             }
                         });
                     }
@@ -1171,8 +1245,17 @@ impl eframe::App for RedForgeApp {
                     });
                 }
                 ui.menu_button("Help", |ui| {
+                    if ui.add(egui::Button::new("Keyboard shortcuts").shortcut_text("F1")).clicked() {
+                        self.shortcuts_open = true;
+                        ui.close();
+                    }
                     if ui.add_enabled(game_ready, egui::Button::new("Tour of the panels")).clicked() {
                         self.tour.start();
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("About RedForge").clicked() {
+                        self.about_open = true;
                         ui.close();
                     }
                 });
@@ -1233,11 +1316,21 @@ impl eframe::App for RedForgeApp {
             g.set_data(data);
         }
 
-        // Ctrl+S saves the project's files, wherever the focus is.
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
-            && let Some(ed) = &mut self.editor
-        {
-            self.project_pane.save_all(ed, &mut self.settings);
+        // The project's and the editing keys, wherever the focus is (but in
+        // a text field, or while a question waits).
+        if let Some(ed) = &mut self.editor {
+            let (pane, settings) = (&mut self.project_pane, &mut self.settings);
+            let key = |k| ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, k));
+            if key(egui::Key::S) {
+                pane.save_all(ed, settings);
+            } else if key(egui::Key::O) {
+                pane.open_dialog(ed, settings);
+            } else if key(egui::Key::E) {
+                pane.export_now(ed, settings);
+            }
+            if !ctx.text_edit_focused() && !pane.asking() && !self.tour.is_open() {
+                self.tools.edit_keys(ctx, ed);
+            }
         }
         // The project to open at start, or from outside, with the Project
         // pane in front; and its questions.
@@ -1312,6 +1405,16 @@ impl eframe::App for RedForgeApp {
         if std::mem::take(&mut self.objects.tile_size_changed) {
             self.settings.set(crate::objects::TILE_SIZE, self.objects.tile_size.to_string());
         }
+
+        if let Some((text, error)) = self.project_pane.toast.take() {
+            if error {
+                self.tools.fail(text);
+            } else {
+                self.tools.say(text);
+            }
+        }
+        crate::help::toast(ctx, &self.tools);
+        self.set_title(ctx);
 
         if let Some(g) = &game {
             self.auto_shot(ctx, g);
