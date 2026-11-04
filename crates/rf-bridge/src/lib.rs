@@ -91,7 +91,8 @@ pub mod messages {
     pub const SENT: &str = "Sent the selection to Blender";
     /// The app's message when no Blender is listening.
     pub const NOT_CONNECTED: &str = "Blender isn't connected.\nInstall the RedForge Bridge extension in Blender 5 (the \
-        blender/redforge_bridge folder of the RedForge source) and enable it: it connects by itself while RedForge is open.";
+        blender folder next to RedForge, /usr/share/redforge/blender on Linux) with Sollumz RDR, and enable it: it \
+        connects by itself while RedForge is open.";
 }
 
 /// Where an object is on the map.

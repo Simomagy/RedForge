@@ -61,6 +61,63 @@ def sollumz(module: str):
     raise RuntimeError("Sollumz RDR isn't enabled: RedForge Bridge imports and exports models through it")
 
 
+# ---- Sollumz RDR on newer Blenders
+
+def _modifier_socket(mod, key):
+    """The socket of a Geometry Nodes modifier that an old style key names ("Socket_2", "Socket_3_attribute_name"...),
+    and which of its properties."""
+    props = mod.properties
+    for suffix in ("_attribute_name", "_use_attribute"):
+        if key.endswith(suffix):
+            base = key[: -len(suffix)]
+            for side in (props.inputs, props.outputs):
+                if hasattr(side, base):
+                    return getattr(side, base), suffix[1:]
+            raise KeyError(key)
+    if hasattr(props.inputs, key):
+        return getattr(props.inputs, key), "value"
+    raise KeyError(key)
+
+
+def _modifier_get(self, key):
+    item, attr = _modifier_socket(self, key)
+    return getattr(item, attr, None)
+
+
+def _modifier_set(self, key, value):
+    item, attr = _modifier_socket(self, key)
+    if hasattr(item, attr):  # (outputs have no use_attribute any more: a name is enough)
+        setattr(item, attr, value)
+
+
+def modifier_compat():
+    """Blender 5.2 took away mod["Socket_2"] = value on Geometry Nodes modifiers (their inputs are mod.properties now),
+    which Sollumz still uses for every tinted model: it failed halfway through importing them. The old way is put back
+    over the new one, only where Blender has it no more."""
+    nodes = bpy.types.NodesModifier
+    if "properties" in nodes.bl_rna.properties and not getattr(nodes, "_redforge_compat", False):
+        nodes.__getitem__ = _modifier_get
+        nodes.__setitem__ = _modifier_set
+        nodes._redforge_compat = True
+
+
+def sollumz_compat():
+    """Sollumz reads an XML attribute that could be a hexadecimal number as one, and Python's int() takes underscores:
+    a texture called d_93_c became the number 0xd93c, and the import failed on it. Words with underscores stay words."""
+    element = sollumz("cwxml.element")
+    original = element.get_str_type
+    if getattr(original, "_redforge_compat", False):
+        return
+
+    def get_str_type(value):
+        if isinstance(value, str) and "_" in value:
+            return value
+        return original(value)
+
+    get_str_type._redforge_compat = True
+    element.get_str_type = get_str_type
+
+
 class _Setting:
     """Sets a Sollumz setting for a while, and puts it back."""
 
@@ -181,9 +238,18 @@ def linked_copy(root, collection):
 
 
 def import_model(xml: Path, collection):
+    """Imports a model RedForge exported; if Sollumz fails, what it made of it so far goes, and the error is its last
+    line."""
+    sollumz_compat()
     before = set(bpy.data.objects)
-    with _Setting(sollumz("sollumz_preferences").get_import_settings(), "import_as_asset", False):
-        bpy.ops.sollumz.import_assets(directory=str(xml.parent), files=[{"name": xml.name}])
+    try:
+        with _Setting(sollumz("sollumz_preferences").get_import_settings(), "import_as_asset", False):
+            bpy.ops.sollumz.import_assets(directory=str(xml.parent), files=[{"name": xml.name}])
+    except Exception as ex:
+        for obj in [obj for obj in bpy.data.objects if obj not in before]:
+            bpy.data.objects.remove(obj, do_unlink=True)
+        lines = [line.strip() for line in str(ex).splitlines() if line.strip()]
+        raise RuntimeError(f"Sollumz couldn't import {xml.name}: {lines[-1] if lines else ex}") from None
     root = next((obj for obj in bpy.data.objects if (obj not in before) and (obj.parent is None)), None)
     if root is not None:
         for obj in hierarchy(root):
@@ -266,6 +332,7 @@ def edit_selection(context) -> str:
     xmls = {asset["file"]: Path(asset["xml"]) for asset in result["assets"]}
 
     selected, imported = [], 0
+    errors = list(result.get("errors") or [])
     for placement in result["placements"]:
         file, position = placement["file"], Vector(placement["position"])
         root = next((obj for obj in roots if obj.get(OBJECT_KEY) == placement["id"]), None) or next(
@@ -283,8 +350,13 @@ def edit_selection(context) -> str:
             if model is not None:
                 root = linked_copy(model, collection)
             elif file in xmls:
-                root = import_model(xmls[file], collection)
-                imported += 1
+                try:
+                    root = import_model(xmls[file], collection)
+                    imported += 1
+                except RuntimeError as ex:  # (the others still come in)
+                    errors.append(str(ex))
+                    xmls.pop(file)
+                    continue
             if root is None:
                 continue
             root[FILE_KEY] = file
@@ -310,7 +382,6 @@ def edit_selection(context) -> str:
     for root in selected:
         root.select_set(True)
         context.view_layer.objects.active = root
-    errors = result.get("errors") or []
     message = f"{len(selected)} object(s) from RedForge, {imported} model(s) imported"
     return message + (f" ({len(errors)} failed: {errors[0]})" if errors else "")
 
@@ -646,6 +717,7 @@ CLASSES = (RedForgePreferences, REDFORGE_OT_edit_selection, REDFORGE_OT_send, RE
 
 
 def register():
+    modifier_compat()
     for cls in CLASSES:
         bpy.utils.register_class(cls)
     for handlers, handler in HANDLERS:
