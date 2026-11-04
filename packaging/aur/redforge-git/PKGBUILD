@@ -2,7 +2,7 @@
 # Builds RedForge from the latest commit of its repository.
 pkgname=redforge-git
 _pkgname=redforge
-pkgver=2.3.0.r0.g0000000
+pkgver=2.3.5.r0.g0000000
 pkgrel=1
 pkgdesc="A map editor for RedM: Red Dead Redemption 2's maps, models and textures"
 arch=('x86_64')

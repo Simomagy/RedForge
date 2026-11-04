@@ -8,6 +8,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.3.5] - 2026-11-04
+
 ### Added
 - Game Files' right click exports a file, or a folder's files: **Export as
   XML** (textures as DDS files next to it), **Extract** (as a RedM resource
@@ -232,7 +234,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.3.0...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.3.5...HEAD
+[2.3.5]: https://github.com/Simomagy/RedForge/compare/v2.3.0...v2.3.5
 [2.3.0]: https://github.com/Simomagy/RedForge/compare/v2.1.0...v2.3.0
 [2.1.0]: https://github.com/Simomagy/RedForge/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/Simomagy/RedForge/releases/tag/v2.0.0
