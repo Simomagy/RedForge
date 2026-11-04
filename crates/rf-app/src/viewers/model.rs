@@ -200,7 +200,8 @@ impl Ready {
                 }
             });
             if !m.missing_textures.is_empty() {
-                ui.collapsing(format!("{} missing textures", m.missing_textures.len()), |ui| {
+                let header = egui::CollapsingHeader::new(format!("{} missing textures", m.missing_textures.len()));
+                header.id_salt("missing-textures").show(ui, |ui| {
                     for t in &m.missing_textures {
                         ui.label(t);
                     }

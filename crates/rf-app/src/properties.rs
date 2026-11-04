@@ -385,7 +385,9 @@ impl Properties {
             ValueType::Flags32 => {
                 ui.label(name);
                 let flags = def.u32(key);
-                ui.collapsing(format!("0x{flags:08X}"), |ui| {
+                // Its id isn't the label's, which changes with every flag.
+                let header = egui::CollapsingHeader::new(format!("0x{flags:08X}")).id_salt(("flags", key));
+                header.show(ui, |ui| {
                     let bits: Vec<(u32, String)> = if entity_flags {
                         ENTITY_FLAGS.iter().map(|(b, n)| (*b, n.to_string())).collect()
                     } else {

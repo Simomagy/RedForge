@@ -591,15 +591,15 @@ impl MapView {
                             ui.set_min_width(220.0);
                             ui.label(icon_text(icon::CLOCK, "Hour"));
                             ui.add(egui::Slider::new(&mut self.hour, 0.0..=24.0).fixed_decimals(1));
-                            ui.label(icon_text(icon::CLOUD_SUN, "Weather"));
-                            egui::ComboBox::from_id_salt(("weather", &self.path)).selected_text(&weather).show_ui(
-                                ui,
-                                |ui| {
-                                    for w in rf_game::timecycle::WEATHERS {
-                                        ui.selectable_value(&mut chosen, w.to_owned(), w);
+                            // A submenu, not a combo box: a combo's list would
+                            // close the menu it's in.
+                            ui.menu_button(icon_text(icon::CLOUD_SUN, &format!("Weather: {weather}")), |ui| {
+                                for w in rf_game::timecycle::WEATHERS {
+                                    if ui.selectable_label(w == weather, w).clicked() {
+                                        chosen = w.to_owned();
                                     }
-                                },
-                            );
+                                }
+                            });
                         })
                         .response
                         .on_hover_text(format!("The hour and the weather ({weather})"));

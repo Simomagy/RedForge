@@ -122,6 +122,9 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - Esc clears selected helpers too, and an archetype error in Properties goes
   when the selection changes.
 - **Remove from project** asks first when the file has unsaved changes.
+- The weather can be chosen again: its list closed the hour's menu instead
+  of opening. It's a submenu now.
+- Properties' flags stay open while ticking them; each tick closed the list.
 - View's Project, Hierarchy and Game Files bring the pane to the front; one
   that was closed goes back beside the others, instead of in a new column
   every time.
