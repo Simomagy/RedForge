@@ -41,6 +41,8 @@ package() {
   for size in 16 24 32 48 64 96 128 256 512; do
     install -Dm644 "packaging/linux/icons/redforge-$size.png" \
       "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/redforge.png"
+    install -Dm644 "packaging/linux/icons/redforge-project-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/mimetypes/application-x-redforge-project.png"
   done
   install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname"
   install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname"

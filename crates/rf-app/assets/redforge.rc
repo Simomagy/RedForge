@@ -1,2 +1,4 @@
-// The Windows exe's icon (build.rs compiles this for Windows targets).
+// The Windows exe's icons (build.rs compiles this for Windows targets): the
+// app's, and the projects' (.rfproj, the installer points at it as -2).
 1 ICON "redforge.ico"
+2 ICON "redforge-project.ico"

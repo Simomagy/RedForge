@@ -98,6 +98,10 @@ The packages point to the repository, `github.com/Simomagy/RedForge`: the AUR
 packages' sources, the Flatpak's id (`io.github.Simomagy.RedForge`) and its
 metainfo.
 
+The projects' icon is drawn in `packaging/linux/icons/redforge-project.svg`;
+`packaging/linux/icons/project-icon.sh` renders its PNGs and the Windows
+`crates/rf-app/assets/redforge-project.ico` (`rsvg-convert`, `magick`).
+
 ## Versions and releases
 
 The versions follow [Semantic Versioning](https://semver.org) from 2.0.0: the

@@ -14,6 +14,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   RedForge's window. A RedForge already running opens it, and asks before
   closing the project open, with **Save and open** when files have unsaved
   changes.
+- `.rfproj` files have an icon of their own in the file manager: a page with
+  "PROJ" and RedForge's anvil.
 - The game folder is found by itself when Steam, the Rockstar Games Launcher,
   the Epic Games Launcher or Heroic installed the game.
 

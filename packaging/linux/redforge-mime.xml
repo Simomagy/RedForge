@@ -5,7 +5,7 @@
   <mime-type type="application/x-redforge-project">
     <comment>RedForge project</comment>
     <sub-class-of type="application/json"/>
-    <icon name="redforge"/>
+    <icon name="application-x-redforge-project"/>
     <glob pattern="*.rfproj"/>
   </mime-type>
 </mime-info>

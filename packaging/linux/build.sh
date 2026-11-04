@@ -28,6 +28,8 @@ stage() {
   for size in 16 24 32 48 64 96 128 256 512; do
     install -Dm644 "packaging/linux/icons/redforge-$size.png" \
       "$1/usr/share/icons/hicolor/${size}x${size}/apps/redforge.png"
+    install -Dm644 "packaging/linux/icons/redforge-project-$size.png" \
+      "$1/usr/share/icons/hicolor/${size}x${size}/mimetypes/application-x-redforge-project.png"
   done
   for f in README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE; do
     install -Dm644 "$f" "$1/usr/share/doc/redforge/$f"
