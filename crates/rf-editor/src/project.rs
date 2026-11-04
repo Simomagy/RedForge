@@ -154,7 +154,7 @@ impl Project {
         if self.file.as_deref() == Some(file.as_path()) && self.saved_json.as_deref() == Some(json.as_str()) {
             return Ok(false);
         }
-        std::fs::write(&file, &json).map_err(|e| format!("{}: {e}", file.display()))?;
+        crate::autosave::write_safely(&file, json.as_bytes())?;
         self.saved_json = Some(json);
         self.file = Some(file);
         Ok(true)

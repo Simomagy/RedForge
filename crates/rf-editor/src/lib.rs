@@ -19,6 +19,7 @@
 //!   the ytyp, and the world places every instance again. Rooms, portals and
 //!   entity sets point at them by index, which deletes keep right.
 
+pub mod autosave;
 pub mod batches;
 pub mod interior;
 pub mod lod;
@@ -334,14 +335,19 @@ impl Editor {
         Ok(self.types.get_mut(&file).unwrap())
     }
 
-    /// Writes an edited ytyp.
-    pub fn save_types(&mut self, file: FileRef, path: &Path) -> Result<(), String> {
-        self.project.get_or_insert_with(Project::new).add_file(path);
+    /// A ytyp as it's saved.
+    fn types_bytes(&self, file: FileRef) -> Result<Vec<u8>, String> {
         let doc = self.types.get(&file).ok_or("no such ytyp")?;
         let mut meta = doc.header.clone();
         meta.root = Some((*doc.root).clone());
-        let bytes = meta.save().map_err(|e| e.to_string())?;
-        std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        meta.save().map_err(|e| e.to_string())
+    }
+
+    /// Writes an edited ytyp.
+    pub fn save_types(&mut self, file: FileRef, path: &Path) -> Result<(), String> {
+        self.project.get_or_insert_with(Project::new).add_file(path);
+        let bytes = self.types_bytes(file)?;
+        autosave::write_safely(path, &bytes)?;
         let doc = self.types.get_mut(&file).unwrap();
         doc.saved = Some(doc.root.clone());
         doc.path = Some(path.to_owned());
@@ -413,16 +419,21 @@ impl Editor {
         Ok(name)
     }
 
-    /// Writes an edited ymap (as a resource, like the game's).
-    pub fn save_map(&mut self, name: u32, path: &Path) -> Result<(), String> {
-        self.project.get_or_insert_with(Project::new).add_file(path);
+    /// A ymap as it's saved (as a resource, like the game's).
+    fn map_bytes(&self, name: u32) -> Result<Vec<u8>, String> {
         let doc = self.maps.get(&name).filter(|m| m.exists).ok_or("no such ymap")?;
         let mut root = (*doc.root).clone();
         save::update_map(&mut root, &self.data.archetypes);
         let mut meta = doc.header.clone();
         meta.root = Some(root);
-        let bytes = meta.save().map_err(|e| e.to_string())?;
-        std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        meta.save().map_err(|e| e.to_string())
+    }
+
+    /// Writes an edited ymap.
+    pub fn save_map(&mut self, name: u32, path: &Path) -> Result<(), String> {
+        self.project.get_or_insert_with(Project::new).add_file(path);
+        let bytes = self.map_bytes(name)?;
+        autosave::write_safely(path, &bytes)?;
         let doc = self.maps.get_mut(&name).unwrap();
         doc.saved = Some(doc.root.clone());
         doc.path = Some(path.to_owned());
@@ -789,7 +800,7 @@ impl Editor {
     pub fn write_manifest(&mut self, path: &Path) -> Result<(), String> {
         let cx = rf_formats::formats::XmlContext { hashes: &self.hashes, folder: None };
         let data = rf_formats::formats::pso::from_xml(&self.manifest_xml(), &cx).map_err(|e| e.to_string())?;
-        std::fs::write(path, data).map_err(|e| format!("{}: {e}", path.display()))?;
+        autosave::write_safely(path, &data)?;
         let project = self.project.get_or_insert_with(Project::new);
         project.add_file(path);
         if !self.assets.iter().any(|f| f == path) {

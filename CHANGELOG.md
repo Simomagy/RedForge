@@ -19,6 +19,11 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   converted to the game's file next to the XML (as in RedForge 1.x), and
   folders. Files from another folder are copied into the project's, so the
   project keeps them (Project pane, More).
+- Autosave: every two minutes, the files with unsaved changes are written
+  aside; if RedForge closes before they're saved (a crash, a power cut),
+  opening the project asks to restore them.
+- Saving keeps the file it replaces as `<name>.bak`, and writes the new one
+  whole or not at all: a crash while saving no longer leaves half a file.
 - `.rfproj` files have an icon of their own in the file manager: a page with
   "PROJ" and RedForge's anvil.
 - A File menu with the project's commands: New project, Open project

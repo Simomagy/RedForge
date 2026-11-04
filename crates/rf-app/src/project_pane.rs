@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use eframe::egui::{self, RichText};
 use rf_editor::{DocKey, Editor, ProjectEntry, redm};
@@ -24,6 +25,29 @@ const REOPEN_LAST: &str = "Project.ReopenLast";
 const PLACE_IN: &str = "placeIn";
 /// Whether files added from elsewhere are copied into the project's folder.
 const COPY_ADDED: &str = "Project.CopyAdded";
+/// How often the changed files are autosaved.
+const AUTOSAVE_EVERY: Duration = Duration::from_secs(120);
+
+/// Where a project's autosave goes (a project not saved yet has one too).
+fn autosave_dir(editor: &Editor) -> Option<PathBuf> {
+    let key = match editor.project.as_ref().and_then(|p| p.file.as_ref()) {
+        Some(f) => format!("{:08x}", rf_formats::hash::joaat(&f.display().to_string().to_lowercase())),
+        None => "unsaved".into(),
+    };
+    Some(dirs::config_dir()?.join("RedForge").join("autosave").join(key))
+}
+
+/// "12 minutes ago".
+fn ago(time: u64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    match now.saturating_sub(time) / 60 {
+        0 => "a moment ago".into(),
+        1 => "a minute ago".into(),
+        m if m < 120 => format!("{m} minutes ago"),
+        m if m < 48 * 60 => format!("{} hours ago", m / 60),
+        m => format!("{} days ago", m / (24 * 60)),
+    }
+}
 
 /// Whether a file can join a project: a game file, an XML export of one, or
 /// a folder of them.
@@ -135,6 +159,10 @@ pub struct ProjectPane {
     /// How tall the RedM resource section and the status were last frame:
     /// the files' list takes the rest.
     bottom_height: f32,
+    /// When the changed files were last autosaved.
+    autosaved: Option<Instant>,
+    /// An autosave found when the project opened, to ask about.
+    restore: Option<(PathBuf, rf_editor::autosave::Autosave)>,
 }
 
 #[derive(Default, Clone)]
@@ -169,7 +197,95 @@ impl ProjectPane {
             self.open_from_outside(editor, settings, file);
         }
         self.keep_target(editor);
+        self.autosave(editor);
+        self.restore_ui(ctx, editor);
         self.confirm_ui(ctx, editor, settings)
+    }
+
+    /// Every couple of minutes while files have unsaved changes: them, where
+    /// [`ProjectPane::restore_ui`] finds them if RedForge closes first.
+    fn autosave(&mut self, editor: &Editor) {
+        if !editor.has_unsaved() || self.restore.is_some() {
+            return;
+        }
+        if self.autosaved.is_some_and(|t| t.elapsed() < AUTOSAVE_EVERY) {
+            return;
+        }
+        self.autosaved = Some(Instant::now());
+        let Some(dir) = autosave_dir(editor) else { return };
+        let project = editor.project.as_ref().and_then(|p| p.file.clone());
+        if let Err(e) = editor.autosave(&dir, project.as_deref()) {
+            log::warn!("autosaving: {e}");
+        }
+    }
+
+    /// The autosave goes: the changes were saved, or let go.
+    fn clear_autosave(&mut self, editor: &Editor) {
+        if let Some(dir) = autosave_dir(editor) {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        self.autosaved = None;
+    }
+
+    /// Just opened (or started without a project): an autosave left from
+    /// last time is asked about.
+    fn find_autosave(&mut self, editor: &Editor) {
+        let Some(dir) = autosave_dir(editor) else { return };
+        if let Some(a) = rf_editor::autosave::Autosave::read(&dir).filter(|a| !a.files.is_empty()) {
+            self.restore = Some((dir, a));
+        }
+    }
+
+    /// "Restore unsaved changes?", for an autosave found.
+    fn restore_ui(&mut self, ctx: &egui::Context, editor: &mut Editor) {
+        let Some((dir, found)) = &self.restore else { return };
+        let what = match editor.project.as_ref() {
+            Some(p) => format!("{} of {}", crate::map::tools::count(found.files.len(), "file"), p.name()),
+            None => crate::map::tools::count(found.files.len(), "file"),
+        };
+        let names: Vec<&str> =
+            found.files.iter().take(5).map(|f| f.name.rsplit('/').next().unwrap_or(&f.name)).collect();
+        let (mut restore, mut discard) = (false, false);
+        let modal = egui::Modal::new(egui::Id::new("restore-autosave")).frame(theme::card(20)).show(ctx, |ui| {
+            ui.set_width(400.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(icon::CLOCK_COUNTER_CLOCKWISE).size(26.0).color(theme::ACCENT));
+                ui.vertical(|ui| {
+                    ui.label(RichText::new("Restore unsaved changes?").font(theme::heading(theme::SIZE + 4.0)));
+                    ui.label(
+                        RichText::new(format!(
+                            "RedForge closed before saving {what}. They were autosaved {}.",
+                            ago(found.time)
+                        ))
+                        .color(theme::WEAK),
+                    );
+                    ui.label(RichText::new(names.join(", ")).small().color(theme::WEAK));
+                });
+            });
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                restore = ui.add(theme::primary("Restore")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                discard = ui.add(theme::secondary("Discard")).clicked();
+            });
+        });
+        let dir = dir.clone();
+        if restore {
+            self.restore = None;
+            match editor.restore_autosave(&dir) {
+                Ok(n) => {
+                    let done = format!("Restored the unsaved changes of {}", crate::map::tools::count(n, "file"));
+                    self.status = Some(done.clone());
+                    self.toast = Some((done, false));
+                }
+                Err(e) => self.fail(format!("Restoring the autosave: {e}")),
+            }
+        } else if discard {
+            self.restore = None;
+            let _ = std::fs::remove_dir_all(&dir);
+        } else if modal.should_close() {
+            // Asked again next time.
+            self.restore = None;
+        }
     }
 
     /// The ymap new things go in, when it changes: kept in the project, to
@@ -600,6 +716,8 @@ impl ProjectPane {
         self.export = None;
         self.selected.clear();
         self.restore_target(editor);
+        self.autosaved = None;
+        self.find_autosave(editor);
     }
 
     fn close(&mut self, editor: &mut Editor, settings: &mut Settings) {
@@ -618,6 +736,7 @@ impl ProjectPane {
                 Err(e) => self.status = Some(e),
             }
             self.restore_target(editor);
+            self.find_autosave(editor);
             return;
         }
         let last = settings.get(LAST).map(PathBuf::from).filter(|f| f.is_file());
@@ -625,6 +744,8 @@ impl ProjectPane {
             && let Some(file) = last
         {
             self.open(editor, settings, &file);
+        } else {
+            self.find_autosave(editor);
         }
     }
 
@@ -675,6 +796,9 @@ impl ProjectPane {
                     editor.project.as_ref().is_some_and(|p| p.export.get("onSave").is_some_and(|v| v == "true"));
                 if on_save {
                     self.export(editor, settings, true);
+                }
+                if !editor.has_unsaved() {
+                    self.clear_autosave(editor);
                 }
             }
             Ok(homeless) => {
@@ -785,6 +909,9 @@ impl ProjectPane {
             if editor.has_unsaved() {
                 return None;
             }
+        } else if unsaved {
+            // "Don't save": the changes are let go, autosaved ones too.
+            self.clear_autosave(editor);
         }
         match pending {
             Some(Pending::Open(file)) => self.open(editor, settings, &file),
