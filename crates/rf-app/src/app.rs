@@ -97,7 +97,7 @@ impl Tab {
 /// `REDFORGE_SELECT_CENTRE=1` selects what's in the middle of the world map
 /// two seconds before, with the Move tool; `REDFORGE_TEST_DRAG=1` then drags
 /// the gizmo's X arrow 100 pixels with made-up mouse events and logs what
-/// happened. `REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside
+/// happened (`=copy`: with Shift, dragging copies). `REDFORGE_OBJECTS_SEARCH=<text>` shows the Objects pane beside
 /// the world map with that search, and chooses the first object shown.
 /// `REDFORGE_TEST_QUIT=1` closes the window a second and a half before, to
 /// see the question about unsaved changes.
@@ -115,19 +115,38 @@ struct AutoShot {
     requested: bool,
 }
 
-/// The world map at an `AutoShot` target (`world:<place>` or `world:x,y,z[,yaw,pitch]`).
-fn world_view(game: &Arc<Game>, gpu: &Gpu, editor: &Editor, target: &str) -> Option<MapView> {
-    let mut v = MapView::world(game, gpu, editor);
-    let Some(at) = target.strip_prefix(':') else { return target.is_empty().then_some(v) };
+/// Points a world map at a place (`Valentine`) or a camera (`x,y,z[,yaw,pitch]`),
+/// with or without a leading `:` (as `AutoShot`'s `world:<target>` has it);
+/// false when there's no such place.
+fn aim(v: &mut MapView, editor: &Editor, target: &str) -> bool {
+    let at = target.strip_prefix(':').unwrap_or(target).trim();
+    if at.is_empty() {
+        return true;
+    }
     let numbers: Vec<f32> = at.split(',').filter_map(|n| n.trim().parse().ok()).collect();
     if numbers.len() >= 3 {
         let (yaw, pitch) = (numbers.get(3).copied().unwrap_or(0.0), numbers.get(4).copied().unwrap_or(-0.3));
         v.set_camera(glam::Vec3::new(numbers[0], numbers[1], numbers[2]), yaw, pitch);
-        return Some(v);
+        return true;
     }
-    let (_, p) = editor.world.places().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(at))?;
+    let Some((_, p)) = editor.world.places().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(at)) else {
+        return false;
+    };
     v.view_place(p.into());
-    Some(v)
+    true
+}
+
+/// A tab's kind and file, to find it open already.
+fn tab_key(t: &Tab) -> Option<(&'static str, &str)> {
+    Some(match t {
+        Tab::Model(v) => ("model", v.path.as_str()),
+        Tab::Anim(v) => ("anim", v.path.as_str()),
+        Tab::Texture(v) => ("texture", v.path.as_str()),
+        Tab::Text(v) => ("text", v.path.as_str()),
+        Tab::Hex(v) => ("hex", v.path.as_str()),
+        Tab::Map(v) => ("map", v.path.as_str()),
+        _ => return None,
+    })
 }
 
 pub struct RedForgeApp {
@@ -193,7 +212,9 @@ impl RedForgeApp {
                 out: out.into(),
                 delay: std::env::var("REDFORGE_SCREENSHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(6.0),
                 select_centre: std::env::var("REDFORGE_SELECT_CENTRE").is_ok(),
-                drag_test: std::env::var("REDFORGE_TEST_DRAG").is_ok().then(DragTest::default),
+                drag_test: std::env::var("REDFORGE_TEST_DRAG")
+                    .ok()
+                    .map(|v| DragTest { copy: v == "copy", ..Default::default() }),
                 quit_test: std::env::var("REDFORGE_TEST_QUIT").is_ok().then_some(false),
                 tab_shown: false,
                 objects_search: std::env::var("REDFORGE_OBJECTS_SEARCH").ok(),
@@ -270,6 +291,22 @@ impl RedForgeApp {
     }
 
     fn open(&mut self, ctx: &egui::Context, game: &Arc<Game>, action: BrowserAction) {
+        // Open already: brought to the front.
+        let path = game.path(match action {
+            BrowserAction::Open(f) | BrowserAction::OpenXml(f) | BrowserAction::OpenHex(f) => f,
+        });
+        let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+        let kind = match (&action, ext.as_str()) {
+            (BrowserAction::OpenHex(_), _) => "hex",
+            (BrowserAction::Open(_), "ydr" | "ydd" | "yft") => "model",
+            (BrowserAction::Open(_), "ycd") => "anim",
+            (BrowserAction::Open(_), "ytd") => "texture",
+            (BrowserAction::Open(_), "ymap") => "map",
+            _ => "text",
+        };
+        if self.focus_tab(|t| tab_key(t).is_some_and(|(k, p)| k == kind && p == path)) {
+            return;
+        }
         let tab = match action {
             BrowserAction::OpenXml(f) => Tab::Text(Box::new(TextViewer::open_xml(ctx, game, f))),
             BrowserAction::OpenHex(f) => Tab::Hex(Box::new(HexViewer::open(ctx, game, f))),
@@ -296,12 +333,36 @@ impl RedForgeApp {
 
     /// The world map, with the editor (made the first time), and Properties
     /// and Objects beside it.
+    /// One world map only: open already, it's brought to the front and
+    /// looks at the place.
     fn open_world(&mut self, game: &Arc<Game>, place: Option<&str>) -> bool {
-        let editor = self.editor.get_or_insert_with(|| Editor::new(game.fs.clone(), game.hashes.clone(), game.data()));
-        let Some(view) = world_view(game, &self.gpu, editor, place.unwrap_or_default()) else { return false };
+        self.editor.get_or_insert_with(|| Editor::new(game.fs.clone(), game.hashes.clone(), game.data()));
+        let place = place.unwrap_or_default();
+        let is_world = |t: &Tab| matches!(t, Tab::Map(v) if v.is_world());
+        if self.focus_tab(is_world) {
+            let editor = self.editor.as_ref().unwrap();
+            let open = self.dock.iter_all_tabs_mut().find_map(|(_, t)| match t {
+                Tab::Map(v) if v.is_world() => Some(v),
+                _ => None,
+            });
+            return open.is_some_and(|v| aim(v, editor, place));
+        }
+        let editor = self.editor.as_ref().unwrap();
+        let mut view = MapView::world(game, &self.gpu, editor);
+        if !aim(&mut view, editor, place) {
+            return false;
+        }
         self.show_tab(Tab::Map(Box::new(view)));
         self.show_side_tab(Tab::Properties, false);
         self.show_side_tab(Tab::Objects, false);
+        true
+    }
+
+    /// Brings the first tab `which` matches to the front; false when none does.
+    fn focus_tab(&mut self, which: impl Fn(&Tab) -> bool) -> bool {
+        let Some(path) = self.dock.find_tab_from(which) else { return false };
+        self.dock.set_focused_node_and_surface(path.node_path());
+        let _ = self.dock.set_active_tab(path);
         true
     }
 
@@ -593,6 +654,8 @@ struct DragTest {
     start: Option<(egui::Pos2, egui::Vec2)>,
     entity: Option<(rf_editor::EntityId, glam::Vec3)>,
     step: u32,
+    /// With Shift held (`REDFORGE_TEST_DRAG=copy`): copies are dragged.
+    copy: bool,
 }
 
 impl RedForgeApp {
@@ -825,12 +888,9 @@ impl TabViewer for Tabs<'_> {
     fn id(&mut self, tab: &mut Tab) -> egui::Id {
         match tab {
             Tab::Welcome => egui::Id::new("welcome"),
-            Tab::Model(v) => egui::Id::new(("model", &v.path)),
-            Tab::Anim(v) => egui::Id::new(("anim", &v.path)),
-            Tab::Texture(v) => egui::Id::new(("texture", &v.path)),
-            Tab::Text(v) => egui::Id::new(("text", &v.path)),
-            Tab::Hex(v) => egui::Id::new(("hex", &v.path)),
-            Tab::Map(v) => egui::Id::new(("map", &v.path)),
+            Tab::Model(_) | Tab::Anim(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_) | Tab::Map(_) => {
+                egui::Id::new(tab_key(tab))
+            }
             Tab::Properties => egui::Id::new("properties"),
             Tab::Project => egui::Id::new("project"),
             Tab::Hierarchy => egui::Id::new("hierarchy"),
@@ -949,11 +1009,17 @@ impl eframe::App for RedForgeApp {
             modifiers: Default::default(),
         };
         let at = |k: u32| start + dir * (k as f32 * 10.0);
+        if d.copy && (d.step == 0 || d.step == 13) {
+            let shift = if d.step == 0 { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
+            raw.events.push(egui::Event::ModifiersChanged(shift));
+        }
         match d.step {
             0 => raw.events.push(egui::Event::PointerMoved(start)),
             1 => raw.events.push(button(start, true)),
             2..=11 => raw.events.push(egui::Event::PointerMoved(at(d.step - 1))),
             12 => raw.events.push(button(at(10), false)),
+            // Shift goes up.
+            13 => {}
             _ => return,
         }
         d.step += 1;

@@ -1332,6 +1332,24 @@ impl Editor {
         self.redo.iter().rev().map(|s| s.label.as_str())
     }
 
+    /// Makes the last two steps one, called `label`: a copy dragged, its
+    /// duplicate and its move.
+    pub fn merge_last_steps(&mut self, label: &str) {
+        if self.undo.len() < 2 {
+            return;
+        }
+        let last = self.undo.pop().unwrap();
+        let first = self.undo.last_mut().unwrap();
+        for (key, before, after) in last.docs {
+            match first.docs.iter_mut().find(|d| d.0 == key) {
+                Some(d) => d.2 = after,
+                None => first.docs.push((key, before, after)),
+            }
+        }
+        first.selection[1] = last.selection[1].clone();
+        first.label = label.to_owned();
+    }
+
     pub fn undo(&mut self) -> Option<String> {
         let step = self.undo.pop()?;
         for (key, before, _) in &step.docs {

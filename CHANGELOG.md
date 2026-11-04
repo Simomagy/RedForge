@@ -37,6 +37,20 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   again when it opens; a project with one ymap has it chosen. Placing or
   pasting without one says where to choose it.
 - Game Files' **Copy path** copies the whole path, not only the file's name.
+- Typing a value in Properties is one undo step when it's done (Enter, or a
+  click elsewhere); it used to be one per key, moving the object at each.
+  Hash and 64-bit fields (the entity's `id`) can be typed in, and whole
+  numbers stay in their range (dragging below 0 gave 255).
+- Dragging copies (Shift) is one undo step, **Copy and move**; when the
+  copies can't be made the originals don't move. Esc during a drag puts
+  everything back.
+- Q and E turn what's placed at the same speed at any frame rate (45° a
+  second, 180° with Shift), or by the angle snap's step a press.
+- Opening the world map or a file that's open already brings its tab to the
+  front, instead of opening it again (two world maps streamed twice).
+- The towns on the welcome page open the map there.
+- Esc clears selected helpers too, and an archetype error in Properties goes
+  when the selection changes.
 
 ## [2.1.0] - 2026-11-03
 

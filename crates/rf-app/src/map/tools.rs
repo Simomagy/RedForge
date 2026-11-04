@@ -64,12 +64,18 @@ pub struct Tools {
     pub hover_point: Option<Vec3>,
     pending: Option<Pending>,
     status: Option<(String, Instant)>,
+    /// The gizmo drag was cancelled (Esc, or its copies couldn't be made):
+    /// the gizmo waits for the button to go up.
+    blocked: bool,
 }
 
 /// A gizmo drag: the dragged entities where they started and are now.
 struct Drag {
     start: Vec<(EntityId, Placement)>,
     now: Vec<(EntityId, Placement)>,
+    /// Copies are dragged (Shift at the start): their duplicate is a step
+    /// already, which the move joins.
+    copy: bool,
 }
 
 /// A hover pick on its way back from the GPU, with what was drawn then.
@@ -106,6 +112,7 @@ impl Default for Tools {
             hover_point: None,
             pending: None,
             status: None,
+            blocked: false,
         }
     }
 }
@@ -228,6 +235,12 @@ impl Tools {
             ..*self.gizmo.config()
         });
         let pointer = ui.input(|i| i.pointer.clone());
+        if self.blocked {
+            if pointer.button_down(egui::PointerButton::Primary) {
+                return true;
+            }
+            self.blocked = false;
+        }
         let cursor = pointer.hover_pos().unwrap_or_default();
         let pressed = pointer.button_pressed(egui::PointerButton::Primary);
         if pressed {
@@ -243,8 +256,10 @@ impl Tools {
         match self.gizmo.update(interaction, &targets) {
             Some((_, moved)) => {
                 if self.drag.is_none() {
-                    // Shift at the start drags copies, as in the C#.
-                    if ui.input(|i| i.modifiers.shift) {
+                    // Shift at the start drags copies, as in the C#; if they
+                    // can't be made, nothing moves.
+                    let copy = ui.input(|i| i.modifiers.shift);
+                    if copy {
                         match editor.duplicate_selected() {
                             Ok(()) => {
                                 let copies = editor.selection().to_vec();
@@ -252,10 +267,14 @@ impl Tools {
                                     c.0 = id;
                                 }
                             }
-                            Err(e) => self.say(e),
+                            Err(e) => {
+                                self.say(e);
+                                self.blocked = true;
+                                return true;
+                            }
                         }
                     }
-                    self.drag = Some(Drag { start: current.clone(), now: current });
+                    self.drag = Some(Drag { start: current.clone(), now: current, copy });
                 }
                 let d = self.drag.as_mut().unwrap();
                 d.now = d
@@ -271,17 +290,37 @@ impl Tools {
         self.gizmo_press || self.gizmo.is_focused() || self.drag.is_some()
     }
 
+    /// The drag let go: one step (a copy dragged and its move, one too).
     fn finish_drag(&mut self, editor: &mut Editor) {
-        if let Some(d) = self.drag.take()
-            && d.now != d.start
-        {
-            let label = match self.tool {
-                Tool::Rotate => "Rotate",
-                Tool::Scale => "Scale",
-                _ => "Move",
-            };
-            editor.set_placements(label, &d.now);
+        let Some(d) = self.drag.take() else { return };
+        if d.now == d.start {
+            // Copies that didn't move would sit on the originals.
+            if d.copy {
+                editor.undo();
+            }
+            return;
         }
+        let label = match self.tool {
+            Tool::Rotate => "Rotate",
+            Tool::Scale => "Scale",
+            _ => "Move",
+        };
+        editor.set_placements(label, &d.now);
+        if d.copy {
+            editor.merge_last_steps(&format!("Copy and {}", label.to_lowercase()));
+        }
+    }
+
+    /// Esc during a drag: everything goes back, copies too.
+    fn cancel_drag(&mut self, editor: &mut Editor) -> bool {
+        let Some(d) = self.drag.take() else { return false };
+        editor.preview(&d.start);
+        if d.copy {
+            editor.undo();
+        }
+        self.blocked = true;
+        self.say("Cancelled");
+        true
     }
 
     /// Draws the gizmo (over the map image).
@@ -388,12 +427,17 @@ impl Tools {
             return;
         }
         if self.tool == Tool::Place {
-            let step = if shift { 1f32 } else { 5.0 }.to_radians();
-            if ui.input(|i| i.key_down(Key::Q)) {
-                self.place_yaw += step * if shift { 1.0 } else { 0.25 };
-            }
-            if ui.input(|i| i.key_down(Key::E)) {
-                self.place_yaw -= step * if shift { 1.0 } else { 0.25 };
+            // Q and E turn what's placed: a step of the angle snap a press,
+            // or 45° a second while held (Shift: 180°).
+            let turn = |k: Key| (pressed(k), ui.input(|i| i.key_down(k)));
+            let ((q, q_down), (e, e_down)) = (turn(Key::Q), turn(Key::E));
+            if self.snap_angle > 0.0 {
+                let step = self.snap_angle.to_radians();
+                self.place_yaw += step * (q as i32 - e as i32) as f32;
+            } else {
+                let dt = ui.input(|i| i.stable_dt).min(0.1);
+                let speed = if shift { 180f32 } else { 45.0 }.to_radians() * dt;
+                self.place_yaw += speed * (q_down as i32 - e_down as i32) as f32;
             }
         } else if pressed(Key::Q) {
             self.tool = if self.tool == Tool::Move { Tool::Select } else { Tool::Move };
@@ -406,11 +450,13 @@ impl Tools {
         if pressed(Key::Period) {
             self.local = !self.local;
         }
-        if pressed(Key::Escape) {
+        if pressed(Key::Escape) && !self.cancel_drag(editor) {
             if self.tool == Tool::Place {
                 self.tool = Tool::Select;
             } else {
                 editor.select(Vec::new());
+                self.helper_selection.clear();
+                self.selected_parts.clear();
             }
         }
         if pressed(Key::Delete)

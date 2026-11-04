@@ -54,6 +54,11 @@ pub struct Properties {
     archetype_text: String,
     archetype_for: Option<EntityId>,
     error: Option<String>,
+    /// The entity whose fields are shown.
+    shown: Option<EntityId>,
+    /// A text field being typed in (entity, field, text): kept as typed
+    /// until it's let go.
+    text: Option<(EntityId, u32, String)>,
 }
 
 /// The selected helpers of the selection mode (the last one's fields).
@@ -110,6 +115,7 @@ impl Properties {
         if selection.len() > 1 {
             ui.label(format!("{} selected; showing the last, fields change all of them", selection.len()));
         }
+        self.shown = Some(id);
         let hashes = editor.hashes();
         let info = editor.world.entity(id);
         let map = editor.world.map_file_name(id.node).unwrap_or("?").to_owned();
@@ -166,6 +172,7 @@ impl Properties {
         // The archetype, by name.
         if self.archetype_for != Some(id) {
             self.archetype_for = Some(id);
+            self.error = None;
             self.archetype_text =
                 editor.entity_def(id).map(|d| hashes.name(d.hash("archetypeName"))).unwrap_or_default();
         }
@@ -215,7 +222,8 @@ impl Properties {
             ui.horizontal(|ui| {
                 ui.label(label);
                 for v in values.iter_mut() {
-                    let r = ui.add(DragValue::new(v).speed(speed).max_decimals(4));
+                    // Typed values count when Enter or a click elsewhere ends them.
+                    let r = ui.add(DragValue::new(v).speed(speed).max_decimals(4).update_while_editing(false));
                     changed |= r.changed();
                     released |= r.drag_stopped() || (r.changed() && !r.dragged());
                 }
@@ -251,7 +259,7 @@ impl Properties {
                 let v = self.pending_value(key).map_or(def.f32(key), |v| v as f32);
                 let mut x = v;
                 ui.label(name);
-                let r = ui.add(DragValue::new(&mut x).speed(0.1).max_decimals(3));
+                let r = ui.add(DragValue::new(&mut x).speed(0.1).max_decimals(3).update_while_editing(false));
                 self.number_edit(editor, &r, key, x as f64, &label, move |d, v| d.set_f32(key, v as f32));
             }
             ValueType::UInt8
@@ -270,8 +278,16 @@ impl Properties {
                 };
                 let mut x = self.pending_value(key).map_or(raw, |v| v as i64);
                 let t = f.data_type;
+                let range = match t {
+                    ValueType::UInt8 => 0..=u8::MAX as i64,
+                    ValueType::UInt16 => 0..=u16::MAX as i64,
+                    ValueType::UInt32 => 0..=u32::MAX as i64,
+                    ValueType::Int8 => i8::MIN as i64..=i8::MAX as i64,
+                    ValueType::Int16 => i16::MIN as i64..=i16::MAX as i64,
+                    _ => i32::MIN as i64..=i32::MAX as i64,
+                };
                 ui.label(name);
-                let r = ui.add(DragValue::new(&mut x).speed(0.2));
+                let r = ui.add(DragValue::new(&mut x).speed(0.2).range(range).update_while_editing(false));
                 self.number_edit(editor, &r, key, x as f64, &label, move |d, v| {
                     let v = v as i64;
                     match t {
@@ -286,9 +302,7 @@ impl Properties {
             }
             ValueType::UInt64 | ValueType::Int64 => {
                 ui.label(name);
-                let mut text = format!("0x{:016X}", def.u64(key));
-                let r = ui.text_edit_singleline(&mut text);
-                if r.lost_focus() {
+                if let Some(text) = self.text_field(ui, key, format!("0x{:016X}", def.u64(key))) {
                     let t = text.trim().trim_start_matches("0x").trim_start_matches("0X");
                     if let Ok(v) = u64::from_str_radix(t, 16)
                         && v != def.u64(key)
@@ -306,8 +320,7 @@ impl Properties {
             }
             ValueType::Hash => {
                 ui.label(name);
-                let mut text = editor.hashes().name(def.hash(key));
-                if ui.text_edit_singleline(&mut text).lost_focus() {
+                if let Some(text) = self.text_field(ui, key, editor.hashes().name(def.hash(key))) {
                     let h = parse_hash(&text);
                     if h != def.hash(key) {
                         editor.modify(&label, |d| d.set_hash(key, h));
@@ -361,6 +374,25 @@ impl Properties {
             _ => return false,
         }
         true
+    }
+
+    /// A text field, kept as typed while it has the focus (the data's text
+    /// otherwise); its text when it's let go.
+    fn text_field(&mut self, ui: &mut egui::Ui, key: u32, from_data: String) -> Option<String> {
+        let shown = self.shown?;
+        let mut text = match &self.text {
+            Some((e, k, t)) if *e == shown && *k == key => t.clone(),
+            _ => from_data,
+        };
+        let r = ui.text_edit_singleline(&mut text);
+        if r.lost_focus() {
+            self.text = None;
+            return Some(text);
+        }
+        if r.has_focus() {
+            self.text = Some((shown, key, text));
+        }
+        None
     }
 
     fn pending_value(&self, key: u32) -> Option<f64> {
