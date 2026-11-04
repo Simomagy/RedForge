@@ -15,6 +15,7 @@ mod map;
 mod objects;
 mod project_pane;
 mod properties;
+mod session;
 mod settings;
 mod theme;
 mod tour;

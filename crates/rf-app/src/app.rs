@@ -192,6 +192,8 @@ pub struct RedForgeApp {
     about_open: bool,
     /// The window's title as last set.
     title: String,
+    /// The world map was open last time: it opens again once the game is.
+    reopen_world: bool,
 }
 
 /// The setting that's set once the tour was seen (or skipped).
@@ -274,12 +276,28 @@ impl RedForgeApp {
             shortcuts_open: false,
             about_open: false,
             title: "RedForge".into(),
+            reopen_world: false,
         };
+        // The layout, the world map and the tools as they were last time.
+        if app.keeps_session() {
+            let saved = cc.storage.and_then(|s| eframe::get_value(s, crate::session::DOCK));
+            if let Some((dock, world)) = saved.as_ref().and_then(crate::session::restore_dock) {
+                app.dock = dock;
+                app.reopen_world = world;
+            }
+            crate::session::restore_tools(&mut app.tools, &app.settings);
+        }
         // `REDFORGE_OPEN=folder`: the game folder's dialog, for its screenshot.
         if let Some(f) = folder.filter(|_| app.auto.as_ref().is_none_or(|a| a.open != "folder")) {
             app.load_game(&cc.egui_ctx, PathBuf::from(f));
         }
         app
+    }
+
+    /// Whether the layout, the world map and the tools are kept between runs:
+    /// not while testing, unless `REDFORGE_SESSION=1`.
+    fn keeps_session(&self) -> bool {
+        self.auto.is_none() || std::env::var("REDFORGE_SESSION").is_ok()
     }
 
     /// The window's title: the project, with a dot while files have unsaved
@@ -380,8 +398,21 @@ impl RedForgeApp {
             });
             return open.is_some_and(|v| aim(v, editor, place));
         }
-        let editor = self.editor.as_ref().unwrap();
+        let keeps = self.keeps_session();
+        let editor = self.editor.as_mut().unwrap();
         let mut view = MapView::world(game, &self.gpu, editor);
+        if keeps {
+            // As it was last time; at the project, when it's another one.
+            let project = editor.project.as_ref().and_then(|p| p.file.clone());
+            let kept = crate::session::kept_map(&self.settings);
+            if let Some(s) = &kept {
+                view.set_state(s, editor);
+            }
+            let same = kept.is_some() && crate::session::camera_project(&self.settings) == project;
+            if !same && let Some(c) = editor.project_centre() {
+                view.view_place(c);
+            }
+        }
         if !aim(&mut view, editor, place) {
             return false;
         }
@@ -389,6 +420,42 @@ impl RedForgeApp {
         self.show_side_tab(Tab::Properties, false);
         self.show_side_tab(Tab::Objects, false);
         true
+    }
+
+    /// A pane of the left column (View's): to the front, or back beside the
+    /// others.
+    fn show_pane(&mut self, tab: Tab) {
+        let kind = std::mem::discriminant(&tab);
+        if self.focus_tab(|t| std::mem::discriminant(t) == kind) {
+            return;
+        }
+        let left = |t: &Tab| matches!(t, Tab::Project | Tab::GameFiles | Tab::Hierarchy);
+        match self.dock.find_tab_from(left).and_then(|p| self.dock.leaf_mut(p.node_path()).ok()) {
+            Some(leaf) => leaf.append_tab(tab),
+            None => {
+                self.dock.main_surface_mut().split_left(NodeIndex::root(), 0.22, vec![tab]);
+            }
+        }
+    }
+
+    /// View > Reset layout: the panes where they start, with the documents.
+    fn reset_layout(&mut self) {
+        let mut documents = Vec::new();
+        self.dock.retain_tabs(|t| {
+            if tab_key(t).is_some() {
+                documents.push(std::mem::replace(t, Tab::Welcome));
+            }
+            false
+        });
+        self.dock = default_dock();
+        let world = documents.iter().any(|t| matches!(t, Tab::Map(v) if v.is_world()));
+        for d in documents {
+            self.show_tab(d);
+        }
+        if world {
+            self.show_side_tab(Tab::Properties, false);
+            self.show_side_tab(Tab::Objects, false);
+        }
     }
 
     /// Brings the first tab `which` matches to the front; false when none does.
@@ -847,26 +914,34 @@ impl Tabs<'_> {
     /// The welcome page: the world map a click away (and at a town), and
     /// what else there is to open.
     fn welcome_ui(&mut self, ui: &mut egui::Ui) {
-        let places: Vec<String> =
-            self.editor.as_deref().map(|e| e.world.places().into_iter().map(|p| p.0).collect()).unwrap_or_default();
+        let all_places = self.editor.as_deref().map(|e| e.world.places()).unwrap_or_default();
+        let places: Vec<String> = all_places.iter().map(|p| p.0.clone()).collect();
+        let kept = crate::session::kept_map(self.settings);
         ui.vertical_centered(|ui| {
-            ui.add_space((ui.available_height() * 0.2).max(24.0));
+            ui.add_space((ui.available_height() * 0.16).max(24.0));
             ui.add(egui::Image::new(self.icon).fit_to_exact_size(egui::vec2(96.0, 96.0)));
             ui.label(egui::RichText::new("RedForge").font(crate::theme::heading(34.0)));
             ui.label(egui::RichText::new("A map editor for RedM").weak());
             ui.add_space(24.0);
-            let text = format!("{}  Open the world map", crate::theme::icon::MAP_TRIFOLD);
+            // Where the camera was last time, or the map's start.
+            let (label, tip) = match kept {
+                Some(_) => ("Continue where you left off", "The world map, with the camera where it was"),
+                None => ("Open the world map", "The game's map, streamed around you (View > World map)"),
+            };
+            let text = format!("{}  {label}", crate::theme::icon::MAP_TRIFOLD);
             let open = egui::Button::new(egui::RichText::new(text).size(18.0).color(crate::theme::ON_ACCENT))
                 .fill(crate::theme::ACCENT)
                 .corner_radius(egui::CornerRadius::same(crate::theme::BIG_RADIUS))
-                .min_size(egui::vec2(260.0, 44.0));
+                .min_size(egui::vec2(300.0, 44.0));
             let enabled = self.game.is_some();
-            if ui
-                .add_enabled(enabled, open)
-                .on_hover_text("The game's map, streamed around you (View > World map)")
-                .clicked()
-            {
+            if ui.add_enabled(enabled, open).on_hover_text(tip).clicked() {
                 *self.open_world = Some(String::new());
+            }
+            if let Some(k) = &kept {
+                let project = self.editor.as_deref().and_then(|e| e.project.as_ref().map(|p| p.name()));
+                let near = crate::session::nearest_place(&all_places, k.position).map(|n| format!("near {n}"));
+                let what: Vec<String> = project.into_iter().chain(near).collect();
+                ui.label(egui::RichText::new(what.join(", ")).small().weak());
             }
             if enabled && !places.is_empty() {
                 ui.add_space(12.0);
@@ -884,11 +959,42 @@ impl Tabs<'_> {
                     });
                 });
             }
+            // Projects: the recent ones, a new one, one from disk.
+            if let Some(ed) = self.editor.as_deref_mut() {
+                ui.add_space(28.0);
+                ui.label(egui::RichText::new("Projects").font(crate::theme::strong(crate::theme::SIZE + 1.0)));
+                ui.add_space(4.0);
+                let open = ed.project.as_ref().and_then(|p| p.file.clone());
+                let recent: Vec<PathBuf> = crate::project_pane::recent(self.settings)
+                    .into_iter()
+                    .filter(|f| open.as_deref() != Some(f.as_path()))
+                    .take(5)
+                    .collect();
+                let width = ui.available_width().min(560.0);
+                ui.allocate_ui(egui::vec2(width, 0.0), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        use crate::theme::{icon, icon_text};
+                        if ui.button(icon_text(icon::PLUS, "New…")).clicked() {
+                            self.project.new_asking(ed, self.settings);
+                        }
+                        if ui.button(icon_text(icon::FOLDER_OPEN, "Open…")).clicked() {
+                            self.project.open_dialog(ed, self.settings);
+                        }
+                        for file in recent {
+                            let name = file.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                            let link = ui.link(icon_text(icon::FILE, &name)).on_hover_text(file.display().to_string());
+                            if link.clicked() {
+                                self.project.open_asking(ed, self.settings, file);
+                            }
+                        }
+                    });
+                });
+            }
             ui.add_space(28.0);
             ui.label(
                 egui::RichText::new(
                     "Or open a model (ydr, ydd, yft), a texture dictionary (ytd), a clip dictionary (ycd) or any other \
-                     file from Game Files, and a project from the Project pane.",
+                     file from Game Files.",
                 )
                 .weak(),
             );
@@ -1002,7 +1108,13 @@ impl TabViewer for Tabs<'_> {
             Tab::Model(v) => v.free(self.gpu),
             Tab::Anim(v) => v.free(self.gpu),
             Tab::Texture(v) => v.free(self.gpu),
-            Tab::Map(v) => v.free(self.gpu),
+            Tab::Map(v) => {
+                if v.is_world() {
+                    let project = self.editor.as_deref().and_then(|e| e.project.as_ref()?.file.clone());
+                    crate::session::remember_map(self.settings, &v.state(), project.as_deref());
+                }
+                v.free(self.gpu)
+            }
             Tab::Objects => self.objects.free(self.gpu),
             _ => {}
         }
@@ -1011,6 +1123,23 @@ impl TabViewer for Tabs<'_> {
 }
 
 impl eframe::App for RedForgeApp {
+    /// Now and then and when quitting: the layout (in eframe's storage, with
+    /// the window), and the world map (in the settings).
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if !self.keeps_session() {
+            return;
+        }
+        eframe::set_value(storage, crate::session::DOCK, &crate::session::saved_dock(&self.dock));
+        let world = self.dock.iter_all_tabs().find_map(|(_, t)| match t {
+            Tab::Map(v) if v.is_world() => Some(v.state()),
+            _ => None,
+        });
+        if let Some(s) = world {
+            let project = self.editor.as_ref().and_then(|e| e.project.as_ref()?.file.clone());
+            crate::session::remember_map(&mut self.settings, &s, project.as_deref());
+        }
+    }
+
     /// Closing the window (its X, Alt+F4, File > Quit) asks first when files
     /// have unsaved changes; here, as this runs when the window is minimised
     /// too.
@@ -1224,13 +1353,7 @@ impl eframe::App for RedForgeApp {
                             [("Project", Tab::Project), ("Hierarchy", Tab::Hierarchy), ("Game Files", Tab::GameFiles)]
                         {
                             if ui.button(label).clicked() {
-                                let missing = self
-                                    .dock
-                                    .find_tab_from(|t| std::mem::discriminant(t) == std::mem::discriminant(&tab))
-                                    .is_none();
-                                if missing {
-                                    self.dock.main_surface_mut().split_left(NodeIndex::root(), 0.22, vec![tab]);
-                                }
+                                self.show_pane(tab);
                                 ui.close();
                             }
                         }
@@ -1240,6 +1363,11 @@ impl eframe::App for RedForgeApp {
                         }
                         if ui.button("Objects").clicked() {
                             self.show_side_tab(Tab::Objects, true);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Reset layout").on_hover_text("The panes where they are at first").clicked() {
+                            self.reset_layout();
                             ui.close();
                         }
                     });
@@ -1349,6 +1477,14 @@ impl eframe::App for RedForgeApp {
                 Some(Ask::GameFolder) => self.ask_game_folder(),
                 None => {}
             }
+        }
+        if std::mem::take(&mut self.reopen_world)
+            && let Some(g) = &game
+        {
+            self.open_world(g, None);
+        }
+        if self.keeps_session() {
+            crate::session::remember_tools(&self.tools, &mut self.settings);
         }
 
         // The tour: the first time the game is open (once the loading screen

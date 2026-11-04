@@ -26,6 +26,14 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - The window's title shows the project, with a dot while files have
   unsaved changes.
 - Cut (Ctrl+X); T for the Scale tool and P for Place.
+- RedForge remembers the window's size, the panes' layout, the world map
+  (camera, hour, weather, speed, statistics, scripted maps) and the tools
+  (selection mode, snaps, axes). The world map opens again where it was if
+  it was open when quitting; with another project open, it looks at the
+  project's ymaps.
+- The welcome page has **Continue where you left off** (with the project
+  and the nearest town), and the projects: New, Open and the recent ones.
+- View > Reset layout.
 - The game folder is found by itself when Steam, the Rockstar Games Launcher,
   the Epic Games Launcher or Heroic on Linux installed the game.
 
@@ -66,6 +74,9 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   not only with the mouse over the map (but while typing in a field).
 - Esc clears selected helpers too, and an archetype error in Properties goes
   when the selection changes.
+- View's Project, Hierarchy and Game Files bring the pane to the front; one
+  that was closed goes back beside the others, instead of in a new column
+  every time.
 
 ## [2.1.0] - 2026-11-03
 

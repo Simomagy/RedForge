@@ -258,6 +258,20 @@ impl Editor {
         self.maps.get(&name).filter(|m| m.exists)
     }
 
+    /// The middle of what the project's ymaps place, to look at when it
+    /// opens; `None` without entities.
+    pub fn project_centre(&self) -> Option<glam::Vec3> {
+        let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+        for m in self.maps.values().filter(|m| m.in_project && m.exists) {
+            for def in lod::entities(&m.root).iter().flatten() {
+                let p = glam::Vec3::from(def.vec3("position"));
+                lo = lo.min(p);
+                hi = hi.max(p);
+            }
+        }
+        (lo.x <= hi.x).then(|| (lo + hi) * 0.5)
+    }
+
     /// The ymaps edited or made in the editor, by file name.
     pub fn edited_maps(&self) -> Vec<&MapDoc> {
         let mut list: Vec<&MapDoc> = self.maps.values().filter(|m| m.exists && m.is_edited()).collect();

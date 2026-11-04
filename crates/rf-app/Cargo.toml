@@ -16,8 +16,9 @@ embed-resource = "3"
 [dependencies]
 anyhow = "1.0.104"
 dirs = "7.0.0"
-eframe = "0.36"
-egui_dock = "0.21"
+# persistence: the window and the panes' layout are kept between runs.
+eframe = { version = "0.36", features = ["persistence"] }
+egui_dock = { version = "0.21", features = ["serde"] }
 egui-phosphor = "0.14"
 env_logger = "0.11.11"
 glam = "0.34.2"
@@ -26,6 +27,7 @@ log = "0.4.35"
 rf-formats.workspace = true
 rf-render = { path = "../rf-render" }
 rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
 tiny-skia = "0.11.4"
 rf-game = { path = "../rf-game" }
 rf-bridge = { path = "../rf-bridge" }

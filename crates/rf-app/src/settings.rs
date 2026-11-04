@@ -33,8 +33,21 @@ impl Settings {
     }
 
     pub fn set(&mut self, key: &str, value: impl Into<String>) {
-        self.values.insert(key.to_owned(), value.into());
-        self.save();
+        self.set_all([(key, value.into())]);
+    }
+
+    /// Sets several, saving once if any changed.
+    pub fn set_all<'a>(&mut self, values: impl IntoIterator<Item = (&'a str, String)>) {
+        let mut changed = false;
+        for (key, value) in values {
+            if self.values.get(key) != Some(&value) {
+                self.values.insert(key.to_owned(), value);
+                changed = true;
+            }
+        }
+        if changed {
+            self.save();
+        }
     }
 
     fn save(&self) {

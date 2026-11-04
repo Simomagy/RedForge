@@ -81,6 +81,19 @@ fn map_light(
     })
 }
 
+/// What a world map keeps between runs ([`crate::session`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapState {
+    pub position: Vec3,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub hour: f32,
+    pub weather: String,
+    pub speed: f32,
+    pub stats: bool,
+    pub scripted: bool,
+}
+
 pub struct MapView {
     pub title: String,
     pub path: String,
@@ -194,6 +207,32 @@ impl MapView {
         self.camera.position = place + Vec3::new(0.0, -90.0, 30.0);
         self.camera.yaw = 0.0;
         self.camera.pitch = -0.3;
+    }
+
+    pub fn state(&self) -> MapState {
+        MapState {
+            position: self.camera.position,
+            yaw: self.camera.yaw,
+            pitch: self.camera.pitch,
+            hour: self.hour,
+            weather: self.timecycle.as_ref().map_or("sunny", |t| t.weather.as_str()).to_owned(),
+            speed: self.speed,
+            stats: self.show_stats,
+            scripted: self.scripted,
+        }
+    }
+
+    /// The camera, hour, weather and view settings kept from last time.
+    pub fn set_state(&mut self, s: &MapState, editor: &mut Editor) {
+        self.set_camera(s.position, s.yaw, s.pitch);
+        self.hour = s.hour.rem_euclid(24.0);
+        if rf_game::timecycle::WEATHERS.contains(&s.weather.as_str()) {
+            self.timecycle = Some(rf_game::timecycle::TimeCycle::load(&self.game.fs, &s.weather));
+        }
+        self.speed = s.speed.clamp(1.0, 5000.0);
+        self.show_stats = s.stats;
+        self.scripted = s.scripted;
+        editor.world.set_hide_scripted(!s.scripted);
     }
 
     /// Puts the camera at a position, looking along `yaw` and `pitch` (radians).

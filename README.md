@@ -128,7 +128,8 @@ A project is your mod: the ymaps and ytyps you edit (editing anything of the
 game puts its ymap in the project) and the models, textures, collisions and
 ytyps you add, which replace the game's of the same name and show in Objects.
 The Project pane groups them by type; Save all (Ctrl+S) writes them next to
-the `.rfproj`, and RedForge reopens the last project when it starts.
+the `.rfproj`, and RedForge reopens the last project, and the world map
+where you left it, when it starts.
 Double-clicking an `.rfproj`, or dropping it on the window, opens it too (in
 the RedForge already open, if there's one).
 
