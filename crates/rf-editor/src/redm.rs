@@ -75,18 +75,44 @@ pub fn read_info(resource: &Path) -> BTreeMap<String, String> {
 /// Copies the game files into `resource/stream` and writes the manifest, or
 /// updates an existing one with only what's needed. Returns the files left
 /// out (not game files).
-pub fn export(resource: &Path, files: &[PathBuf], info: &BTreeMap<String, String>) -> Result<Vec<String>, String> {
+/// What an export did.
+#[derive(Debug, Default)]
+pub struct Exported {
+    /// The files that aren't game files, left out.
+    pub skipped: Vec<String>,
+    /// The game files written to `stream`.
+    pub written: Vec<String>,
+    /// Files an export before wrote (`before`) that aren't in the project
+    /// any more: taken out of `stream`, so they don't load in game.
+    pub removed: Vec<String>,
+}
+
+pub fn export(
+    resource: &Path,
+    files: &[PathBuf],
+    info: &BTreeMap<String, String>,
+    before: &[String],
+) -> Result<Exported, String> {
     let io = |e: std::io::Error, p: &Path| format!("{}: {e}", p.display());
     let stream = resource.join("stream");
     std::fs::create_dir_all(&stream).map_err(|e| io(e, &stream))?;
-    let mut skipped = Vec::new();
+    let mut done = Exported::default();
     for f in files {
         let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
         if is_game_file(f) {
             let to = stream.join(&name);
             std::fs::copy(f, &to).map_err(|e| io(e, f))?;
+            done.written.push(name);
         } else {
-            skipped.push(name);
+            done.skipped.push(name);
+        }
+    }
+    // Only what RedForge wrote goes; other files in stream stay.
+    for name in before {
+        let gone = !done.written.iter().any(|w| w.eq_ignore_ascii_case(name));
+        let file = stream.join(name);
+        if gone && file.is_file() && std::fs::remove_file(&file).is_ok() {
+            done.removed.push(name.clone());
         }
     }
 
@@ -96,6 +122,11 @@ pub fn export(resource: &Path, files: &[PathBuf], info: &BTreeMap<String, String
         existing.clone().unwrap_or_else(|| format!("fx_version 'cerulean'\r\ngame 'rdr3'\r\n{WARNING}\r\n\r\n"));
     if !text.ends_with('\n') {
         text.push_str("\r\n");
+    }
+    // The ytyps taken out of stream don't stay requested.
+    for name in done.removed.iter().filter(|n| n.to_lowercase().ends_with(".ytyp")) {
+        let quoted = format!("'stream/{name}'");
+        text = text.split_inclusive('\n').filter(|line| !line.contains(&quoted)).collect();
     }
     let mut added = String::new();
     if !text.contains("rdr3_warning") {
@@ -142,7 +173,7 @@ pub fn export(resource: &Path, files: &[PathBuf], info: &BTreeMap<String, String
     if existing.as_deref() != Some(text.as_str()) {
         std::fs::write(&manifest, &text).map_err(|e| io(e, &manifest))?;
     }
-    Ok(skipped)
+    Ok(done)
 }
 
 #[cfg(test)]
@@ -168,8 +199,9 @@ mod tests {
         let res = dir.path().join("res/my_map");
         let mut info =
             BTreeMap::from([("author".to_string(), "Prysma".to_string()), ("version".into(), "1.0.0".into())]);
-        let skipped = export(&res, &files, &info).unwrap();
-        assert_eq!(skipped, ["notes.txt"]);
+        let done = export(&res, &files, &info, &[]).unwrap();
+        assert_eq!(done.skipped, ["notes.txt"]);
+        assert_eq!(done.written, ["a.ymap", "b.ytyp"]);
         assert!(res.join("stream/a.ymap").exists() && res.join("stream/b.ytyp").exists());
         let text = std::fs::read_to_string(res.join("fxmanifest.lua")).unwrap();
         assert!(text.starts_with("fx_version 'cerulean'\r\ngame 'rdr3'\r\nrdr3_warning"));
@@ -180,7 +212,14 @@ mod tests {
         // A hand edit stays; a changed version replaces the line; nothing is added twice.
         std::fs::write(res.join("fxmanifest.lua"), text.clone() + "-- mine\r\n").unwrap();
         info.insert("version".into(), "1.1.0".into());
-        export(&res, &files, &info).unwrap();
+        std::fs::write(res.join("stream/mine.ydr"), b"x").unwrap();
+        let done = export(&res, &files[..1], &info, &["a.ymap".into(), "b.ytyp".into()]).unwrap();
+        // b.ytyp left the project: it goes, with its DLC_ITYP_REQUEST; a file of the user's stays.
+        assert_eq!(done.removed, ["b.ytyp"]);
+        assert!(!res.join("stream/b.ytyp").exists() && res.join("stream/mine.ydr").exists());
+        let without = std::fs::read_to_string(res.join("fxmanifest.lua")).unwrap();
+        assert!(!without.contains("b.ytyp") && without.contains("-- mine"));
+        export(&res, &files, &info, &done.written).unwrap();
         let again = std::fs::read_to_string(res.join("fxmanifest.lua")).unwrap();
         assert!(again.contains("-- mine") && again.contains("version '1.1.0'") && !again.contains("1.0.0"));
         assert_eq!(again.matches("DLC_ITYP_REQUEST").count(), 1);

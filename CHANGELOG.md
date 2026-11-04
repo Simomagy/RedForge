@@ -19,6 +19,17 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   converted to the game's file next to the XML (as in RedForge 1.x), and
   folders. Files from another folder are copied into the project's, so the
   project keeps them (Project pane, More).
+- The RedM export takes out of the resource's `stream` the files an earlier
+  export wrote that have left the project (and their ytyps' requests in
+  `fxmanifest.lua`), so they don't load in game any more; other files there
+  stay. It makes the project's `_manifest.ymf` again first.
+- Files of the project that aren't on disk any more show with a warning,
+  and a right click locates them; the export says which it left out.
+- Hierarchy: the object selected on the map is scrolled to, with its group
+  opened; Shift selects a range; a right click looks at, hides, duplicates
+  or deletes.
+- New ymap: Enter makes it, and with no name it's named after the project
+  (`<project>_01`).
 - Autosave: every two minutes, the files with unsaved changes are written
   aside; if RedForge closes before they're saved (a crash, a power cut),
   opening the project asks to restore them.
@@ -103,6 +114,7 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   not only with the mouse over the map (but while typing in a field).
 - Esc clears selected helpers too, and an archetype error in Properties goes
   when the selection changes.
+- **Remove from project** asks first when the file has unsaved changes.
 - View's Project, Hierarchy and Game Files bring the pane to the front; one
   that was closed goes back beside the others, instead of in a new column
   every time.

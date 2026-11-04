@@ -2,7 +2,8 @@
 //! selection is in, or of a ymap picked in the Project pane until the
 //! selection changes, as the C# RedForge shows them: grouped (a ymap's by LOD
 //! level, an interior's by room and entity set), searchable, each with an eye
-//! that hides it in the map view.
+//! that hides it in the map view. An object selected on the map is scrolled
+//! to; Shift selects a range, and a right click has what's done to objects.
 
 use std::collections::HashSet;
 
@@ -40,6 +41,10 @@ pub struct Hierarchy {
     /// A ymap picked in the Project pane, and the selection's last object
     /// then: it's shown until that changes.
     picked: Option<(u32, Option<EntityId>)>,
+    /// The selection's last object as last scrolled to.
+    followed: Option<EntityId>,
+    /// Where a Shift click's range starts.
+    anchor: Option<EntityId>,
 }
 
 fn lod_group(lod_level: i64) -> &'static str {
@@ -119,8 +124,35 @@ impl Hierarchy {
         }
 
         let row_height = theme::ROW;
+        let step = row_height + ui.spacing().item_spacing.y;
         let selection: HashSet<EntityId> = editor.selection().iter().copied().collect();
-        egui::ScrollArea::vertical().auto_shrink([false; 2]).show_rows(ui, row_height, rows.len(), |ui, range| {
+        // Selected elsewhere (the map): its group opens, and it's scrolled to.
+        let mut scroll = egui::ScrollArea::vertical().auto_shrink([false; 2]);
+        if last != self.followed {
+            self.followed = last;
+            let group = self.objects.iter().find_map(|r| match r {
+                Row::Object { id, group, .. } if Some(*id) == last => Some(group.clone()),
+                _ => None,
+            });
+            if let Some(g) = group
+                && self.collapsed.remove(&g)
+            {
+                // The rows change with it: next frame.
+                self.followed = None;
+            } else if let Some(at) = rows.iter().position(|r| matches!(r, Row::Object { id, .. } if Some(*id) == last))
+            {
+                let shown = ui.available_height();
+                scroll = scroll.vertical_scroll_offset((at as f32 * step - shown * 0.4).max(0.0));
+            }
+        }
+        let order: Vec<EntityId> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Object { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
             for row in &rows[range] {
                 match row {
                     Row::Group { name, count } => {
@@ -144,15 +176,50 @@ impl Hierarchy {
                             let note = if hidden { format!("#{index}  hidden") } else { format!("#{index}") };
                             let r = theme::row(ui, selection.contains(id), icon::CUBE, name, &note);
                             if r.clicked() {
-                                if ui.input(|i| i.modifiers.command) {
-                                    editor.toggle(*id);
-                                } else {
-                                    editor.select(vec![*id]);
+                                let (command, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+                                let from = self.anchor.and_then(|a| order.iter().position(|o| *o == a));
+                                let to = order.iter().position(|o| o == id);
+                                match (shift, from, to) {
+                                    (true, Some(a), Some(b)) => {
+                                        editor.select(order[a.min(b)..=a.max(b)].to_vec());
+                                    }
+                                    _ if command => editor.toggle(*id),
+                                    _ => editor.select(vec![*id]),
                                 }
+                                if !shift {
+                                    self.anchor = Some(*id);
+                                }
+                                self.followed = editor.selection().last().copied();
                             }
                             if r.double_clicked() {
                                 tools.focus = true;
                             }
+                            r.context_menu(|ui| {
+                                if !selection.contains(id) {
+                                    editor.select(vec![*id]);
+                                    self.followed = Some(*id);
+                                }
+                                if ui.button("Look at it").on_hover_text("Home").clicked() {
+                                    tools.focus = true;
+                                    ui.close();
+                                }
+                                let label = if hidden { "Show" } else { "Hide" };
+                                if ui.button(label).clicked() {
+                                    for s in editor.selection().to_vec() {
+                                        editor.world.set_hidden(s, !hidden);
+                                    }
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if ui.add(egui::Button::new("Duplicate").shortcut_text("Ctrl+D")).clicked() {
+                                    tools.duplicate(editor);
+                                    ui.close();
+                                }
+                                if ui.add(egui::Button::new("Delete").shortcut_text("Del")).clicked() {
+                                    tools.delete(editor);
+                                    ui.close();
+                                }
+                            });
                         });
                     }
                 }

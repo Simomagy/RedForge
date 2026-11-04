@@ -25,6 +25,9 @@ const REOPEN_LAST: &str = "Project.ReopenLast";
 const PLACE_IN: &str = "placeIn";
 /// Whether files added from elsewhere are copied into the project's folder.
 const COPY_ADDED: &str = "Project.CopyAdded";
+/// The project's `export` setting with the files the last export wrote
+/// (`|`-separated): the next one takes out those that left the project.
+const EXPORTED: &str = "exported";
 /// How often the changed files are autosaved.
 const AUTOSAVE_EVERY: Duration = Duration::from_secs(120);
 
@@ -112,6 +115,8 @@ enum Pending {
     Close,
     /// A new project, in place of the one open.
     New,
+    /// A file out of the project, its unsaved changes lost.
+    Remove(ProjectEntry),
     App(Ask),
 }
 
@@ -163,6 +168,9 @@ pub struct ProjectPane {
     autosaved: Option<Instant>,
     /// An autosave found when the project opened, to ask about.
     restore: Option<(PathBuf, rf_editor::autosave::Autosave)>,
+    /// The project's files that aren't there, and when that was looked at.
+    missing: HashSet<PathBuf>,
+    checked: Option<Instant>,
 }
 
 #[derive(Default, Clone)]
@@ -400,24 +408,38 @@ impl ProjectPane {
             }
         });
         ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.new_map_name).hint_text("name").desired_width(140.0));
-            if ui
+            let suggested = suggested_map_name(editor);
+            let field =
+                ui.add(egui::TextEdit::singleline(&mut self.new_map_name).hint_text(&suggested).desired_width(140.0));
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let made = ui
                 .button(theme::icon_text(icon::MAP_PIN, "New ymap"))
-                .on_hover_text("An empty ymap to place things in")
-                .clicked()
-            {
-                match editor.new_map(&self.new_map_name) {
+                .on_hover_text("An empty ymap to place things in (the name in the field, or the one it suggests)")
+                .clicked();
+            if made || enter {
+                let name = match self.new_map_name.trim() {
+                    "" => suggested,
+                    n => n.to_owned(),
+                };
+                match editor.new_map(&name) {
                     Ok(_) => {
-                        self.status = Some(format!("Made {}.ymap: new things go in it", self.new_map_name.trim()));
+                        let done = format!("Made {name}.ymap: new things go in it");
+                        self.status = Some(done.clone());
+                        self.toast = Some((done, false));
                         self.new_map_name.clear();
                     }
-                    Err(e) => self.status = Some(e),
+                    Err(e) => self.fail(e),
                 }
             }
         });
         ui.separator();
 
         let entries = editor.project_entries();
+        // Which files aren't there any more (looked at now and then).
+        if self.checked.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) {
+            self.checked = Some(Instant::now());
+            self.missing = entries.iter().filter_map(|e| e.path.clone()).filter(|p| !p.exists()).collect();
+        }
         if entries.is_empty() {
             ui.label(RichText::new("No files yet: edit the map, make a ymap, or add files.").weak());
             let recent = recent(settings);
@@ -456,7 +478,7 @@ impl ProjectPane {
                 }
                 if open {
                     for e in rows {
-                        self.entry_ui(ui, editor, e, root.as_deref());
+                        self.entry_ui(ui, editor, settings, e, root.as_deref());
                     }
                 }
             }
@@ -472,7 +494,15 @@ impl ProjectPane {
         self.bottom_height = bottom.response.rect.height();
     }
 
-    fn entry_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, e: &ProjectEntry, root: Option<&Path>) {
+    fn entry_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        editor: &mut Editor,
+        settings: &mut Settings,
+        e: &ProjectEntry,
+        root: Option<&Path>,
+    ) {
+        let missing = e.path.as_ref().is_some_and(|p| self.missing.contains(p));
         ui.horizontal(|ui| {
             ui.add_space(10.0);
             if let Some(DocKey::Map(name)) = e.doc {
@@ -487,8 +517,9 @@ impl ProjectPane {
             };
             let key = entry_key(e);
             let name = format!("{}{}", e.name, if e.dirty { "  •" } else { "" });
-            let folder = folder_text(root, e.path.as_deref());
-            let glyph = GROUPS[group_of(&e.name)].3;
+            let folder =
+                if missing { "missing: right click to locate it".into() } else { folder_text(root, e.path.as_deref()) };
+            let glyph = if missing { icon::WARNING } else { GROUPS[group_of(&e.name)].3 };
             let row = theme::row(ui, self.selected.contains(&key), glyph, &name, &folder).on_hover_text(tip);
             if row.clicked() {
                 if ui.input(|i| i.modifiers.command) {
@@ -517,9 +548,23 @@ impl ProjectPane {
                         ui.close();
                     }
                 }
+                if missing && ui.button("Locate…").on_hover_text("Where the file is now").clicked() {
+                    let ext =
+                        Path::new(&e.name).extension().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+                    if let Some(found) =
+                        rfd::FileDialog::new().set_file_name(&e.name).add_filter(&ext, &[&ext]).pick_file()
+                    {
+                        editor.remove_from_project(e);
+                        self.add_files(editor, settings, vec![found]);
+                    }
+                    ui.close();
+                }
                 if ui.button("Remove from project").on_hover_text("The game's file is used again").clicked() {
-                    editor.remove_from_project(e);
-                    self.report(editor.save_project_file().map(|_| format!("Removed {}", e.name)));
+                    if e.dirty {
+                        self.confirm = Some(Pending::Remove(e.clone()));
+                    } else {
+                        self.remove(editor, e);
+                    }
                     ui.close();
                 }
             });
@@ -694,6 +739,11 @@ impl ProjectPane {
         self.report(made.map(|_| "Project made".into()));
     }
 
+    fn remove(&mut self, editor: &mut Editor, e: &ProjectEntry) {
+        editor.remove_from_project(e);
+        self.report(editor.save_project_file().map(|_| format!("Removed {}", e.name)));
+    }
+
     fn save_as(&mut self, editor: &mut Editor, doc: DocKey, name: &str) {
         let ext = Path::new(name).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let mut dialog = rfd::FileDialog::new().set_file_name(name).add_filter(&ext, &[&ext]);
@@ -830,10 +880,16 @@ impl ProjectPane {
                 (format!("Close {}?", open.as_deref().unwrap_or("the project")), "Close", "Save and close")
             }
             Pending::New => ("A new project?".into(), "Continue", "Save and continue"),
+            Pending::Remove(e) => (format!("Remove {} from the project?", e.name), "Remove", ""),
             Pending::App(Ask::Quit) => ("Quit RedForge?".into(), "Quit", "Save and quit"),
             Pending::App(Ask::GameFolder) => ("Change the game folder?".into(), "Continue", "Save and continue"),
         };
+        // Removing a file lets its changes go: nothing to save first.
+        let unsaved = unsaved && !matches!(pending, Pending::Remove(_));
         let mut text = match (pending, &open) {
+            (Pending::Remove(_), _) => {
+                vec!["Its unsaved changes are lost, the game's file is used again, and undo starts over.".into()]
+            }
             (Pending::Open(_) | Pending::New, Some(name)) => vec![format!("{name} will be closed.")],
             (Pending::App(Ask::GameFolder), _) => vec!["The game loads again, and changes not saved are lost.".into()],
             _ => vec![],
@@ -917,6 +973,7 @@ impl ProjectPane {
             Some(Pending::Open(file)) => self.open(editor, settings, &file),
             Some(Pending::Close) => self.close(editor, settings),
             Some(Pending::New) => self.new_project(editor, settings),
+            Some(Pending::Remove(e)) => self.remove(editor, &e),
             Some(Pending::App(what)) => return Some(what),
             None => {}
         }
@@ -1031,8 +1088,22 @@ impl ProjectPane {
         let resource = Path::new(&form.folder).join(&name);
         settings.set(RESOURCES_FOLDER, form.folder.clone());
         settings.set(AUTHOR, form.author.trim());
-        let files: Vec<PathBuf> =
-            editor.project_entries().into_iter().filter_map(|e| e.path).filter(|p| p.exists()).collect();
+        // The project's _manifest.ymf, made again for what its ymaps need now.
+        let manifest = editor.project_entries().into_iter().find(|e| e.name.eq_ignore_ascii_case("_manifest.ymf"));
+        if let Some(path) = manifest.and_then(|e| e.path)
+            && let Err(e) = editor.write_manifest(&path)
+        {
+            self.fail(format!("_manifest.ymf: {e}"));
+            return;
+        }
+        let (files, missing): (Vec<PathBuf>, Vec<PathBuf>) =
+            editor.project_entries().into_iter().filter_map(|e| e.path).partition(|p| p.exists());
+        let before: Vec<String> = editor
+            .project
+            .as_ref()
+            .and_then(|p| p.export.get(EXPORTED))
+            .map(|l| l.split('|').filter(|n| !n.is_empty()).map(str::to_owned).collect())
+            .unwrap_or_default();
         let info: BTreeMap<String, String> = [
             ("author", form.author.trim()),
             ("version", form.version.trim()),
@@ -1046,16 +1117,32 @@ impl ProjectPane {
             p.export.insert("folder".into(), form.folder.clone());
             p.export.extend(info.clone());
         }
-        let _ = editor.save_project_file();
-        match redm::export(&resource, &files, &info) {
-            Ok(skipped) if skipped.is_empty() => {
-                self.status =
-                    Some(format!("Exported {name}: add `ensure {name}` to server.cfg and restart the server"));
-                let saved = self.toast.take().map(|(s, _)| format!("{s}, exported {name}"));
-                self.toast = Some((saved.unwrap_or_else(|| format!("Exported {name}")), false));
+        let done = match redm::export(&resource, &files, &info, &before) {
+            Ok(done) => done,
+            Err(e) => {
+                let _ = editor.save_project_file();
+                self.fail(format!("The export failed: {e}"));
+                return;
             }
-            Ok(skipped) => self.fail(format!("Exported {name}, but left out: {}", skipped.join(", "))),
-            Err(e) => self.fail(format!("The export failed: {e}")),
+        };
+        if let Some(p) = &mut editor.project {
+            p.export.insert(EXPORTED.into(), done.written.join("|"));
+        }
+        let _ = editor.save_project_file();
+        let file_name = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut left_out: Vec<String> = missing.iter().map(|p| format!("{} (missing)", file_name(p))).collect();
+        left_out.extend(done.skipped.iter().cloned());
+        let removed = match done.removed.len() {
+            0 => String::new(),
+            _ => format!("; took out of stream what's no longer in the project: {}", done.removed.join(", ")),
+        };
+        if left_out.is_empty() {
+            self.status =
+                Some(format!("Exported {name}: add `ensure {name}` to server.cfg and restart the server{removed}"));
+            let saved = self.toast.take().map(|(s, _)| format!("{s}, exported {name}"));
+            self.toast = Some((saved.unwrap_or_else(|| format!("Exported {name}")) + &removed, false));
+        } else {
+            self.fail(format!("Exported {name}, but left out: {}{removed}", left_out.join(", ")));
         }
     }
 
@@ -1064,6 +1151,18 @@ impl ProjectPane {
         self.status = Some(text.clone());
         self.toast = Some((text, true));
     }
+}
+
+/// A name for a new ymap: the project's, numbered, that no ymap has.
+fn suggested_map_name(editor: &Editor) -> String {
+    let base = editor.project.as_ref().map(|p| redm::safe_name(&p.name()).to_lowercase()).unwrap_or("my_map".into());
+    (1..)
+        .map(|n| format!("{base}_{n:02}"))
+        .find(|n| {
+            let hash = rf_formats::hash::joaat(n);
+            editor.world.map_file_name(hash).is_none() && editor.map(hash).is_none()
+        })
+        .unwrap_or(base)
 }
 
 /// The project's ymaps: name hash and file name.
