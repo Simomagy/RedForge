@@ -9,9 +9,10 @@
 </p>
 
 <p align="center">
-  <img alt="Platforms: Windows and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-8b1a10">
-  <img alt="License: MIT or Apache-2.0" src="https://img.shields.io/badge/license-MIT%20or%20Apache--2.0-blue">
-  <img alt="Made with Rust" src="https://img.shields.io/badge/made%20with-Rust-orange">
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-blue?style=for-the-badge" alt="Badge">
+  <img src="https://img.shields.io/badge/License-MIT%20or%20Apache--2.0-orange?style=for-the-badge" alt="Badge">
+  <img src="https://img.shields.io/badge/Made%20with-Rust-fe3737?style=for-the-badge&logo=rust" alt="Badge">
+  <img src="https://img.shields.io/badge/Tester-Fenixs-fe37f9?style=for-the-badge&link=https%3A%2F%2Fgithub.com%2FFenixsGame&link=https%3A%2F%2Fgithub.com%2FFenixsGame" alt="Badge">
 </p>
 
 ![RedForge's world map at Valentine](docs/images/world.jpg)
