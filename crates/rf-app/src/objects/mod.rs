@@ -345,18 +345,10 @@ impl Objects {
     }
 }
 
-/// Makes an object the one to place, and picks the Place tool (not for
-/// interiors, which can't be placed yet).
+/// Makes an object the one to place, and picks the Place tool.
 fn choose(row: &Row, tools: &mut Tools) {
     tools.place_archetype = Some(row.hash);
-    if row.kind == Kind::Interior {
-        tools.fail("Interiors (MLO) can't be placed yet");
-        if tools.tool == Tool::Place {
-            tools.tool = Tool::Select;
-        }
-    } else {
-        tools.tool = Tool::Place;
-    }
+    tools.tool = Tool::Place;
 }
 
 /// How a tile looks.
@@ -428,19 +420,39 @@ fn details_ui(ui: &mut egui::Ui, game: &Game, chosen: Option<u32>) {
     }
 }
 
-/// Where placed objects go: one of the edited ymaps, as in the Project pane.
+/// Where placed objects go: one of the edited ymaps, as in the Project pane,
+/// or an interior placed in one of them (its entities are in its ytyp).
 fn place_in_ui(ui: &mut egui::Ui, editor: &mut Editor) {
     let maps: Vec<(u32, String)> = editor.edited_maps().iter().map(|m| (m.name, m.file_name.clone())).collect();
+    let interiors = editor.placed_interiors();
+    if editor.place_interior.is_some_and(|i| !interiors.iter().any(|(id, _)| *id == i)) {
+        editor.place_interior = None; // (deleted, or its ymap isn't edited any more)
+    }
     ui.horizontal(|ui| {
         ui.label("Place in");
         if maps.is_empty() {
             ui.label(RichText::new("no ymap yet: make one in Project").weak());
             return;
         }
-        let current = editor.target.and_then(|t| maps.iter().find(|(n, _)| *n == t)).map_or("Choose a ymap", |m| &m.1);
-        egui::ComboBox::from_id_salt("objects-place-in").selected_text(current).show_ui(ui, |ui| {
+        let current = match editor.place_interior {
+            Some(i) => interiors.iter().find(|(id, _)| *id == i).map(|(_, n)| n.as_str()),
+            None => editor.target.and_then(|t| maps.iter().find(|(n, _)| *n == t)).map(|m| m.1.as_str()),
+        };
+        let combo = egui::ComboBox::from_id_salt("objects-place-in").selected_text(current.unwrap_or("Choose a ymap"));
+        combo.show_ui(ui, |ui| {
             for (name, file) in &maps {
-                ui.selectable_value(&mut editor.target, Some(*name), file);
+                let chosen = editor.place_interior.is_none() && editor.target == Some(*name);
+                if ui.selectable_label(chosen, file).clicked() {
+                    editor.target = Some(*name);
+                    editor.place_interior = None;
+                }
+            }
+            for (id, name) in &interiors {
+                let label = format!("{} {name}", crate::theme::icon::HOUSE);
+                if ui.selectable_label(editor.place_interior == Some(*id), label).clicked() {
+                    editor.target = Some(id.node);
+                    editor.place_interior = Some(*id);
+                }
             }
         });
     });

@@ -69,6 +69,8 @@ fn convert_xml(hashes: &HashIndex, file: &Path) -> Result<PathBuf, String> {
     let dir = file.parent().unwrap_or(Path::new(""));
     let cx = XmlContext { hashes, folder: Some(externals_folder(dir, base)) };
     let data = formats::from_xml(&name, &xml, &cx).map_err(|e| e.to_string())?;
+    // (Sollumz's interiors lack what the game's have.)
+    let data = if base.to_lowercase().ends_with(".ytyp") { formats::meta::fix_sollumz_ytyp(data) } else { data };
     let to = dir.join(base);
     std::fs::write(&to, data).map_err(|e| e.to_string())?;
     Ok(to)

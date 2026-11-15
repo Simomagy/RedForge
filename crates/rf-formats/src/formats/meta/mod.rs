@@ -684,9 +684,71 @@ pub fn from_xml(xml: &str, cx: &XmlContext) -> Result<Vec<u8>> {
     Meta::from_xml(xml, cx.hashes)?.save()
 }
 
+/// A portal's four unnamed floats, and what the game's interiors have in them.
+const PORTAL_DEFAULTS: [(u32, f32); 4] =
+    [(0x7C09_6C2E, 0.3), (0x9117_1666, 1.0), (0x9681_6DDF, 1.0), (0x0854_FDEE, 1.0)];
+
+/// Makes the interiors of a ytyp from Sollumz RDR as the game's are (a model
+/// made in Blender, on its way into a project): an MLO archetype has no asset
+/// type (-1, not "assetless") and no asset name, and a portal whose four
+/// unnamed floats are all 0, which Sollumz has no fields for, gets the game's
+/// usual ones. Anything else is left as it is.
+pub fn fix_sollumz_interiors(root: &mut DataBag) {
+    let mlo = crate::hash::joaat("CMloArchetypeDef");
+    for a in root.bags_mut("archetypes").into_iter().flatten().flatten() {
+        if a.class_name() != mlo {
+            continue;
+        }
+        if a.enum_value("assetType") == 4 {
+            a.set_enum_value("assetType", -1);
+            a.set_hash("assetName", 0);
+        }
+        for p in a.bags_mut("portals").into_iter().flatten().flatten() {
+            if PORTAL_DEFAULTS.iter().all(|(k, _)| p.f32(*k) == 0.0) {
+                for (k, v) in PORTAL_DEFAULTS {
+                    p.set_f32(k, v);
+                }
+            }
+        }
+    }
+}
+
+/// [`fix_sollumz_interiors`] on a ytyp file; other files come back as they are.
+pub fn fix_sollumz_ytyp(file: Vec<u8>) -> Vec<u8> {
+    let Ok(mut meta) = Meta::read(&file) else { return file };
+    let Some(root) = meta.root.as_mut() else { return file };
+    fix_sollumz_interiors(root);
+    meta.save().unwrap_or(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sollumz_interiors_become_the_games() {
+        use crate::formats::databag::Value;
+        let portal = Meta::create("CMloPortalDef").unwrap();
+        let mut kept = portal.clone();
+        kept.set_f32(0x7C09_6C2Eu32, 0.8);
+        let mut mlo = Meta::create("CMloArchetypeDef").unwrap();
+        mlo.set_enum_value("assetType", 4);
+        mlo.set_hash("assetName", 123);
+        mlo.set_object("portals", Some(Value::Bags(vec![Some(portal.clone()), Some(kept)])));
+        let mut prop = Meta::create("CBaseArchetypeDef").unwrap();
+        prop.set_enum_value("assetType", 4);
+        let mut root = Meta::create("CMapTypes").unwrap();
+        root.set_object("archetypes", Some(Value::Bags(vec![Some(mlo), Some(prop)])));
+        fix_sollumz_interiors(&mut root);
+        let archetypes = root.bags("archetypes").unwrap();
+        let (mlo, prop) = (archetypes[0].as_ref().unwrap(), archetypes[1].as_ref().unwrap());
+        assert_eq!((mlo.enum_value("assetType"), mlo.hash("assetName")), (-1, 0));
+        assert_eq!(prop.enum_value("assetType"), 4, "only interiors change");
+        let portals = mlo.bags("portals").unwrap();
+        let floats = |p: &DataBag| PORTAL_DEFAULTS.map(|(k, _)| p.f32(k));
+        assert_eq!(floats(portals[0].as_ref().unwrap()), [0.3, 1.0, 1.0, 1.0]);
+        assert_eq!(floats(portals[1].as_ref().unwrap()), [0.8, 0.0, 0.0, 0.0], "a portal with values keeps them");
+    }
 
     #[test]
     fn schema_has_map_classes() {

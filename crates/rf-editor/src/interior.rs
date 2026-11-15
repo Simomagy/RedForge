@@ -138,6 +138,30 @@ pub fn remove(mlo: &mut DataBag, slots: &[Slot]) {
     }
 }
 
+/// Adds a new plain entity at `position` (in the interior's space), attached
+/// to the room it's in: the first room but limbo (room 0) whose box holds the
+/// position, else the first room after limbo, else limbo. Returns its slot.
+pub fn add(mlo: &mut DataBag, entity: DataBag, position: [f32; 3]) -> Slot {
+    let list = lod::entities_mut(mlo);
+    let index = list.len();
+    list.push(Some(entity));
+    if let Some(rooms) = mlo.bags_mut("rooms") {
+        let holds = |r: &DataBag| {
+            let (lo, hi) = (r.vec3("bbMin"), r.vec3("bbMax"));
+            (0..3).all(|i| lo[i] <= position[i] && position[i] <= hi[i])
+        };
+        let inside = rooms.iter().enumerate().skip(1).find(|(_, r)| r.as_ref().is_some_and(holds)).map(|(i, _)| i);
+        let room = inside.unwrap_or(if rooms.len() > 1 { 1 } else { 0 });
+        if let Some(Some(r)) = rooms.get_mut(room) {
+            match u32s_mut(r, ATTACHED) {
+                Some(v) => v.push(index as u32),
+                None => r.set_object(ATTACHED, Some(Value::U32s(vec![index as u32]))),
+            }
+        }
+    }
+    Slot { set: None, index }
+}
+
 /// Adds a copy of an interior entity next to it: a plain entity goes in the
 /// same rooms and portals, a set entity in the same room. Returns its slot.
 pub fn duplicate(mlo: &mut DataBag, from: Slot, copy: DataBag) -> Option<Slot> {
@@ -188,6 +212,30 @@ mod tests {
 
     fn attached(m: &mut DataBag) -> Vec<u32> {
         u32s_mut(m.bags_mut("rooms").unwrap()[0].as_mut().unwrap(), ATTACHED).unwrap().clone()
+    }
+
+    #[test]
+    fn a_new_entity_goes_in_the_room_it_is_in() {
+        let room = |lo: [f32; 3], hi: [f32; 3]| {
+            let mut r = Meta::create("CMloRoomDef").unwrap();
+            r.set_vec3("bbMin", lo);
+            r.set_vec3("bbMax", hi);
+            Some(r)
+        };
+        let mut m = Meta::create("CMloArchetypeDef").unwrap();
+        // Limbo holds everything; then a hall and a kitchen.
+        let rooms = vec![room([-9.0; 3], [9.0; 3]), room([0.0; 3], [4.0; 3]), room([4.0, 0.0, 0.0], [8.0, 4.0, 4.0])];
+        m.set_object("rooms", Some(Value::Bags(rooms)));
+        let attached = |m: &mut DataBag, room: usize| {
+            u32s_mut(m.bags_mut("rooms").unwrap()[room].as_mut().unwrap(), ATTACHED).cloned().unwrap_or_default()
+        };
+        let entity = || Meta::create("CEntityDef").unwrap();
+        assert_eq!(add(&mut m, entity(), [6.0, 1.0, 1.0]), Slot { set: None, index: 0 });
+        assert_eq!(add(&mut m, entity(), [1.0, 1.0, 1.0]).index, 1);
+        // Outside every room: the first one after limbo.
+        assert_eq!(add(&mut m, entity(), [-5.0, 0.0, 0.0]).index, 2);
+        assert_eq!((attached(&mut m, 0), attached(&mut m, 1), attached(&mut m, 2)), (vec![], vec![1, 2], vec![0]));
+        assert_eq!(lod::entities(&m).len(), 3);
     }
 
     #[test]

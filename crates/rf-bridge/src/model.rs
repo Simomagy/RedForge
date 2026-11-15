@@ -103,7 +103,13 @@ pub fn convert_xml(xml: &Path, hashes: &HashIndex) -> Result<Vec<u8>, String> {
     let game_file = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
     let folder = externals_folder(xml.parent().unwrap_or(Path::new("")), game_file);
     let cx = XmlContext { hashes, folder: Some(folder) };
-    formats::from_xml(&lower, text, &cx).map_err(|e| e.to_string())
+    let data = formats::from_xml(&lower, text, &cx).map_err(|e| e.to_string())?;
+    // (Sollumz's interiors lack what the game's have.)
+    Ok(if game_file.to_lowercase().ends_with(".ytyp.rsc") || game_file.to_lowercase().ends_with(".ytyp") {
+        formats::meta::fix_sollumz_ytyp(data)
+    } else {
+        data
+    })
 }
 
 #[cfg(test)]

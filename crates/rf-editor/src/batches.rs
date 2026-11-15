@@ -6,7 +6,8 @@
 //! C# keeps the old one).
 
 use glam::{Mat4, Quat, Vec3};
-use rf_formats::formats::databag::DataBag;
+use rf_formats::formats::databag::{DataBag, Value};
+use rf_formats::formats::meta::Meta;
 use rf_game::Archetype;
 use rf_world::batch::{
     batch_bounds, batch_list, batch_list_mut, instance_list, instance_list_mut, instance_transform,
@@ -24,6 +25,9 @@ const CELL_SIZE: u32 = 0x0C70_D409;
 const GRID_SIZE_X: u32 = 0x6BC7_D2C4;
 const GRID_SIZE_Y: u32 = 0x1E6D_3810;
 const ROW_SPAN: u32 = 0xE88B_A592;
+const INSTANCED_DATA: &str = "instancedData";
+const PROP_INSTANCE_LIST: &str = "PropInstanceList";
+const INSTANCE_LIST: &str = "InstanceList";
 
 /// An instance: (grass, the batch's place in its list, the instance's in the batch).
 pub type InstanceRef = (bool, u32, u32);
@@ -147,6 +151,70 @@ pub fn duplicate(
     out
 }
 
+/// A new, empty prop batch of an archetype, as the game's are: what a
+/// `rage__fwPropInstanceListDef` of its tree ymaps has besides its instances.
+/// Its box starts at `at`, and grows to the instances.
+fn new_prop_batch(archetype: u32, lod_dist: f32, at: Vec3) -> Option<DataBag> {
+    let mut batch = Meta::create("rage__fwPropInstanceListDef")?;
+    batch.set_hash("archetypeName", archetype);
+    batch.set_u32("flags", 1_572_864);
+    batch.set_f32("lodDist", lod_dist);
+    batch.set_enum_value("lodLevel", -1);
+    batch.set_enum_value("priorityLevel", -1);
+    batch.set_f32("InstanceLodDist", lod_dist);
+    batch.set_vec4("ScaleRange", [0.75, 1.25, 0.75, 0.75]);
+    batch.set_bool("EnableEntityPromotion", true);
+    batch.set_bool("PreBakeCollision", true);
+    let schema = rf_formats::formats::meta::rsc_schema();
+    let mut aabb = schema.create(batch.class.field(BATCH_AABB)?.type_name)?;
+    aabb.set_vec4(MIN, at.extend(0.0).to_array());
+    aabb.set_vec4(MAX, at.extend(0.0).to_array());
+    batch.set_bag(BATCH_AABB, Some(aabb));
+    let grid = schema.create(batch.class.field(POPULATION_GRID_DATA)?.type_name)?;
+    batch.set_bag(POPULATION_GRID_DATA, Some(grid));
+    batch.set_object(INSTANCE_LIST, Some(Value::Bags(Vec::new())));
+    Some(batch)
+}
+
+/// Adds an instance of an archetype to the ymap's prop batch of it (made if
+/// there's none): how the game has the archetypes that are prop batches, its
+/// trees and bushes, which it doesn't make from a `CEntityDef`.
+pub fn add(
+    root: &mut DataBag,
+    archetype: u32,
+    lod_dist: f32,
+    placement: &Placement,
+    bounds: &dyn Fn(&DataBag) -> Option<Bounds>,
+) -> Option<InstanceRef> {
+    if batch_list(root, false).is_none() {
+        if root.bag(INSTANCED_DATA).is_none() {
+            root.set_bag(INSTANCED_DATA, Meta::create("rage__fwInstancedMapData"));
+        }
+        root.bag_mut(INSTANCED_DATA)?.set_object(PROP_INSTANCE_LIST, Some(Value::Bags(Vec::new())));
+    }
+    let list = batch_list_mut(root, false)?;
+    let found = list.iter().position(|b| b.as_ref().is_some_and(|b| b.hash("archetypeName") == archetype));
+    let b = match found {
+        Some(b) => b,
+        None => {
+            list.push(Some(new_prop_batch(archetype, lod_dist, placement.position)?));
+            list.len() - 1
+        }
+    };
+    let batch = list[b].as_mut()?;
+    let mut item = Meta::create("rage__fwPropInstanceListDef__InstanceData")?;
+    set_instance_transform(&batch.clone(), false, &mut item, &placement.matrix().to_cols_array());
+    item.set_u32("Tint", u32::MAX);
+    if instance_list(batch).is_none() {
+        batch.set_object(INSTANCE_LIST, Some(Value::Bags(Vec::new())));
+    }
+    let items = instance_list_mut(batch)?;
+    items.push(Some(item));
+    let i = items.len() - 1;
+    refit(root, &[(false, b as u32)], bounds);
+    Some((false, b as u32, i as u32))
+}
+
 /// A prop batch's box grown to its instances, and every batch's population
 /// grid rebuilt.
 fn refit(root: &mut DataBag, batches: &[(bool, u32)], bounds: &dyn Fn(&DataBag) -> Option<Bounds>) {
@@ -247,5 +315,28 @@ fn rebuild_population_grid(batch: &mut DataBag, transforms: &[Mat4], radius: f32
         grid.set_i8(GRID_SIZE_X, gx as i8);
         grid.set_i8(GRID_SIZE_Y, gy as i8);
         grid.set_i8(ROW_SPAN, row_span as i8);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_placed_tree_is_an_instance_of_its_batch() {
+        let tree = rf_formats::hash::joaat("p_tree_apple_01");
+        let bounds = |_: &DataBag| Some(Bounds { min: Vec3::splat(-1.0), max: Vec3::splat(1.0), radius: 1.7 });
+        let at = |x: f32| Placement { position: Vec3::new(x, 20.0, 3.0), ..Default::default() };
+        let mut map = Meta::create("CMapData").unwrap();
+        // The first makes the batch, the second joins it; another archetype gets its own.
+        assert_eq!(add(&mut map, tree, 240.0, &at(10.0), &bounds), Some((false, 0, 0)));
+        assert_eq!(add(&mut map, tree, 240.0, &at(30.0), &bounds), Some((false, 0, 1)));
+        assert_eq!(add(&mut map, tree + 1, 160.0, &at(0.0), &bounds), Some((false, 1, 0)));
+        let b = batch(&map, false, 0).unwrap();
+        assert_eq!((b.hash("archetypeName"), b.f32("lodDist"), b.u32("flags")), (tree, 240.0, 1_572_864));
+        assert_eq!(placement(&map, (false, 0, 1)).unwrap().position, Vec3::new(30.0, 20.0, 3.0));
+        // Its box holds both trees, with their own boxes.
+        let aabb = batch_bounds(b);
+        assert_eq!((aabb.min, aabb.max), ([9.0, 19.0, 2.0], [31.0, 21.0, 4.0]));
     }
 }

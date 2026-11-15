@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rf_formats::formats::databag::DataBag;
+use rf_formats::formats::databag::{DataBag, Value};
 use rf_formats::formats::meta::Meta;
 use rf_formats::hash::{HashIndex, joaat};
 use rf_formats::rpf8::{FileRef, Rpf8FileSystem};
@@ -175,6 +175,9 @@ pub struct Editor {
     clipboard: Vec<DataBag>,
     /// Where new entities go: a ymap made in the editor or edited.
     pub target: Option<u32>,
+    /// The interior new entities go in instead (its instance, an entity of a
+    /// ymap): they're added to its archetype, in the room they're placed in.
+    pub place_interior: Option<EntityId>,
     /// The project: made when something is first edited, as in the C#.
     pub project: Option<Project>,
     /// The project's other files (models, textures, collisions...): the game
@@ -202,6 +205,7 @@ impl Editor {
             redo: Vec::new(),
             clipboard: Vec::new(),
             target: None,
+            place_interior: None,
             project: None,
             assets: Vec::new(),
         }
@@ -228,7 +232,14 @@ impl Editor {
         let mut refs = Vec::new();
         for f in &files {
             match self.fs.mount(f) {
-                Ok(r) => refs.push(r),
+                Ok(r) => {
+                    // A project file's name isn't in the game's strings: learn
+                    // it, so its archetype shows by name and not by hash.
+                    if let Some(stem) = f.file_stem() {
+                        self.hashes.ensure(&stem.to_string_lossy().to_lowercase());
+                    }
+                    refs.push(r)
+                }
                 Err(e) => log::warn!("{}: {e}", f.display()),
             }
         }
@@ -579,7 +590,7 @@ impl Editor {
         let mut header = Meta::read(&bytes).map_err(|e| format!("{shown}: {e}"))?;
         let root = Arc::new(header.root.take().ok_or_else(|| format!("{shown}: no map data"))?);
         let file_name = path.file_stem().unwrap_or_default().to_string_lossy().to_lowercase();
-        let name = joaat(&file_name);
+        let name = self.hashes.ensure(&file_name);
         let doc = MapDoc {
             name,
             source: self.world.map_file(name),
@@ -697,12 +708,15 @@ impl Editor {
         use std::collections::{BTreeMap, BTreeSet};
         let ytyp_of = |archetype: u32| {
             let a = self.data.archetypes.get(&archetype)?;
-            let path = self.fs.path(a.ytyp);
-            let name = path.rsplit('/').next().unwrap_or(&path);
-            Some(name.rsplit_once('.').map_or(name, |(s, _)| s).to_lowercase())
+            // Its file name: a project file's path has the system's separators.
+            let name = self.fs.name(a.ytyp);
+            Some(name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s).to_lowercase())
         };
         let mut imaps: BTreeMap<String, (BTreeSet<String>, bool)> = BTreeMap::new();
         let mut ityps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        // The interiors placed, by archetype name: each one's bounds are the
+        // ybn of its name.
+        let mut interiors: BTreeSet<String> = BTreeSet::new();
         let mlo_class = joaat("CMloArchetypeDef");
         for m in self.maps.values().filter(|m| m.in_project && m.exists) {
             let (deps, interior) = imaps.entry(m.file_name.clone()).or_default();
@@ -712,6 +726,7 @@ impl Editor {
                 deps.insert(ytyp.clone());
                 if placement::is_mlo_instance(def) {
                     *interior = true;
+                    interiors.insert(self.hashes.xml_name(archetype));
                     let typdeps = ityps.entry(ytyp.clone()).or_default();
                     // The interior's own entities, from its (maybe edited) ytyp.
                     let a = &self.data.archetypes[&archetype];
@@ -733,7 +748,8 @@ impl Editor {
                         }
                         let sets = mlo.bags("entitySets").unwrap_or_default().iter().flatten();
                         for e in lod::entities(mlo).iter().chain(sets.flat_map(|s| lod::entities(s).iter())).flatten() {
-                            if let Some(y) = ytyp_of(e.hash("archetypeName")) {
+                            // Not itself: no ytyp of the game depends on itself.
+                            if let Some(y) = ytyp_of(e.hash("archetypeName")).filter(|y| *y != ytyp) {
                                 typdeps.insert(y);
                             }
                         }
@@ -780,11 +796,11 @@ impl Editor {
             }
             x.push_str("  </itypDependencies_2>\n");
         }
-        if ityps.is_empty() {
+        if interiors.is_empty() {
             x.push_str("  <Interiors/>\n");
         } else {
             x.push_str("  <Interiors itemType=\"CInteriorBoundsFiles\">\n");
-            for name in ityps.keys() {
+            for name in &interiors {
                 x.push_str(&format!(
                     "    <Item>\n      <Name>{name}</Name>\n      <Bounds>\n        <Item>{name}</Item>\n      </Bounds>\n    </Item>\n"
                 ));
@@ -1313,15 +1329,92 @@ impl Editor {
         Ok(())
     }
 
+    /// Whether an archetype is one the game places in prop batches
+    /// (`MAP_ENTITY_TYPE_PROP_BATCH`: its trees and bushes).
+    fn is_prop_batch(&self, archetype: u32) -> bool {
+        let schema = rf_formats::formats::meta::rsc_schema();
+        self.data
+            .archetype_bag(&self.fs, &self.hashes, archetype)
+            .and_then(|a| a.enum_string(0x07D1_64A8u32, Some(schema), &self.hashes))
+            .is_some_and(|t| t == "MAP_ENTITY_TYPE_PROP_BATCH")
+    }
+
+    /// The interiors placed in the edited ymaps, each with its ymap's and its
+    /// archetype's names: where objects can be placed besides a ymap.
+    pub fn placed_interiors(&self) -> Vec<(EntityId, String)> {
+        let mut list = Vec::new();
+        for m in self.edited_maps() {
+            for (i, def) in lod::entities(&m.root).iter().enumerate() {
+                if let Some(def) = def.as_ref().filter(|d| placement::is_mlo_instance(d)) {
+                    let id = EntityId { node: m.name, entity: i as u32, interior_entity: u32::MAX };
+                    list.push((id, format!("{} > {}", m.file_name, self.hashes.name(def.hash("archetypeName")))));
+                }
+            }
+        }
+        list
+    }
+
+    /// A new entity of an archetype in an interior (`instance` places it): in
+    /// its archetype's `entities`, in the interior's space, attached to the
+    /// room it's in. Every instance of the interior gets it.
+    fn place_in_interior(&mut self, instance: EntityId, archetype: u32, placed: Placement) -> Result<EntityId, String> {
+        let arch = self.data.archetypes.get(&archetype).ok_or("unknown archetype")?;
+        if arch.class == rf_game::Archetype::MLO_CLASS {
+            return Err("an interior can't go inside an interior".into());
+        }
+        let lod_dist = arch.lod_dist;
+        let def = lod::entities(&self.map(instance.node).ok_or("the interior's ymap isn't open")?.root)
+            .get(instance.entity as usize)
+            .and_then(Option::as_ref)
+            .filter(|d| placement::is_mlo_instance(d))
+            .ok_or("the interior to place in isn't there any more")?;
+        let a = self.data.archetypes.get(&def.hash("archetypeName")).ok_or("unknown interior")?;
+        let (ytyp, index) = (a.ytyp, a.index as usize);
+        let first = interior::Slot { set: None, index: 0 };
+        let r = InteriorRef { ytyp, archetype: index, slot: first, instance: Placement::of_entity(def) };
+        let local = Self::to_interior(&r, placed);
+        let mut entity = Meta::create("CEntityDef").ok_or("no CEntityDef in the schema")?;
+        entity.set_hash("archetypeName", archetype);
+        entity.set_i32("parentIndex", -1);
+        entity.set_f32("lodDist", lod_dist);
+        entity.set_enum_value("lodLevel", lod_level::ORPHAN_HD);
+        entity.set_u8("blendAgeLayer", 255);
+        entity.set_u8("blendAgeDirt", 255);
+        local.write_entity(&mut entity);
+        let mut root = (*self.open_types(ytyp)?.root).clone();
+        let mlo = interior::archetypes_mut(&mut root)
+            .and_then(|l| l.get_mut(index))
+            .and_then(Option::as_mut)
+            .ok_or("interior not found")?;
+        let slot = interior::add(mlo, entity, local.position.into());
+        let id = EntityId { interior_entity: interior::world_index(mlo, slot), ..instance };
+        self.commit("Place", vec![(DocKey::Types(ytyp), root)], vec![id]);
+        Ok(id)
+    }
+
     /// A new entity of an archetype in the target ymap, with the C#'s
     /// defaults: standalone, its archetype's `lodDist`.
     pub fn place(&mut self, archetype: u32, placement: Placement) -> Result<EntityId, String> {
+        if let Some(instance) = self.place_interior {
+            return self.place_in_interior(instance, archetype, placement);
+        }
         let target = self.target_map()?;
         let arch = self.data.archetypes.get(&archetype).ok_or("unknown archetype")?;
-        if arch.class == rf_game::Archetype::MLO_CLASS {
-            return Err("interiors can't be placed yet".into());
+        let is_mlo = arch.class == rf_game::Archetype::MLO_CLASS;
+        // A prop batch (the game's trees and bushes): the game only makes it
+        // as an instance of a batch, never from a `CEntityDef`.
+        if !is_mlo && self.is_prop_batch(archetype) {
+            let mut root = (*self.maps[&target].root).clone();
+            let bounds = self.batch_bounds();
+            let (grass, b, i) = batches::add(&mut root, archetype, arch.lod_dist, &placement, &bounds)
+                .ok_or("the object's batch couldn't be made")?;
+            drop(bounds);
+            let id = EntityId::instance(target, grass, b, i);
+            self.commit("Place", vec![(DocKey::Map(target), root)], vec![id]);
+            return Ok(id);
         }
-        let mut def = Meta::create("CEntityDef").ok_or("no CEntityDef in the schema")?;
+        let class = if is_mlo { "CMloInstanceDef" } else { "CEntityDef" };
+        let mut def = Meta::create(class).ok_or("no entity class in the schema")?;
         def.set_hash("archetypeName", archetype);
         def.set_i32("parentIndex", -1);
         def.set_f32("lodDist", arch.lod_dist);
@@ -1330,6 +1423,19 @@ impl Editor {
         def.set_u8("blendAgeDirt", 255);
         placement.write_entity(&mut def);
         let mut root = (*self.maps[&target].root).clone();
+        if is_mlo {
+            let mlo = self.data.archetype_bag(&self.fs, &self.hashes, archetype);
+            placement::mlo_instance_defaults(&mut def, mlo.as_ref());
+            // Its collisions, as every interior ymap of the game lists them:
+            // the ybn named as the archetype.
+            if self.data.stream_entry("ybn", archetype).is_some() {
+                let mut dicts = root.hashes("physicsDictionaries").unwrap_or_default().to_vec();
+                if !dicts.contains(&archetype) {
+                    dicts.push(archetype);
+                    root.set_object("physicsDictionaries", Some(Value::Hashes(dicts)));
+                }
+            }
+        }
         let list = lod::entities_mut(&mut root);
         let id = EntityId { node: target, entity: list.len() as u32, interior_entity: u32::MAX };
         list.push(Some(def));

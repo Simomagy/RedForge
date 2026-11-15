@@ -5,7 +5,7 @@
 //! and scale is `(scaleXY, scaleXY, scaleZ)`.
 
 use glam::{Mat4, Quat, Vec3};
-use rf_formats::formats::databag::DataBag;
+use rf_formats::formats::databag::{DataBag, Value};
 
 /// `CMloInstanceDef`'s class name hash.
 pub const MLO_INSTANCE_DEF: u32 = 0x09CC_28BE;
@@ -67,11 +67,44 @@ pub fn is_mlo_instance(def: &DataBag) -> bool {
     def.class_name() == MLO_INSTANCE_DEF
 }
 
+/// What a new `CMloInstanceDef` has besides an entity's fields, as the game's
+/// interior ymaps: their `flags` (the same in all of them), no entity sets,
+/// and the portals of its archetype (`mlo`) that lead outside (room 0).
+pub fn mlo_instance_defaults(def: &mut DataBag, mlo: Option<&DataBag>) {
+    def.set_u32("flags", 1_572_872);
+    def.set_object("defaultEntitySets", Some(Value::Hashes(Vec::new())));
+    let portals = mlo.and_then(|m| m.bags("portals")).unwrap_or_default();
+    let exits = portals.iter().flatten().filter(|p| p.u32("roomFrom") == 0 || p.u32("roomTo") == 0).count();
+    def.set_u32("numExitPortals", exits as u32);
+    // As most of the game's, and a custom interior known to load: HD (an
+    // interior has no orphan level), these flags, and 300 in the unnamed float.
+    def.set_enum_value("lodLevel", crate::lod_level::HD);
+    def.set_u32("MLOInstflags", 8);
+    def.set_f32(0x1581_0E7Fu32, 300.0);
+}
+
 #[cfg(test)]
 mod tests {
     use rf_formats::formats::meta::Meta;
 
     use super::*;
+
+    #[test]
+    fn a_new_mlo_instance_counts_its_exit_portals() {
+        let portal = |from: u32, to: u32| {
+            let mut p = Meta::create("CMloPortalDef").unwrap();
+            p.set_u32("roomFrom", from);
+            p.set_u32("roomTo", to);
+            Some(p)
+        };
+        let mut mlo = Meta::create("CMloArchetypeDef").unwrap();
+        mlo.set_object("portals", Some(Value::Bags(vec![portal(1, 0), portal(1, 2), portal(0, 2)])));
+        let mut def = Meta::create("CMloInstanceDef").unwrap();
+        mlo_instance_defaults(&mut def, Some(&mlo));
+        assert_eq!((def.u32("numExitPortals"), def.u32("flags")), (2, 1_572_872));
+        assert_eq!(def.hashes("defaultEntitySets"), Some(&[][..]));
+        assert_eq!((def.u32("MLOInstflags"), def.f32(0x1581_0E7Fu32), def.enum_value("lodLevel")), (8, 300.0, 0));
+    }
 
     #[test]
     fn stored_rotation_is_inverted_for_entities_only() {
