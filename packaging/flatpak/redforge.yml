@@ -32,7 +32,7 @@ modules:
       - install -Dm755 target/release/redforge /app/bin/redforge
       - install -Dm755 target/release/rf /app/bin/rf
       - install -Dm644 data/rdr2/strings.txt /app/share/redforge/data/rdr2/strings.txt
-      - install -Dm644 blender/redforge_bridge/*.py blender/redforge_bridge/*.toml -t /app/share/redforge/blender/redforge_bridge
+      - install -Dm644 blender/redforge_blender.zip -t /app/share/redforge/blender
       - install -Dm644 packaging/linux/redforge.desktop /app/share/applications/${FLATPAK_ID}.desktop
       - desktop-file-edit --set-icon=${FLATPAK_ID} --set-key=StartupWMClass --set-value=${FLATPAK_ID} /app/share/applications/${FLATPAK_ID}.desktop
       - install -Dm644 packaging/linux/redforge-mime.xml /app/share/mime/packages/${FLATPAK_ID}.xml

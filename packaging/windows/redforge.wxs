@@ -44,13 +44,9 @@
             </Directory>
           </Directory>
           <Directory Id="BlenderDir" Name="blender">
-            <Directory Id="BridgeDir" Name="redforge_bridge">
-              <Component Id="Bridge" Guid="E8D44D34-CE24-4FA2-A889-1E45B50128AC" Win64="yes">
-                <File Id="BridgeInit" Name="__init__.py" Source="$(var.Root)/blender/redforge_bridge/__init__.py" KeyPath="yes" />
-                <File Id="BridgeLink" Name="link.py" Source="$(var.Root)/blender/redforge_bridge/link.py" />
-                <File Id="BridgeManifest" Name="blender_manifest.toml" Source="$(var.Root)/blender/redforge_bridge/blender_manifest.toml" />
-              </Component>
-            </Directory>
+            <Component Id="BlenderAddOn" Guid="B5867FA9-A992-40B0-97A2-F72363C1E231" Win64="yes">
+              <File Id="BlenderAddOnZip" Name="redforge_blender.zip" Source="$(var.Root)/blender/redforge_blender.zip" KeyPath="yes" />
+            </Component>
           </Directory>
         </Directory>
       </Directory>
@@ -75,7 +71,7 @@
       <ComponentRef Id="Cli" />
       <ComponentRef Id="Licenses" />
       <ComponentRef Id="Strings" />
-      <ComponentRef Id="Bridge" />
+      <ComponentRef Id="BlenderAddOn" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
     </Feature>

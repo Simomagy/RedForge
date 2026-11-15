@@ -8,6 +8,22 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Changed
+- The Blender add-on is now **RedForge for Blender**, one add-on in place of
+  RedForge Bridge and Sollumz RDR (disable those): install
+  `blender/redforge_blender.zip` with Preferences > Get Extensions > Install
+  from Disk, in Blender 5.3 or newer. A fork of Sollumz RDR for Red Dead
+  Redemption 2 only, with one RedForge tab: the link with RedForge, files and
+  view on top, the tools by kind of file under them.
+
+### Fixed
+- Blender 5.3 crashed drawing a building brought in with Edit in Blender (a
+  tint attribute per material: the materials with the same palette share one
+  now).
+- A model's collision material came back from Blender as DEFAULT (and showed
+  pink there): RedForge writes it as its hash, which the add-on now reads.
+- Fragments came back from Blender with GTA V's collision materials.
+
 ## [2.3.5] - 2026-11-04
 
 ### Added

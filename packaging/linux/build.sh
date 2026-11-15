@@ -20,9 +20,7 @@ stage() {
   install -Dm755 "$bin/rf" "$1/usr/bin/rf"
   strip "$1/usr/bin/redforge" "$1/usr/bin/rf"
   install -Dm644 data/rdr2/strings.txt "$1/usr/share/redforge/data/rdr2/strings.txt"
-  for f in blender/redforge_bridge/*.py blender/redforge_bridge/*.toml; do
-    install -Dm644 "$f" "$1/usr/share/redforge/$f"
-  done
+  install -Dm644 blender/redforge_blender.zip "$1/usr/share/redforge/blender/redforge_blender.zip"
   install -Dm644 packaging/linux/redforge.desktop "$1/usr/share/applications/redforge.desktop"
   install -Dm644 packaging/linux/redforge-mime.xml "$1/usr/share/mime/packages/redforge.xml"
   for size in 16 24 32 48 64 96 128 256 512; do

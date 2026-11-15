@@ -9,7 +9,7 @@ arch=('x86_64')
 url="https://github.com/Simomagy/RedForge"
 license=('MIT OR Apache-2.0')
 depends=('gcc-libs' 'glibc' 'vulkan-icd-loader' 'xdg-desktop-portal')
-optdepends=('blender: the Blender bridge add-on (in /usr/share/redforge/blender)')
+optdepends=('blender: RedForge for Blender, the add-on (in /usr/share/redforge/blender)')
 makedepends=('cargo' 'git')
 provides=("$_pkgname")
 conflicts=("$_pkgname")
@@ -40,7 +40,7 @@ package() {
   install -Dm755 target/release/redforge "$pkgdir/usr/bin/redforge"
   install -Dm755 target/release/rf "$pkgdir/usr/bin/rf"
   install -Dm644 data/rdr2/strings.txt "$pkgdir/usr/share/redforge/data/rdr2/strings.txt"
-  install -Dm644 blender/redforge_bridge/*.py blender/redforge_bridge/*.toml -t "$pkgdir/usr/share/redforge/blender/redforge_bridge"
+  install -Dm644 blender/redforge_blender.zip -t "$pkgdir/usr/share/redforge/blender"
   install -Dm644 packaging/linux/redforge.desktop "$pkgdir/usr/share/applications/redforge.desktop"
   install -Dm644 packaging/linux/redforge-mime.xml "$pkgdir/usr/share/mime/packages/redforge.xml"
   for size in 16 24 32 48 64 96 128 256 512; do

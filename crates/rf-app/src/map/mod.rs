@@ -558,7 +558,7 @@ impl MapView {
                             (true, true) => "Edit the selection in Blender (Ctrl+B)",
                             (true, false) => "Edit in Blender (Ctrl+B): select objects first",
                             (false, _) => {
-                                "Edit in Blender (Ctrl+B): open Blender with the RedForge Bridge add-on and Sollumz RDR"
+                                "Edit in Blender (Ctrl+B): open Blender with the RedForge for Blender add-on"
                             }
                         };
                         let button = ui

@@ -1,4 +1,5 @@
-//! The bridge with the add-on's own `link.py` (blender/redforge_bridge), run
+//! The bridge with the add-on's own `link.py` (in blender/redforge_blender.zip:
+//! Python imports it from there), run
 //! by Python outside Blender: its requests, its listener thread and its
 //! errors, against a fake host. Skipped when there's no `python3`.
 
@@ -101,7 +102,7 @@ fn the_add_ons_link_works_with_it() {
     let dir = std::env::temp_dir().join(format!("rf-bridge-add-on-{}", std::process::id()));
     bridge.set_export_folder(dir.clone());
 
-    let add_on = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../blender/redforge_bridge");
+    let add_on = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../blender/redforge_blender.zip/redforge");
     let mut python = Command::new("python3")
         .args(["-I", "-B"]) // (no __pycache__ in the add-on)
         .arg("-c")

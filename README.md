@@ -150,13 +150,17 @@ ytyps your ymaps need.
 
 ## Blender
 
-Install `blender/redforge_bridge` (in the installed RedForge's folder, or
-`/usr/share/redforge/blender` on Linux) as an extension in Blender 5, with
-Sollumz RDR. While both run, the map's **Blender** button (Ctrl+B, or Edit >
-Edit in Blender; its dot is lit while a Blender is connected) sends the
-selection's models (as Sollumz XML) and their placements; the models Blender
-sends back go in the project's folder and show on the map, and moving objects
-in Blender moves them in RedForge.
+Install **RedForge for Blender** in Blender 5.3 or newer: Preferences > Get
+Extensions > Install from Disk, `blender/redforge_blender.zip` (in the
+installed RedForge's folder, or `/usr/share/redforge/blender` on Linux). It
+replaces the RedForge Bridge add-on and Sollumz RDR: disable those. While both
+run, the map's **Blender** button (Ctrl+B, or Edit > Edit in Blender; its dot
+is lit while a Blender is connected) sends the selection's models (as XML) and
+their placements; the models Blender sends back go in the project's folder and
+show on the map, and moving objects in Blender moves them in RedForge.
+
+The add-on is a fork of Sollumz RDR for Red Dead Redemption 2 only, under the
+GPL-3.0-or-later like it (RedForge itself isn't): see `blender/README.md`.
 
 ## Exporting game files
 

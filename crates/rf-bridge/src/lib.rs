@@ -1,4 +1,5 @@
-//! The link with RedForge's Blender add-on (`blender/redforge_bridge`), a port
+//! The link with RedForge's Blender add-on (RedForge for Blender, shipped as
+//! `blender/redforge_blender.zip`; its sources are in their own repository), a port
 //! of the C# RedForge's `BlenderBridge`. The wire protocol is the C#'s, so the
 //! add-on works with either app unchanged.
 //!
@@ -90,9 +91,10 @@ pub mod messages {
     /// The app's status after [`Bridge::edit_selection`](crate::Bridge::edit_selection) reached a Blender.
     pub const SENT: &str = "Sent the selection to Blender";
     /// The app's message when no Blender is listening.
-    pub const NOT_CONNECTED: &str = "Blender isn't connected.\nInstall the RedForge Bridge extension in Blender 5 (the \
-        blender folder next to RedForge, /usr/share/redforge/blender on Linux) with Sollumz RDR, and enable it: it \
-        connects by itself while RedForge is open.";
+    pub const NOT_CONNECTED: &str = "Blender isn't connected.\nInstall RedForge for Blender in Blender 5.3 or newer \
+        (Preferences > Get Extensions > Install from Disk: redforge_blender.zip, in the blender folder next to \
+        RedForge, /usr/share/redforge/blender on Linux): it connects by itself while RedForge is open. It replaces \
+        the RedForge Bridge add-on and Sollumz RDR: disable those.";
 }
 
 /// Where an object is on the map.
