@@ -791,4 +791,31 @@ mod tests {
         let again = Meta::read(&Meta::from_xml(&xml, &hashes).unwrap().save().unwrap()).unwrap();
         assert_eq!(again.to_xml(&hashes).unwrap(), xml);
     }
+
+    #[test]
+    fn a_map_saved_empty_keeps_the_enums_of_what_is_added_later() {
+        use crate::formats::databag::Value;
+        let enums = |file: &[u8]| Meta::read(file).unwrap().enums.map(|e| e.iter().filter(|e| e.is_some()).count());
+        let entities = || {
+            let mut def = Meta::create("CEntityDef").unwrap();
+            def.set_enum_value("lodLevel", 5);
+            Some(Value::Bags(vec![Some(def)]))
+        };
+        let mut with_entity = Meta::create("CMapData").unwrap();
+        with_entity.set_object("entities", entities());
+        let expected = enums(&Meta::new(Some(with_entity)).save().unwrap());
+        assert!(expected.is_some_and(|n| n > 0));
+
+        // Saved empty, the file has no entity class, so not its enums; read again, it knows only its own.
+        let empty = Meta::new(Some(Meta::create("CMapData").unwrap())).save().unwrap();
+        let mut opened = Meta::read(&empty).unwrap();
+        let mut root = opened.root.take().unwrap();
+        root.set_object("entities", entities());
+        opened.root = Some(root);
+        let file = opened.save().unwrap();
+        assert_eq!(enums(&file), expected, "the game crashes on an entity without its enums");
+        let back = Meta::read(&file).unwrap();
+        let entity = back.root.as_ref().unwrap().bags("entities").unwrap()[0].as_ref().unwrap().clone();
+        assert_eq!(entity.enum_value("lodLevel"), 5);
+    }
 }

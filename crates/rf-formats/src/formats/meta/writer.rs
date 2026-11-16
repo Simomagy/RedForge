@@ -112,20 +112,31 @@ impl<'s> MetaWriter<'s> {
         }
         self.structs.push(s.clone());
         let schema = self.schema;
+        // The file's own classes and enums first, then the game's: a file read from disk knows only what it had
+        // then (a ymap saved empty has no entity, so not `lodLevel`'s enum), and what's added to it since comes
+        // from the game's schema. Without its enums the game crashes loading the file.
+        let game = super::rsc_schema();
         for f in s.fields() {
             if f.type_name == 0 {
                 continue;
             }
+            let class = || schema.classes.get(&f.type_name).or_else(|| game.classes.get(&f.type_name));
             match f.data_type {
                 ValueType::Enum8 | ValueType::Enum16 | ValueType::Enum32 | ValueType::Flags32 => {
-                    let e = schema.enums.get(&f.type_name).filter(|e| matches!(e.info, EnumInfo::Rsc(_))).cloned();
+                    let rsc = |e: &&Arc<SchemaEnum>| matches!(e.info, EnumInfo::Rsc(_));
+                    let e = schema
+                        .enums
+                        .get(&f.type_name)
+                        .filter(rsc)
+                        .or_else(|| game.enums.get(&f.type_name).filter(rsc))
+                        .cloned();
                     let key = e.as_ref().map_or(0, |e| Arc::as_ptr(e) as usize);
                     if self.enum_set.insert(key) {
                         self.enums.push(e);
                     }
                 }
-                ValueType::Struct => self.add_struct(schema.classes.get(&f.type_name)),
-                ValueType::Array if f.array_size > 0 => self.add_struct(schema.classes.get(&f.type_name)),
+                ValueType::Struct => self.add_struct(class()),
+                ValueType::Array if f.array_size > 0 => self.add_struct(class()),
                 _ => {}
             }
         }

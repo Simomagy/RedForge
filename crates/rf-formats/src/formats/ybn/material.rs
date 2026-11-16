@@ -182,9 +182,10 @@ impl BoundMaterial1 {
 
     pub fn read_xml(n: &XmlNode, prefix: &str) -> Self {
         let mut m = Self(0);
-        // The C# hashes whatever name it reads, even the decimal hash it wrote.
+        // A name is hashed; the decimal hash `write_xml` gives stays itself (the C# hashes that too, so a file
+        // written to XML and read back had another material: 32350, WOOD_SOLID_MEDIUM, became 24214).
         match n.string(&format!("{prefix}Name")) {
-            Some(s) if !s.is_empty() => m.set_hash(material_hash(&s)),
+            Some(s) if !s.is_empty() => m.set_hash(s.trim().parse::<u16>().unwrap_or_else(|_| material_hash(&s))),
             _ => m.set_hash(0),
         }
         m.set_procedural_id(n.u8(&format!("{prefix}ProcID"), 0));
@@ -271,5 +272,17 @@ mod tests {
         // A decimal hash written by the C# hashes to something else.
         assert_ne!(material_hash("2804"), 2804);
         assert_eq!(material_hash(""), 12667);
+    }
+
+    #[test]
+    fn a_material_keeps_its_hash_through_xml() {
+        use crate::xml::XmlDocument;
+        let read = |name: &str| {
+            let doc = XmlDocument::new(format!("<Bounds><MaterialName>{name}</MaterialName></Bounds>"));
+            doc.with_root(None, |root| BoundMaterial1::read_xml(&root, "Material")).unwrap().hash()
+        };
+        // As `write_xml` gives it (the hash in decimal), and as Blender's add-on and the app give it (the name).
+        assert_eq!(read("32350"), 32350);
+        assert_eq!(read("WOOD_SOLID_MEDIUM"), 32350);
     }
 }

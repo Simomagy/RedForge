@@ -17,6 +17,9 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   view on top, the tools by kind of file under them.
 
 ### Fixed
+- The game crashed loading a ymap that was saved empty and given objects
+  later (a new ymap, saved, then filled): it was written without the enums of
+  its entities. Saving such a ymap again puts them back.
 - Blender 5.3 crashed drawing a building brought in with Edit in Blender (a
   tint attribute per material: the materials with the same palette share one
   now).
