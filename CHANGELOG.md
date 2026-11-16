@@ -8,6 +8,24 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.3.6] - 2026-11-16
+
+### Added
+- The version installed is shown at the right end of the status bar.
+- Objects can be placed in an interior placed in one of the edited ymaps:
+  the new object goes in the interior's archetype, in the room it's placed
+  in.
+- Trees and bushes (what the game places in prop batches) are added as
+  instances of their ymap's batch, made if there's none.
+- A new interior placed on the map gets what the game's interior ymaps
+  have: their flags and its archetype's exit portals. A ytyp from Sollumz
+  RDR added to a project gets what the game's interiors have and Sollumz
+  has no fields for.
+- RedForge for Blender makes breakable props, doors and gates: **As**, next
+  to Create Archetype, gives the archetype what the game's own have (a
+  breakable prop, a swinging door, a sliding one), and a game fragment
+  comes back from Blender as the game made it.
+
 ### Changed
 - The Blender add-on is now **RedForge for Blender**, one add-on in place of
   RedForge Bridge and Sollumz RDR (disable those): install
@@ -26,6 +44,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - A model's collision material came back from Blender as DEFAULT (and showed
   pink there): RedForge writes it as its hash, which the add-on now reads.
 - Fragments came back from Blender with GTA V's collision materials.
+- A collision material written to XML as its hash number was another
+  material when read back.
 
 ## [2.3.5] - 2026-11-04
 
@@ -253,7 +273,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.3.5...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.3.6...HEAD
+[2.3.6]: https://github.com/Simomagy/RedForge/compare/v2.3.5...v2.3.6
 [2.3.5]: https://github.com/Simomagy/RedForge/compare/v2.3.0...v2.3.5
 [2.3.0]: https://github.com/Simomagy/RedForge/compare/v2.1.0...v2.3.0
 [2.1.0]: https://github.com/Simomagy/RedForge/compare/v2.0.0...v2.1.0

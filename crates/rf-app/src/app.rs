@@ -1546,22 +1546,26 @@ impl eframe::App for RedForgeApp {
 
         egui::Panel::bottom("status").frame(bar).show(ui, |ui| {
             use crate::theme::icon;
-            if let Some(g) = &game {
-                ui.horizontal(|ui| {
+            ui.horizontal(|ui| {
+                if let Some(g) = &game {
                     let files =
                         format!("{}  {} files in {} archives", icon::PACKAGE, g.fs.file_count(), g.fs.archives.len());
                     ui.label(egui::RichText::new(files).small().weak());
                     ui.separator();
                     ui.label(egui::RichText::new(g.folder.display().to_string()).small().weak());
+                }
+                // The version installed at the right end, whether a game is open or not.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(concat!("v", env!("CARGO_PKG_VERSION"))).small().weak())
+                        .on_hover_text(concat!("RedForge ", env!("CARGO_PKG_VERSION")));
                     if self.blender.as_ref().is_some_and(BlenderLink::connected) {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let on = egui::Color32::from_rgb(110, 200, 120);
-                            ui.label(egui::RichText::new(format!("{}  Blender", icon::CIRCLE)).small().color(on))
-                                .on_hover_text("The Blender add-on is connected");
-                        });
+                        ui.separator();
+                        let on = egui::Color32::from_rgb(110, 200, 120);
+                        ui.label(egui::RichText::new(format!("{}  Blender", icon::CIRCLE)).small().color(on))
+                            .on_hover_text("The Blender add-on is connected");
                     }
                 });
-            }
+            });
         });
 
         // Blender's requests, answered between frames.

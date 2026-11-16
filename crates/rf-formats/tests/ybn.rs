@@ -3,7 +3,8 @@
 //! `all_types.ybn.xml` has every bound type; `all_types.cs.ybn.xml` is what the C#
 //! RedForge reads back from the file it writes from it (through `rf-oracle`):
 //! writing has to give a file that reads back the same, BVH polygon order,
-//! quantized vertices, Plane-as-Box and re-hashed material names included.
+//! quantized vertices and Plane-as-Box included. One thing isn't the C#'s: a
+//! material given as its hash number stays that number (the C# hashes it again).
 
 use std::path::{Path, PathBuf};
 

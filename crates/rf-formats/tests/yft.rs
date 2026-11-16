@@ -6,7 +6,8 @@
 //! child groups are derived, both joint types, type connections, half floats
 //! out of range, a second physics LOD with empty arrays...);
 //! `features.cs.yft.xml` is what the C# RedForge reads back from the file it
-//! writes from it (through `rf-oracle`). The game-file test needs
+//! writes from it (through `rf-oracle`), but for a material given as its hash
+//! number, which stays that number. The game-file test needs
 //! `REDFORGE_GAME_DIR`; the C# comparison of game files is `rf compare yft
 //! --write`.
 

@@ -18,15 +18,15 @@
    <IncludeFlags>CF_PED_TYPE</IncludeFlags>
    <Materials>
     <Item>
-     <Name>23480</Name>
+     <Name>2804</Name>
      <Flags>FLAG_NO_NAVMESH</Flags>
     </Item>
     <Item>
-     <Name>2140</Name>
+     <Name>5495</Name>
      <Unk value="8192" />
     </Item>
     <Item>
-     <Name>17070</Name>
+     <Name>30768</Name>
     </Item>
    </Materials>
    <Vertices>
