@@ -131,7 +131,9 @@ enum Command {
         /// Output folder (default: next to the ytyp).
         #[arg(short, long)]
         out: Option<PathBuf>,
-        /// The zone's number, past the game's own 0 to 182 (default: one from the interior's name).
+        /// The zone's number: the game's own are 0 to 182, and it loads those after
+        /// them only with none missing, so 183, then 184 for a second resource
+        /// on the same server (default: 183).
         #[arg(long)]
         zone: Option<u32>,
         /// The width of a cell, in metres.

@@ -9,6 +9,15 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 ## [Unreleased]
 
 ### Added
+- Exporting a project to a RedM resource bakes an **ambient mask volume** for
+  each of its interiors (those its ytyps have and its ymaps place), into an
+  `amv_zone_<n>.ymt` and `.ytd` in the resource's stream folder: nothing to
+  do by hand, and they follow the interior when it changes. The zone's number
+  is the project's **Ambient zone** (Project pane, RedM resource): 183 unless
+  changed. The game's own zones are 0 to 182 and it loads the ones after them
+  only with none missing, so a second resource on the same server takes 184.
+  A project with an `amv_zone` file of its own is left alone. The export also says what else an
+  interior's lighting lacks next to the game's own (below).
 - `rf amv-bake` bakes an **ambient mask volume** for an interior that has
   none. Without one the game lights an interior as if it stood in the open,
   and its metals (lamps, pitchers, window frames) come out black by day. From
@@ -16,8 +25,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   them, it casts rays from every cell of a box around the interior and writes
   how much of the sky each cell sees in six directions, as the game's own
   volumes have it: an `amv_zone_<n>.ymt` and `.ytd` to put in the resource's
-  stream folder, numbered past the game's own zones (0 to 182) so that none of
-  those is replaced. Glass and decals let the light through; the models drawn
+  stream folder, numbered after the game's own zones (183 unless `--zone`
+  says otherwise) so that none of those is replaced. Glass and decals let the light through; the models drawn
   only into shadows or reflections are left out.
   It also says what else the interior's lighting lacks next to the game's
   own interiors: rooms with no time cycle, rooms with no reflection probe,

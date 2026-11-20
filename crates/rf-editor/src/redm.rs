@@ -7,6 +7,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use rf_formats::hash::HashIndex;
+
+use crate::amv;
 use crate::anim::AnimSource;
 use crate::project::{is_animation, is_game_file};
 
@@ -87,6 +90,12 @@ pub struct Exported {
     /// Files an export before wrote (`before`) that aren't in the project
     /// any more: taken out of `stream`, so they don't load in game.
     pub removed: Vec<String>,
+    /// How many of the project's interiors got an ambient mask volume, baked
+    /// into an `amv_zone_<n>.ymt` and `.ytd` (among `written`).
+    pub volumes: usize,
+    /// What to tell of the interiors: those left without a volume, and what
+    /// else their lighting lacks.
+    pub notes: Vec<String>,
 }
 
 pub fn export(
@@ -94,6 +103,8 @@ pub fn export(
     files: &[PathBuf],
     info: &BTreeMap<String, String>,
     before: &[String],
+    zone: u32,
+    hashes: &HashIndex,
 ) -> Result<Exported, String> {
     let io = |e: std::io::Error, p: &Path| format!("{}: {e}", p.display());
     let stream = resource.join("stream");
@@ -118,6 +129,20 @@ pub fn export(
             done.skipped.push(name);
         }
     }
+    // An interior with no ambient mask volume is lit as if outdoors, its metals
+    // black by day: one is baked for each into zone `zone`, unless the project
+    // has a zone of its own.
+    let baked = amv::bake_project(files, zone, hashes);
+    if let Some(zone) = &baked.zone {
+        for (ext, data) in [("ymt", &zone.ymt), ("ytd", &zone.ytd)] {
+            let name = format!("{}.{ext}", amv::zone_name(zone.number));
+            let to = stream.join(&name);
+            std::fs::write(&to, data).map_err(|e| io(e, &to))?;
+            done.written.push(name);
+        }
+    }
+    done.volumes = baked.volumes;
+    done.notes = baked.notes;
     // Only what RedForge wrote goes; other files in stream stay.
     for name in before {
         let gone = !done.written.iter().any(|w| w.eq_ignore_ascii_case(name));
@@ -199,6 +224,64 @@ mod tests {
     }
 
     #[test]
+    fn an_interior_gets_an_ambient_mask_volume() {
+        use rf_formats::formats::databag::Value;
+        use rf_formats::formats::meta::Meta;
+        use rf_formats::formats::{self, XmlContext};
+        use rf_formats::hash::joaat;
+
+        let dir = tempfile::tempdir().unwrap();
+        let hashes = HashIndex::new();
+        // A model, the interior with it in its one room, and the ymap placing the interior.
+        let model = include_str!("../../rf-formats/tests/data/ydr/features.ydr.xml");
+        let cx = XmlContext { hashes: &hashes, folder: None };
+        let shell = formats::from_xml("shell.ydr.xml", model, &cx).unwrap();
+        let mut entity = Meta::create("CEntityDef").unwrap();
+        entity.set_hash("archetypeName", joaat("shell"));
+        entity.set_vec4("rotation", [0.0, 0.0, 0.0, 1.0]);
+        entity.set_f32("scaleXY", 1.0);
+        entity.set_f32("scaleZ", 1.0);
+        let mut room = Meta::create("CMloRoomDef").unwrap();
+        room.set_vec3("bbMin", [-2.0; 3]);
+        room.set_vec3("bbMax", [2.0; 3]);
+        let mut mlo = Meta::create("CMloArchetypeDef").unwrap();
+        mlo.set_hash("name", joaat("house"));
+        mlo.set_object("entities", Some(Value::Bags(vec![Some(entity)])));
+        mlo.set_object("rooms", Some(Value::Bags(vec![Some(room)])));
+        let mut ytyp = Meta::create("CMapTypes").unwrap();
+        ytyp.set_object("archetypes", Some(Value::Bags(vec![Some(mlo)])));
+        let mut instance = Meta::create("CMloInstanceDef").unwrap();
+        instance.set_hash("archetypeName", joaat("house"));
+        instance.set_vec3("position", [100.0, 200.0, 30.0]);
+        instance.set_vec4("rotation", [0.0, 0.0, 0.0, 1.0]);
+        let mut map = Meta::create("CMapData").unwrap();
+        map.set_object("entities", Some(Value::Bags(vec![Some(instance)])));
+        let files: Vec<PathBuf> = ["shell.ydr", "house.ytyp", "town.ymap"].iter().map(|f| dir.path().join(f)).collect();
+        std::fs::write(&files[0], shell).unwrap();
+        std::fs::write(&files[1], Meta::new(Some(ytyp)).save().unwrap()).unwrap();
+        std::fs::write(&files[2], Meta::new(Some(map)).save().unwrap()).unwrap();
+
+        let res = dir.path().join("res/town");
+        let done = export(&res, &files, &BTreeMap::new(), &[], 184, &hashes).unwrap();
+        assert_eq!(done.volumes, 1, "{:?}", done.notes);
+        let zone = amv::zone_name(184);
+        assert_eq!(done.written[3..], [format!("{zone}.ymt"), format!("{zone}.ytd")]);
+        assert!(res.join("stream").join(format!("{zone}.ytd")).exists());
+        // The entity has none of the usual flags: said, not fixed. (Its only room is
+        // the whole of it, which needs no time cycle or probe.)
+        assert_eq!(done.notes.len(), 1, "{:?}", done.notes);
+        assert!(done.notes[0].contains("1 of 1 entities"), "{:?}", done.notes);
+
+        // With a zone of its own in the project, nothing is baked, and the one baked before goes.
+        let own = dir.path().join("amv_zone_200.ymt");
+        std::fs::write(&own, b"x").unwrap();
+        let all: Vec<PathBuf> = files.iter().cloned().chain([own]).collect();
+        let again = export(&res, &all, &BTreeMap::new(), &done.written, 184, &hashes).unwrap();
+        assert_eq!((again.volumes, again.notes.len()), (0, 0));
+        assert_eq!(again.removed, [format!("{zone}.ymt"), format!("{zone}.ytd")]);
+    }
+
+    #[test]
     fn exports_and_keeps_an_existing_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("src");
@@ -210,7 +293,7 @@ mod tests {
         let res = dir.path().join("res/my_map");
         let mut info =
             BTreeMap::from([("author".to_string(), "Prysma".to_string()), ("version".into(), "1.0.0".into())]);
-        let done = export(&res, &files, &info, &[]).unwrap();
+        let done = export(&res, &files, &info, &[], amv::FIRST_FREE_ZONE, &HashIndex::new()).unwrap();
         assert_eq!(done.skipped, ["notes.txt"]);
         assert_eq!(done.written, ["a.ymap", "b.ytyp"]);
         assert!(res.join("stream/a.ymap").exists() && res.join("stream/b.ytyp").exists());
@@ -224,13 +307,21 @@ mod tests {
         std::fs::write(res.join("fxmanifest.lua"), text.clone() + "-- mine\r\n").unwrap();
         info.insert("version".into(), "1.1.0".into());
         std::fs::write(res.join("stream/mine.ydr"), b"x").unwrap();
-        let done = export(&res, &files[..1], &info, &["a.ymap".into(), "b.ytyp".into()]).unwrap();
+        let done = export(
+            &res,
+            &files[..1],
+            &info,
+            &["a.ymap".into(), "b.ytyp".into()],
+            amv::FIRST_FREE_ZONE,
+            &HashIndex::new(),
+        )
+        .unwrap();
         // b.ytyp left the project: it goes, with its DLC_ITYP_REQUEST; a file of the user's stays.
         assert_eq!(done.removed, ["b.ytyp"]);
         assert!(!res.join("stream/b.ytyp").exists() && res.join("stream/mine.ydr").exists());
         let without = std::fs::read_to_string(res.join("fxmanifest.lua")).unwrap();
         assert!(!without.contains("b.ytyp") && without.contains("-- mine"));
-        export(&res, &files, &info, &done.written).unwrap();
+        export(&res, &files, &info, &done.written, amv::FIRST_FREE_ZONE, &HashIndex::new()).unwrap();
         let again = std::fs::read_to_string(res.join("fxmanifest.lua")).unwrap();
         assert!(again.contains("-- mine") && again.contains("version '1.1.0'") && !again.contains("1.0.0"));
         assert_eq!(again.matches("DLC_ITYP_REQUEST").count(), 1);
@@ -241,14 +332,17 @@ mod tests {
     fn animations_go_as_the_dictionary_the_game_plays() {
         use crate::anim::BoneKeys;
         let dir = tempfile::tempdir().unwrap();
-        let mut anim = AnimSource { dictionary: "my@wave".into(), clip: "wave".into(), frames: 31, ..Default::default() };
+        let mut anim =
+            AnimSource { dictionary: "my@wave".into(), clip: "wave".into(), frames: 31, ..Default::default() };
         let mut arm = BoneKeys::new(40269, "SKEL_R_UpperArm", glam::Quat::IDENTITY, glam::Vec3::ZERO);
         arm.key_rotation(0.0, glam::Quat::IDENTITY);
         anim.bones.push(arm);
         let file = dir.path().join("wave.rfanim.json");
         std::fs::write(&file, anim.to_json()).unwrap();
         let res = dir.path().join("res");
-        let done = export(&res, std::slice::from_ref(&file), &BTreeMap::new(), &[]).unwrap();
+        let done =
+            export(&res, std::slice::from_ref(&file), &BTreeMap::new(), &[], amv::FIRST_FREE_ZONE, &HashIndex::new())
+                .unwrap();
         assert_eq!(done.written, ["my@wave.ycd"]);
         assert!(done.skipped.is_empty());
         assert_eq!(std::fs::read(res.join("stream/my@wave.ycd")).unwrap(), anim.bake().unwrap());
@@ -256,13 +350,21 @@ mod tests {
         // Its dictionary renamed: the one written before goes.
         anim.dictionary = "my@hello".into();
         std::fs::write(&file, anim.to_json()).unwrap();
-        let again = export(&res, std::slice::from_ref(&file), &BTreeMap::new(), &done.written).unwrap();
+        let again = export(
+            &res,
+            std::slice::from_ref(&file),
+            &BTreeMap::new(),
+            &done.written,
+            amv::FIRST_FREE_ZONE,
+            &HashIndex::new(),
+        )
+        .unwrap();
         assert_eq!((again.written, again.removed), (vec!["my@hello.ycd".to_string()], vec!["my@wave.ycd".to_string()]));
 
         // One that can't be baked stops the export, saying which.
         anim.bones.clear();
         std::fs::write(&file, anim.to_json()).unwrap();
-        let e = export(&res, &[file], &BTreeMap::new(), &[]).unwrap_err();
+        let e = export(&res, &[file], &BTreeMap::new(), &[], amv::FIRST_FREE_ZONE, &HashIndex::new()).unwrap_err();
         assert!(e.starts_with("wave.rfanim.json: "), "{e}");
     }
 }

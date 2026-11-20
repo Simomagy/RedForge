@@ -28,6 +28,9 @@ const COPY_ADDED: &str = "Project.CopyAdded";
 /// The project's `export` setting with the files the last export wrote
 /// (`|`-separated): the next one takes out those that left the project.
 const EXPORTED: &str = "exported";
+/// In a project's export settings: the number of the zone its ambient mask
+/// volumes are baked into.
+const AMV_ZONE: &str = "amvZone";
 /// How often the changed files are autosaved.
 const AUTOSAVE_EVERY: Duration = Duration::from_secs(120);
 
@@ -196,6 +199,8 @@ struct ExportForm {
     author: String,
     version: String,
     description: String,
+    /// The number of the zone of ambient mask volumes the export bakes.
+    amv_zone: String,
 }
 
 impl ProjectPane {
@@ -1030,6 +1035,7 @@ impl ProjectPane {
                 author: info("author").unwrap_or_else(|| settings.get(AUTHOR).unwrap_or_default().into()),
                 version: info("version").unwrap_or_else(|| "1.0.0".into()),
                 description: info("description").unwrap_or_default(),
+                amv_zone: get(AMV_ZONE).unwrap_or_else(|| rf_editor::amv::FIRST_FREE_ZONE.to_string()),
                 resource,
                 folder,
             }
@@ -1067,6 +1073,13 @@ impl ProjectPane {
                 ui.end_row();
                 ui.label("Description");
                 ui.text_edit_singleline(&mut form.description);
+                ui.end_row();
+                ui.label("Ambient zone");
+                ui.add(egui::TextEdit::singleline(&mut form.amv_zone).desired_width(60.0)).on_hover_text(
+                    "The number of the amv_zone file the export bakes for the project's interiors (without one \
+                     their metals are black by day). The game's own are 0 to 182, and it loads those after them \
+                     only with none missing: 183 for the first resource on a server, 184 for the second...",
+                );
                 ui.end_row();
             });
             let mut on_save = project.export.get("onSave").is_some_and(|v| v == "true");
@@ -1147,12 +1160,14 @@ impl ProjectPane {
         .into_iter()
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
+        let zone = form.amv_zone.trim().parse().unwrap_or(rf_editor::amv::FIRST_FREE_ZONE);
         if let Some(p) = &mut editor.project {
+            p.export.insert(AMV_ZONE.into(), zone.to_string());
             p.export.insert("resource".into(), name.clone());
             p.export.insert("folder".into(), form.folder.clone());
             p.export.extend(info.clone());
         }
-        let done = match redm::export(&resource, &files, &info, &before) {
+        let done = match redm::export(&resource, &files, &info, &before, zone, editor.hashes()) {
             Ok(done) => done,
             Err(e) => {
                 let _ = editor.save_project_file();
@@ -1171,6 +1186,16 @@ impl ProjectPane {
         let removed = match done.removed.len() {
             0 => String::new(),
             _ => format!("; took out of stream what's no longer in the project: {}", done.removed.join(", ")),
+        };
+        // What was baked for the interiors, and what their lighting lacks.
+        let removed = match done.volumes {
+            0 => removed,
+            1 => format!("{removed}; baked an ambient mask volume for its interior"),
+            n => format!("{removed}; baked ambient mask volumes for its {n} interiors"),
+        };
+        let removed = match done.notes.is_empty() {
+            true => removed,
+            false => format!("{removed}; {}", done.notes.join("; ")),
         };
         if !stale.is_empty() {
             let left = if left_out.is_empty() { String::new() } else { format!("; left out: {}", left_out.join(", ")) };

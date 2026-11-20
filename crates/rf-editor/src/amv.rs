@@ -12,18 +12,27 @@
 //! the fraction that get out above the horizon being what the cell sees of
 //! the sky.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use rayon::prelude::*;
+use rf_formats::formats::XmlContext;
 use rf_formats::formats::databag::{DataBag, Value};
 use rf_formats::formats::dds::TextureFormat;
+use rf_formats::formats::meta::Meta;
 use rf_formats::formats::pso::{PsoFile, pso_schema};
-use rf_formats::formats::ydr::{DrawableBase, semantic};
+use rf_formats::formats::ydr::{self, DrawableBase, semantic};
 use rf_formats::formats::ytd::{
     ShaderResourceView, Texture, TextureBase, TextureDictionary, block_count, block_stride, dimension,
     from_engine_format, srv_dimension, tile_mode,
 };
-use rf_formats::hash::joaat;
+use rf_formats::hash::{HashIndex, joaat};
 use rf_formats::rsc8::{BlockMap, Rsc8Writer};
+
+use crate::interior::{self, Lighting};
+use crate::lod;
+use crate::placement::{Placement, is_mlo_instance};
 
 /// The zone file's root class, `AMV__CAMVolumeListSaveData`.
 const ZONE_CLASS: u32 = 0x8A2D_8245;
@@ -431,15 +440,210 @@ pub fn zone_textures(textures: Vec<Texture>) -> Vec<u8> {
     w.build(2)
 }
 
-/// The zone number an interior gets when none is asked for: past the game's
-/// own, and the same every time for the same name.
-pub fn zone_for(interior: u32) -> u32 {
-    LAST_GAME_ZONE + 1 + interior % 72
-}
+/// The first zone number after the game's own, which is what a zone made here
+/// gets unless told otherwise. The game only loads the numbers that follow its
+/// own with none missing (it loads 183, not 212 with nothing in between): two
+/// resources on a server take 183 and 184, not the same one.
+pub const FIRST_FREE_ZONE: u32 = LAST_GAME_ZONE + 1;
 
 /// The uuid of an interior's `index`th volume: its textures' name.
 pub fn uuid_for(interior: u32, index: u32) -> u64 {
     (interior as u64) << 32 | (index as u64 + 1)
+}
+
+/// The model files (ydr) among `paths`, by the hash of their name: what an
+/// archetype of the same name is drawn with.
+pub fn model_files(paths: impl IntoIterator<Item = PathBuf>) -> HashMap<u32, PathBuf> {
+    let mut files = HashMap::new();
+    for path in paths {
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ydr"))
+            && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+        {
+            files.insert(joaat(&stem.to_ascii_lowercase()), path);
+        }
+    }
+    files
+}
+
+/// Whether a model isn't what's seen of the interior: the stand-ins drawn only
+/// into shadows or reflections (so flagged, or so named: the shadow ones have
+/// no flag of their own), which are closed where the interior is open.
+fn is_proxy(path: &Path, flags: u32) -> bool {
+    const ONLY_IN_A_PASS: u32 = 0x2A00_0000;
+    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
+    flags & ONLY_IN_A_PASS != 0
+        || ["shadowproxy", "shadow_proxy", "ref_proxy", "refproxy", "lightbox"].iter().any(|p| name.contains(p))
+}
+
+/// Triangles in the world's space, and the models they are of with how many each gave.
+pub type Occluders = (Vec<[Vec3; 3]>, Vec<(PathBuf, usize)>);
+
+/// An interior of a ytyp and the entity of a ymap that places it.
+#[derive(Clone, Copy)]
+pub struct Placed<'a> {
+    pub mlo: &'a DataBag,
+    pub map: &'a DataBag,
+    pub instance: &'a DataBag,
+}
+
+impl Placed<'_> {
+    /// The hash of the interior's name.
+    pub fn name(&self) -> u32 {
+        self.mlo.hash("name")
+    }
+
+    /// The volume around the whole of it (its first room's box), with cells
+    /// about `cell` metres wide.
+    pub fn volume(&self, cell: f32) -> Option<Volume> {
+        let whole = self.mlo.bags("rooms")?.iter().flatten().next()?;
+        let (min, max) = (Vec3::from(whole.vec3("bbMin")), Vec3::from(whole.vec3("bbMax")));
+        let placed = Placement::of_entity(self.instance);
+        ((max - min).min_element() > 0.0)
+            .then(|| Volume::of_interior(placed.position, placed.orientation, min, max, cell))
+    }
+
+    /// What blocks the light in and around it, in the world's space: the
+    /// models in `files` of its own entities and of the entities its ymap has
+    /// around it (the building it is in). With each model used, its triangles.
+    pub fn occluders(&self, files: &HashMap<u32, PathBuf>, hashes: &HashIndex) -> Result<Occluders, String> {
+        let placed = Placement::of_entity(self.instance);
+        let to_world = Mat4::from_rotation_translation(placed.orientation, placed.position);
+        let cx = XmlContext { hashes, folder: None };
+        let (mut triangles, mut used) = (Vec::new(), Vec::new());
+        let inside = lod::entities(self.mlo).iter().flatten().map(|d| (d, to_world));
+        let around =
+            lod::entities(self.map).iter().flatten().filter(|e| !is_mlo_instance(e)).map(|d| (d, Mat4::IDENTITY));
+        for (def, parent) in inside.chain(around) {
+            let Some(path) = files.get(&def.hash("archetypeName")) else { continue };
+            if is_proxy(path, def.u32("flags")) {
+                continue;
+            }
+            let read = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+            let data = std::fs::read(path).map_err(|e| read(&e))?;
+            let drawable = ydr::read(&data, &cx).map_err(|e| read(&e))?;
+            let before = triangles.len();
+            drawable_triangles(&drawable.base, parent * Placement::of_entity(def).matrix(), &mut triangles);
+            used.push((path.clone(), triangles.len() - before));
+        }
+        Ok((triangles, used))
+    }
+}
+
+/// The interiors of `ytyps` that `maps` place, each with the first entity
+/// that places it.
+pub fn placed<'a>(ytyps: &'a [DataBag], maps: &'a [DataBag]) -> Vec<Placed<'a>> {
+    let mlos =
+        ytyps.iter().flat_map(|y| interior::archetypes(y).iter().flatten()).filter(|a| a.bags("rooms").is_some());
+    mlos.filter_map(|mlo| {
+        let places = |e: &&DataBag| is_mlo_instance(e) && e.hash("archetypeName") == mlo.hash("name");
+        maps.iter().find_map(|map| {
+            let instance = lod::entities(map).iter().flatten().find(places)?;
+            Some(Placed { mlo, map, instance })
+        })
+    })
+    .collect()
+}
+
+/// A zone's two files.
+pub struct ZoneFiles {
+    pub number: u32,
+    /// `amv_zone_<number>.ymt`.
+    pub ymt: Vec<u8>,
+    /// `amv_zone_<number>.ytd`.
+    pub ytd: Vec<u8>,
+}
+
+/// What was baked for a project.
+#[derive(Default)]
+pub struct ProjectBake {
+    /// The zone with the volumes, if any was baked.
+    pub zone: Option<ZoneFiles>,
+    /// How many interiors have a volume in it.
+    pub volumes: usize,
+    /// Interiors left without one, and why; what else an interior's lighting lacks.
+    pub notes: Vec<String>,
+}
+
+/// What [`Lighting`] found, in words.
+pub fn lighting_notes(name: &str, l: &Lighting) -> Vec<String> {
+    let mut notes = Vec::new();
+    if !l.no_time_cycle.is_empty() {
+        notes.push(format!("{name}: no time cycle (lit as outdoors) in {}", l.no_time_cycle.join(", ")));
+    }
+    if !l.no_probe.is_empty() {
+        notes.push(format!("{name}: no reflection probe (nothing for metals to reflect) in {}", l.no_probe.join(", ")));
+    }
+    if l.unflagged > 0 {
+        notes.push(format!(
+            "{name}: {} of {} entities have neither of the flags the game's interior entities have ({})",
+            l.unflagged,
+            l.entities,
+            interior::USUAL_ENTITY_FLAGS
+        ));
+    }
+    notes
+}
+
+/// Whether a file is a zone of ambient mask volumes (`amv_zone_<n>.ymt`).
+pub fn is_zone_file(path: &Path) -> bool {
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+    name.starts_with("amv_zone_") && name.ends_with(".ymt")
+}
+
+/// Zone `number` for a project's interiors: a volume for each interior its
+/// ytyps have and its ymaps place, baked against its models. Nothing for a project
+/// with a zone of its own among its files (it has seen to it), or with no
+/// interior.
+pub fn bake_project(files: &[PathBuf], number: u32, hashes: &HashIndex) -> ProjectBake {
+    if files.iter().any(|f| is_zone_file(f)) {
+        return ProjectBake::default();
+    }
+    let metas = |ext: &str| -> Vec<DataBag> {
+        let of_kind = files.iter().filter(|f| f.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)));
+        of_kind.filter_map(|f| Meta::read(&std::fs::read(f).ok()?).ok()?.root).collect()
+    };
+    let (ytyps, maps) = (metas("ytyp"), metas("ymap"));
+    let interiors = placed(&ytyps, &maps);
+    if interiors.is_empty() {
+        return ProjectBake::default();
+    }
+    let models = model_files(files.iter().cloned());
+    let (mut items, mut textures, mut notes) = (Vec::new(), Vec::new(), Vec::new());
+    for (index, interior) in interiors.iter().enumerate() {
+        let name = hashes.name(interior.name());
+        notes.extend(lighting_notes(&name, &interior::lighting(interior.mlo)));
+        let Some(volume) = interior.volume(0.5) else {
+            notes.push(format!("{name}: no ambient mask volume, its first room has no size"));
+            continue;
+        };
+        let triangles = match interior.occluders(&models, hashes) {
+            Ok((triangles, _)) if !triangles.is_empty() => triangles,
+            Ok(_) => {
+                notes.push(format!("{name}: no ambient mask volume, none of its models is in the project"));
+                continue;
+            }
+            Err(e) => {
+                notes.push(format!("{name}: no ambient mask volume ({e})"));
+                continue;
+            }
+        };
+        let uuid = uuid_for(interior.name(), index as u32);
+        let Some(item) = zone_item(&volume, uuid) else { continue };
+        let baked = bake(&volume, &Mesh::new(triangles), &Settings::default());
+        items.push(item);
+        textures.extend(baked.textures(uuid));
+    }
+    if items.is_empty() {
+        return ProjectBake { notes, ..Default::default() };
+    }
+    let volumes = items.len();
+    match zone_file(number, items) {
+        Ok(ymt) => ProjectBake { zone: Some(ZoneFiles { number, ymt, ytd: zone_textures(textures) }), volumes, notes },
+        Err(e) => {
+            notes.push(format!("no ambient mask volume ({e})"));
+            ProjectBake { notes, ..Default::default() }
+        }
+    }
 }
 
 #[cfg(test)]
