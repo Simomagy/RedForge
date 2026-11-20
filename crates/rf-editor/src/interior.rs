@@ -191,6 +191,53 @@ pub fn duplicate(mlo: &mut DataBag, from: Slot, copy: DataBag) -> Option<Slot> {
     }
 }
 
+/// What an interior's lighting lacks next to the game's own interiors: its
+/// rooms with no time cycle or no reflection probe, and how many of its
+/// entities have none of the flags nearly all of the game's interior entities
+/// have.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Lighting {
+    /// Every room of the game's interiors but the first (the whole of it,
+    /// "limbo") names a time cycle: without one the room is lit as outdoors.
+    pub no_time_cycle: Vec<String>,
+    /// Nearly every interior of the game has a probe in its rooms: what its
+    /// metals and glass reflect.
+    pub no_probe: Vec<String>,
+    /// Entities with neither of the two flags (`0x180000`) that 95 in 100 of
+    /// the game's interior entities have. What the flags do isn't known.
+    pub unflagged: usize,
+    pub entities: usize,
+}
+
+/// The flags nearly all of the game's interior entities have.
+pub const USUAL_ENTITY_FLAGS: u32 = 0x0018_0000;
+
+impl Lighting {
+    pub fn is_complete(&self) -> bool {
+        self.no_time_cycle.is_empty() && self.no_probe.is_empty() && self.unflagged == 0
+    }
+}
+
+/// See [`Lighting`].
+pub fn lighting(mlo: &DataBag) -> Lighting {
+    let mut l = Lighting::default();
+    for (i, room) in mlo.bags("rooms").unwrap_or_default().iter().flatten().enumerate().skip(1) {
+        let name = || room.string("name").map_or_else(|| format!("room {i}"), str::to_owned);
+        if room.hash("timecycleName") == 0 {
+            l.no_time_cycle.push(name());
+        }
+        if room.bags("reflectionProbes").is_none_or(|p| p.is_empty()) {
+            l.no_probe.push(name());
+        }
+    }
+    let sets = mlo.bags(ENTITY_SETS).unwrap_or_default().iter().flatten();
+    for def in lod::entities(mlo).iter().chain(sets.flat_map(lod::entities)).flatten() {
+        l.entities += 1;
+        l.unflagged += usize::from(def.u32("flags") & USUAL_ENTITY_FLAGS == 0);
+    }
+    l
+}
+
 #[cfg(test)]
 mod tests {
     use rf_formats::formats::meta::Meta;
@@ -236,6 +283,32 @@ mod tests {
         assert_eq!(add(&mut m, entity(), [-5.0, 0.0, 0.0]).index, 2);
         assert_eq!((attached(&mut m, 0), attached(&mut m, 1), attached(&mut m, 2)), (vec![], vec![1, 2], vec![0]));
         assert_eq!(lod::entities(&m).len(), 3);
+    }
+
+    #[test]
+    fn lighting_lists_what_rooms_and_entities_lack() {
+        let room = |name: &str, time_cycle: u32, probe: bool| {
+            let mut r = Meta::create("CMloRoomDef").unwrap();
+            r.set_string("name", name);
+            r.set_hash("timecycleName", time_cycle);
+            if probe {
+                r.set_object("reflectionProbes", Some(Value::Bags(vec![Meta::create("CReflectionProbeData")])));
+            }
+            Some(r)
+        };
+        let mut m = mlo();
+        // Limbo isn't looked at; the hall has everything, the kitchen nothing.
+        m.set_object(
+            "rooms",
+            Some(Value::Bags(vec![room("limbo", 0, false), room("hall", 7, true), room("kitchen", 0, false)])),
+        );
+        lod::entities_mut(&mut m)[1].as_mut().unwrap().set_u32("flags", USUAL_ENTITY_FLAGS | 32);
+        let l = lighting(&m);
+        assert_eq!(l.no_time_cycle, ["kitchen"]);
+        assert_eq!(l.no_probe, ["kitchen"]);
+        // Four plain entities and two in a set, one of them flagged.
+        assert_eq!((l.unflagged, l.entities), (5, 6));
+        assert!(!l.is_complete());
     }
 
     #[test]

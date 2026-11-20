@@ -154,5 +154,22 @@ pub fn run(o: &Options, hashes: &HashIndex) -> Result<()> {
     std::fs::write(base.with_extension("ymt"), amv::zone_file(zone, vec![item])?)?;
     std::fs::write(base.with_extension("ytd"), amv::zone_textures(baked.textures(uuid).into()))?;
     println!("{} -> {}.ymt, .ytd", o.ytyp.display(), base.display());
+
+    // What else the interior's lighting lacks, next to the game's own.
+    let lighting = interior::lighting(mlo);
+    if !lighting.no_time_cycle.is_empty() {
+        println!("no time cycle (lit as outdoors): {}", lighting.no_time_cycle.join(", "));
+    }
+    if !lighting.no_probe.is_empty() {
+        println!("no reflection probe (nothing for metals to reflect): {}", lighting.no_probe.join(", "));
+    }
+    if lighting.unflagged > 0 {
+        println!(
+            "{} of {} entities have neither of the flags the game's interior entities have ({})",
+            lighting.unflagged,
+            lighting.entities,
+            interior::USUAL_ENTITY_FLAGS
+        );
+    }
     Ok(())
 }

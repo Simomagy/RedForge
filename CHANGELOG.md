@@ -19,6 +19,9 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   stream folder, numbered past the game's own zones (0 to 182) so that none of
   those is replaced. Glass and decals let the light through; the models drawn
   only into shadows or reflections are left out.
+  It also says what else the interior's lighting lacks next to the game's
+  own interiors: rooms with no time cycle, rooms with no reflection probe,
+  and entities with neither of the flags the game's interior entities have.
 
 ## [2.4.0] - 2026-11-20
 
