@@ -8,6 +8,18 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Added
+- `rf amv-bake` bakes an **ambient mask volume** for an interior that has
+  none. Without one the game lights an interior as if it stood in the open,
+  and its metals (lamps, pitchers, window frames) come out black by day. From
+  the interior's ytyp, the ymap that places it and the ydr models next to
+  them, it casts rays from every cell of a box around the interior and writes
+  how much of the sky each cell sees in six directions, as the game's own
+  volumes have it: an `amv_zone_<n>.ymt` and `.ytd` to put in the resource's
+  stream folder, numbered past the game's own zones (0 to 182) so that none of
+  those is replaced. Glass and decals let the light through; the models drawn
+  only into shadows or reflections are left out.
+
 ## [2.4.0] - 2026-11-20
 
 ### Added

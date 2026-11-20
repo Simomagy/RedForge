@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+mod amv;
 mod compare;
 
 use anyhow::{Context, Result, bail};
@@ -115,6 +116,43 @@ enum Command {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+    /// Bake an ambient mask volume for an interior that has none (without one
+    /// its metals are black by day): an amv_zone_<n>.ymt and .ytd to stream with
+    /// it, from the interior's ytyp, the ymap placing it and the ydr models next
+    /// to them.
+    AmvBake {
+        /// The ytyp with the interior.
+        ytyp: PathBuf,
+        /// The ymap that places it.
+        #[arg(long)]
+        ymap: PathBuf,
+        /// More models (ydr) than those next to the ytyp and the ymap.
+        models: Vec<PathBuf>,
+        /// Output folder (default: next to the ytyp).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// The zone's number, past the game's own 0 to 182 (default: one from the interior's name).
+        #[arg(long)]
+        zone: Option<u32>,
+        /// The width of a cell, in metres.
+        #[arg(long, default_value_t = 0.5)]
+        cell: f32,
+        /// Rays cast from a cell for each of its six directions.
+        #[arg(long, default_value_t = 96)]
+        rays: u32,
+        /// The volume's centre in the world, as x,y,z (default: the interior's).
+        #[arg(long, value_parser = amv::triple::<f32>, allow_hyphen_values = true)]
+        centre: Option<[f32; 3]>,
+        /// Half the volume's size, as x,y,z (default: the interior's).
+        #[arg(long, value_parser = amv::triple::<f32>)]
+        half: Option<[f32; 3]>,
+        /// The volume's heading, in degrees (default: the interior's).
+        #[arg(long, allow_hyphen_values = true)]
+        heading: Option<f32>,
+        /// The cells along each side, as x,y,z (default: from --cell).
+        #[arg(long, value_parser = amv::triple::<u32>)]
+        cells: Option<[u32; 3]>,
+    },
     /// Convert game files with both this port and the C# RedForge (rf-oracle) and
     /// report every difference.
     Compare {
@@ -169,6 +207,23 @@ fn main() -> Result<()> {
             convert_files(files, out.as_deref(), &strings, false)
         }
         Command::AnimBake { files, out } => bake_animations(files, out.as_deref()),
+        Command::AmvBake { ytyp, ymap, models, out, zone, cell, rays, centre, half, heading, cells } => {
+            let strings = load_strings(&cli)?;
+            let options = amv::Options {
+                ytyp: ytyp.clone(),
+                ymap: ymap.clone(),
+                models: models.clone(),
+                out: out.clone(),
+                zone: *zone,
+                cell: *cell,
+                rays: *rays,
+                centre: centre.map(Into::into),
+                half: half.map(Into::into),
+                heading: *heading,
+                cells: *cells,
+            };
+            amv::run(&options, &strings)
+        }
         Command::Skeleton { model, filter, json } => {
             let strings = load_strings(&cli)?;
             let cx = rf_formats::formats::XmlContext { hashes: &strings, folder: None };
