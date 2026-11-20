@@ -243,11 +243,15 @@ pub struct Settings {
     pub rays: u32,
     /// How far a ray goes before it counts as having reached the sky.
     pub reach: f32,
+    /// How much of the light a cell gets comes back to it off the walls, from
+    /// every side: what the game's own volumes have of it (their cells see a
+    /// little of the sky even downwards).
+    pub bounce: f32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { rays: 96, reach: 60.0 }
+        Self { rays: 256, reach: 60.0, bounce: 0.5 }
     }
 }
 
@@ -259,11 +263,17 @@ pub struct Baked {
 }
 
 /// Bakes `volume` against `mesh` (in the world's space).
+///
+/// The box holds cells that aren't in the interior: above its roof, under its
+/// floor, beyond its walls. They see the sky, and the game blends each cell
+/// with its neighbours: left as they are they light the ceiling and the walls
+/// in bands, a layer of cells each. So they take what the cells indoors next
+/// to them have instead.
 pub fn bake(volume: &Volume, mesh: &Mesh, settings: &Settings) -> Baked {
     let [nx, ny, nz] = volume.cells;
     let to_world = volume.to_world();
     let rays = settings.rays.max(1);
-    let values = (0..nx * ny * nz)
+    let cells: Vec<(bool, [f32; 6])> = (0..nx * ny * nz)
         .into_par_iter()
         .map(|i| {
             let (x, y, z) = (i % nx, i / nx % ny, i / (nx * ny));
@@ -271,7 +281,7 @@ pub fn bake(volume: &Volume, mesh: &Mesh, settings: &Settings) -> Baked {
             // The same pattern of rays turned differently for each cell, so that
             // neighbouring cells don't share its bands.
             let turn = unit(i.wrapping_mul(0x9E37_79B9) ^ 0x85EB_CA6B);
-            DIRECTIONS.map(|axis| {
+            let seen = DIRECTIONS.map(|axis| {
                 let axis = to_world.transform_vector3(axis);
                 let (side, up) = axis.any_orthonormal_pair();
                 let open = (0..rays)
@@ -286,10 +296,104 @@ pub fn bake(volume: &Volume, mesh: &Mesh, settings: &Settings) -> Baked {
                     })
                     .count();
                 open as f32 / rays as f32
-            })
+            });
+            (indoors(mesh, origin, settings.reach), seen)
         })
         .collect();
+    let mut values: Vec<[f32; 6]> = cells.iter().map(|c| c.1).collect();
+    let indoors: Vec<bool> = cells.iter().map(|c| c.0).collect();
+    spread_indoors(volume.cells, &mut values, indoors);
+    // The rays' noise, cell to cell.
+    smooth(volume.cells, &mut values);
+    if settings.bounce > 0.0 && !values.is_empty() {
+        // What comes back off the walls is the same from every side: half of it
+        // what the cells around have, spread wide, and half what the whole
+        // interior has, which is what reaches under the roof and into the corners
+        // that see no window.
+        let mut around: Vec<[f32; 6]> = values.iter().map(|v| [v.iter().sum::<f32>() / 6.0; 6]).collect();
+        let everywhere = around.iter().map(|a| a[0]).sum::<f32>() / around.len() as f32;
+        for _ in 0..6 {
+            smooth(volume.cells, &mut around);
+        }
+        for (v, a) in values.iter_mut().zip(&around) {
+            let back = settings.bounce * 0.5 * (a[0] + everywhere);
+            *v = v.map(|seen| (seen + back).min(1.0));
+        }
+    }
     Baked { cells: volume.cells, values }
+}
+
+/// Whether a point is inside the building: with something over it and
+/// something under it. (A little off the vertical too, so that a gap between
+/// two boards doesn't count as the sky.)
+fn indoors(mesh: &Mesh, at: Vec3, reach: f32) -> bool {
+    let lean = [Vec3::ZERO, Vec3::new(0.08, 0.0, 0.0), Vec3::new(-0.04, 0.07, 0.0), Vec3::new(-0.04, -0.07, 0.0)];
+    let covered = |way: Vec3| lean.iter().filter(|l| mesh.blocked(at, (way + **l).normalize(), reach)).count() >= 3;
+    covered(Vec3::Z) && covered(Vec3::NEG_Z)
+}
+
+/// The six cells next to cell `i`.
+fn neighbours(cells: [u32; 3], i: usize) -> impl Iterator<Item = usize> {
+    let [nx, ny, nz] = cells.map(|n| n as usize);
+    let (x, y, z) = (i % nx, i / nx % ny, i / (nx * ny));
+    let at = move |x: usize, y: usize, z: usize| x + nx * (y + ny * z);
+    [
+        (x > 0).then(|| at(x - 1, y, z)),
+        (x + 1 < nx).then(|| at(x + 1, y, z)),
+        (y > 0).then(|| at(x, y - 1, z)),
+        (y + 1 < ny).then(|| at(x, y + 1, z)),
+        (z > 0).then(|| at(x, y, z - 1)),
+        (z + 1 < nz).then(|| at(x, y, z + 1)),
+    ]
+    .into_iter()
+    .flatten()
+}
+
+/// Gives every cell that isn't indoors the mean of its neighbours that are,
+/// then those next to them, and so on outwards. With no cell indoors (the
+/// models don't close anything) they stay as they are.
+fn spread_indoors(cells: [u32; 3], values: &mut [[f32; 6]], mut known: Vec<bool>) {
+    if !known.contains(&true) {
+        return;
+    }
+    while known.contains(&false) {
+        let filled: Vec<(usize, [f32; 6])> = (0..values.len())
+            .filter(|i| !known[*i])
+            .filter_map(|i| {
+                let (mut sum, mut n) = ([0.0f32; 6], 0.0f32);
+                for j in neighbours(cells, i).filter(|j| known[*j]) {
+                    sum = std::array::from_fn(|d| sum[d] + values[j][d]);
+                    n += 1.0;
+                }
+                (n > 0.0).then(|| (i, sum.map(|s| s / n)))
+            })
+            .collect();
+        if filled.is_empty() {
+            break;
+        }
+        for (i, v) in filled {
+            values[i] = v;
+            known[i] = true;
+        }
+    }
+}
+
+/// Each cell a half itself and a half its neighbours along X, then Y, then Z
+/// (at an end, where there is one neighbour, it counts twice).
+fn smooth(cells: [u32; 3], values: &mut [[f32; 6]]) {
+    let [nx, ny, nz] = cells.map(|n| n as usize);
+    for (step, n) in [(1, nx), (nx, ny), (nx * ny, nz)] {
+        if n < 2 {
+            continue;
+        }
+        let before = values.to_vec();
+        for (i, v) in values.iter_mut().enumerate() {
+            let along = i / step % n;
+            let back = if along > 0 { i - step } else { i + step };
+            let ahead = if along + 1 < n { i + step } else { i - step };
+            *v = std::array::from_fn(|d| 0.5 * before[i][d] + 0.25 * (before[back][d] + before[ahead][d]));
+        }
+    }
 }
 
 /// The bits of `i` mirrored about the binary point: 1 is 0.5, 2 is 0.25...
@@ -678,9 +782,10 @@ mod tests {
     #[test]
     fn a_cell_sees_the_sky_only_where_it_is_open() {
         let volume =
-            Volume { centre: Vec3::new(0.0, 0.0, 1.5), half: Vec3::new(1.0, 1.0, 1.0), heading: 0.0, cells: [2; 3] };
-        let baked = bake(&volume, &open_box(), &Settings::default());
-        assert_eq!(baked.values.len(), 8);
+            Volume { centre: Vec3::new(0.0, 0.0, 1.5), half: Vec3::new(1.0, 1.0, 1.2), heading: 0.0, cells: [2, 2, 4] };
+        // As the rays give it: no light off the walls.
+        let baked = bake(&volume, &open_box(), &Settings { bounce: 0.0, ..Default::default() });
+        assert_eq!(baked.values.len(), 16);
         for cell in &baked.values {
             // Down: the floor. Up: the opening, and the walls around it.
             assert_eq!(cell[5], 0.0);
@@ -689,8 +794,29 @@ mod tests {
             assert!(cell[0] > 0.0 && cell[0] < cell[4], "{cell:?}");
         }
         // The upper cells see more of it than the lower ones, upwards and sideways.
-        assert!(baked.values[4][4] > baked.values[0][4]);
-        assert!(baked.values[4][0] > baked.values[0][0]);
+        assert!(baked.values[12][4] > baked.values[0][4]);
+        assert!(baked.values[12][0] > baked.values[0][0]);
+        // Off the walls it comes from every side, downwards too.
+        let lit = bake(&volume, &open_box(), &Settings::default());
+        assert!(lit.values[0][5] > 0.0 && lit.values[0][4] > baked.values[0][4]);
+    }
+
+    #[test]
+    fn cells_outside_take_what_those_indoors_have() {
+        // The box with a lid on: dark inside. The volume goes a metre over the lid and beyond the walls.
+        let mut triangles = open_box().triangles;
+        let v = Vec3::new;
+        triangles.push([v(-2.0, -2.0, 3.0), v(2.0, -2.0, 3.0), v(2.0, 2.0, 3.0)]);
+        triangles.push([v(-2.0, -2.0, 3.0), v(2.0, 2.0, 3.0), v(-2.0, 2.0, 3.0)]);
+        let mesh = Mesh::new(triangles);
+        let volume =
+            Volume { centre: Vec3::new(0.0, 0.0, 2.0), half: Vec3::new(3.0, 3.0, 2.0), heading: 0.0, cells: [6, 6, 4] };
+        // The cell over the lid sees the sky, and isn't indoors.
+        let above = volume.to_world().transform_point3(volume.cell_centre(2, 2, 3));
+        assert!(!mesh.blocked(above, Vec3::Z, 60.0) && !indoors(&mesh, above, 60.0));
+        assert!(indoors(&mesh, Vec3::new(0.5, 0.5, 1.5), 60.0));
+        let baked = bake(&volume, &mesh, &Settings::default());
+        assert!(baked.values.iter().flatten().all(|v| *v == 0.0));
     }
 
     #[test]

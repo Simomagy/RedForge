@@ -27,7 +27,12 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   volumes have it: an `amv_zone_<n>.ymt` and `.ytd` to put in the resource's
   stream folder, numbered after the game's own zones (183 unless `--zone`
   says otherwise) so that none of those is replaced. Glass and decals let the light through; the models drawn
-  only into shadows or reflections are left out.
+  only into shadows or reflections are left out. The cells of the box that
+  aren't in the interior (over its roof, under its floor, beyond its walls)
+  take what the cells indoors next to them have, so that the sky they see
+  doesn't light the ceiling and the walls in bands; and a part of the light
+  comes back off the walls from every side, as in the game's own volumes, so
+  that nothing indoors is quite black.
   It also says what else the interior's lighting lacks next to the game's
   own interiors: rooms with no time cycle, rooms with no reflection probe,
   and entities with neither of the flags the game's interior entities have.
