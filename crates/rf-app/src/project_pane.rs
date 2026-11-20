@@ -52,11 +52,14 @@ fn ago(time: u64) -> String {
     }
 }
 
-/// Whether a file can join a project: a game file, an XML export of one, or
-/// a folder of them.
+/// Whether a file can join a project: a game file, an XML export of one, an
+/// animation being made, or a folder of them.
 pub fn can_add(file: &Path) -> bool {
     let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    file.is_dir() || rf_editor::project::is_game_file(file) || Kind::of_xml_name(&name).is_some()
+    file.is_dir()
+        || rf_editor::project::is_game_file(file)
+        || rf_editor::project::is_animation(file)
+        || Kind::of_xml_name(&name).is_some()
 }
 
 /// An XML export (`x.ydr.xml`, Sollumz's and CodeX's) as its game file,
@@ -78,18 +81,23 @@ fn convert_xml(hashes: &HashIndex, file: &Path) -> Result<PathBuf, String> {
 
 /// Files go in groups by what they are, as in the C#'s pane, with an icon
 /// for the group and one for its files; the last group takes everything else.
-const GROUPS: [(&str, &[&str], &str, &str); 6] = [
+const GROUPS: [(&str, &[&str], &str, &str); 7] = [
     ("Maps", &["ymap"], icon::MAP_TRIFOLD, icon::MAP_PIN),
     ("Archetypes", &["ytyp"], icon::STACK, icon::FILE_CODE),
     ("Models", &["ydr", "ydd", "yft"], icon::CUBE, icon::CUBE),
     ("Textures", &["ytd"], icon::IMAGE, icon::IMAGE),
     ("Collisions", &["ybn"], icon::CUBE_TRANSPARENT, icon::CUBE_TRANSPARENT),
     ("Other", &[], icon::FILES, icon::FILE),
+    // Last, for the groups' numbers (kept for the folded ones) to stay.
+    ("Animations", &["json"], icon::PERSON_ARMS_SPREAD, icon::PERSON_ARMS_SPREAD),
 ];
+
+/// The group of what has none of its own.
+const OTHER: usize = 5;
 
 fn group_of(name: &str) -> usize {
     let ext = Path::new(name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    GROUPS.iter().position(|g| g.1.contains(&ext.as_str())).unwrap_or(GROUPS.len() - 1)
+    GROUPS.iter().position(|g| g.1.contains(&ext.as_str())).unwrap_or(OTHER)
 }
 
 /// Where a file is: its folder in the project's, or the whole folder when
@@ -156,6 +164,12 @@ pub struct ProjectPane {
     selected: HashSet<String>,
     /// A ymap just picked in the list (by name hash), for the Hierarchy to show.
     pub picked_map: Option<u32>,
+    /// An animation of the project asked for (double click, or Open): the
+    /// app opens it in the animation editor and takes this.
+    pub open_animation: Option<PathBuf>,
+    /// The animations open in the editor with changes not saved (the app
+    /// says each frame): an export bakes them as last saved, and says so.
+    pub unsaved_animations: Vec<PathBuf>,
     /// Whether the last project was opened again at start.
     started: bool,
     /// The ymap new things go in, as last kept in the project.
@@ -386,11 +400,12 @@ impl ProjectPane {
             });
         });
         ui.horizontal_wrapped(|ui| {
-            let tip = "Game files, or their XML from Sollumz or CodeX (converted); you can drop them on the window too";
+            let tip = "Game files, their XML from Sollumz or CodeX (converted), or animations made here \
+                       (.rfanim.json); you can drop them on the window too";
             if ui.button(theme::icon_text(icon::FILE_PLUS, "Add files…")).on_hover_text(tip).clicked() {
                 let mut dialog = rfd::FileDialog::new().add_filter(
                     "Game files and their XML",
-                    &["ymap", "ytyp", "ydr", "ydd", "yft", "ytd", "ybn", "ymf", "xml"],
+                    &["ymap", "ytyp", "ydr", "ydd", "yft", "ytd", "ybn", "ymf", "xml", "json"],
                 );
                 if let Some(dir) = editor.project.as_ref().and_then(|p| p.dir()) {
                     dialog = dialog.set_directory(dir);
@@ -536,7 +551,19 @@ impl ProjectPane {
                     self.picked_map = Some(name);
                 }
             }
+            let animation = e.path.as_ref().filter(|p| rf_editor::project::is_animation(p) && !missing);
+            if let Some(file) = animation
+                && row.double_clicked()
+            {
+                self.open_animation = Some(file.clone());
+            }
             row.context_menu(|ui| {
+                if let Some(file) = animation
+                    && ui.button("Open").on_hover_text("In the animation editor (or double click)").clicked()
+                {
+                    self.open_animation = Some(file.clone());
+                    ui.close();
+                }
                 if let Some(doc) = e.doc {
                     if ui.button("Save").clicked() {
                         match editor.save_path(doc) {
@@ -660,7 +687,7 @@ impl ProjectPane {
                     }
                     Err(e) => problems.push(format!("{name}: {e}")),
                 }
-            } else if rf_editor::project::is_game_file(&file) {
+            } else if rf_editor::project::is_game_file(&file) || rf_editor::project::is_animation(&file) {
                 games.push(file);
             } else {
                 problems.push(format!("{name} isn't a game file"));
@@ -1140,11 +1167,18 @@ impl ProjectPane {
         let file_name = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let mut left_out: Vec<String> = missing.iter().map(|p| format!("{} (missing)", file_name(p))).collect();
         left_out.extend(done.skipped.iter().cloned());
+        let stale: Vec<String> = files.iter().filter(|f| self.unsaved_animations.contains(f)).map(file_name).collect();
         let removed = match done.removed.len() {
             0 => String::new(),
             _ => format!("; took out of stream what's no longer in the project: {}", done.removed.join(", ")),
         };
-        if left_out.is_empty() {
+        if !stale.is_empty() {
+            let left = if left_out.is_empty() { String::new() } else { format!("; left out: {}", left_out.join(", ")) };
+            self.fail(format!(
+                "Exported {name}, but with these animations as last saved (they have changes not saved): {}{left}{removed}",
+                stale.join(", ")
+            ));
+        } else if left_out.is_empty() {
             self.status =
                 Some(format!("Exported {name}: add `ensure {name}` to server.cfg and restart the server{removed}"));
             let saved = self.toast.take().map(|(s, _)| format!("{s}, exported {name}"));

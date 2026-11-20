@@ -8,6 +8,77 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-11-20
+
+### Added
+- The animation editor keys the way Blender does. Every number of a bone
+  (its location's X, Y, Z, its rotation's W, X, Y, Z or Euler angles, counted
+  from the rest pose) has an F-curve of keyframes with Bézier handles:
+  Constant, Linear or Bézier to the next key, and Free, Aligned, Vector,
+  Automatic or Auto Clamped handles, worked out as Blender works them out.
+  Below the view, a **Dope Sheet** (a row a bone, opened into its channels,
+  under a Summary) and a **Graph Editor** (the curves, with the selected
+  keys' handles to drag): click and Shift+click select, a drag from a key
+  moves the selected keys and one from nothing selects in a box, G grabs,
+  Shift+D duplicates, X deletes, A and Alt+A select all and none, T sets the
+  interpolation and V the handles, the ruler scrubs, the wheel zooms, the
+  middle button pans and Home shows everything. On the right, the bone's
+  **Item** panel: Location and Rotation fields, green when animated, yellow
+  on a key and orange when changed and not keyed, with the keyframe menu on
+  a right click, the rotation mode, and the **Active Keyframe**'s
+  interpolation, frame, value and handles. **Auto Key** (the record button)
+  keys every change; off, I keys the bone and a change not keyed goes when
+  the frame changes. Alt+I deletes the bone's keys at the frame, Alt+G and
+  Alt+R put it back at rest, the arrows step frames and jump between keys.
+  In the view, **G** moves the selected bone (with Reach, its limb to where
+  it's pulled) and **R** turns it, following the mouse until a click or Enter
+  keeps it and a right click or Esc puts it back; X, Y and Z keep to an axis
+  of the model, pressed again to the bone's own. There's no scale: the game
+  takes none from a clip.
+  Animations saved before open as they were, their keys turned into curves.
+- Animations in a project: **Add to project** in the animation editor (or
+  Add files…, or dropping the `.rfanim.json` on the window) lists the
+  animation under Animations in the Project pane, where a double click opens
+  it. **Export RedM resource** then bakes each one into the resource's `stream`
+  folder as the ycd the game plays, named after its dictionary; an animation
+  that can't be baked stops the export, saying why, and one open with
+  changes not saved is baked as last saved, the export saying so. An
+  animation saved into a folder of the project joins it by itself.
+- **File > New animation**: the animation editor, the first of an animation
+  creator. A ped stands with its joints showing; click one (or pick the bone
+  from the list), turn it with the gizmo, and that's a key at the frame
+  shown. Go to another frame, turn it again: RedForge works out what is
+  between the keys (smoothly, evenly or held, for each key). The timeline
+  shows the keys, Space plays, K keys the bone as it is, and Undo takes back
+  a turn. With **Reach** (R) the gizmo moves the bone instead and the two
+  above it follow: pull a hand and its arm bends to get there, a foot and
+  its leg, the hand or foot staying turned as it was unless **Keep its turn**
+  is off (T turns again). **Save** keeps the keys (`.rfanim.json`, opened
+  again with **File > Open animation…**) and **Export ycd** writes the
+  dictionary the game plays, for a resource's `stream` folder. Only the bones
+  with keys are animated: in game the rest of the ped stays as it was.
+  **Base pose** stands the ped in a moment of one of the game's clips
+  (search the clip dictionaries by name, choose the clip and the time), to
+  see the animation as it will look over what the ped is doing; **Key this
+  pose** makes it part of the animation, a key for every bone the clip
+  moves, for an animation of the whole body.
+- `rf anim-bake` makes the ycd the game plays from an animation written as
+  keys: for each bone, rotations and positions at frames (JSON), with the
+  values between them worked out (smooth, linear or held). Only the bones
+  with keys are animated, the rest of the ped staying as it is: a gesture
+  takes a few lines. The first piece of the animation creator; the files it
+  makes play in RedM.
+- `rf skeleton` lists a ped's bones from the game's files (`rf skeleton
+  player`, `male`, `female`, or a yft): each one's tag, parent and rest pose,
+  in the units and axes an animation's keys are written in; `--json` for
+  tools.
+
+### Fixed
+- The animation viewer showed a ped playing one of the game's clips from
+  behind: the clip's root is given from the ped's own place in it, which is
+  turned half way round, and that wasn't applied.
+
+
 ## [2.3.6] - 2026-11-16
 
 ### Added
@@ -273,7 +344,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.3.6...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.4.0...HEAD
+[2.4.0]: https://github.com/Simomagy/RedForge/compare/v2.3.6...v2.4.0
 [2.3.6]: https://github.com/Simomagy/RedForge/compare/v2.3.5...v2.3.6
 [2.3.5]: https://github.com/Simomagy/RedForge/compare/v2.3.0...v2.3.5
 [2.3.0]: https://github.com/Simomagy/RedForge/compare/v2.1.0...v2.3.0

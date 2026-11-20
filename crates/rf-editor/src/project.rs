@@ -12,8 +12,8 @@
 //! }
 //! ```
 //!
-//! A folder brings in every game file (`.y*`) in it and its subfolders,
-//! except the excluded ones; `files` are those from anywhere else. Paths are
+//! A folder brings in every game file (`.y*`) and animation being made
+//! (`.rfanim.json`) in it and its subfolders, except the excluded ones; `files` are those from anywhere else. Paths are
 //! written with `/` (which Windows reads too) and read with either separator.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,6 +50,15 @@ pub fn extension(path: &Path) -> String {
 /// Whether a file is one of the game's (`.ymap`, `.ytyp`, `.ydr`, `.ytd`, `.ybn`...).
 pub fn is_game_file(path: &Path) -> bool {
     extension(path).starts_with('y')
+}
+
+/// What an animation being made is saved as (`wave.rfanim.json`): its keys,
+/// which an export bakes into the ycd the game plays.
+pub const ANIMATION_SUFFIX: &str = ".rfanim.json";
+
+/// Whether a file is an animation being made.
+pub fn is_animation(path: &Path) -> bool {
+    path.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().ends_with(ANIMATION_SUFFIX))
 }
 
 #[derive(Clone, Debug)]
@@ -183,7 +192,7 @@ impl Project {
         for folder in &self.folders {
             walk(folder, &mut out);
         }
-        out.retain(|f| is_game_file(f) && !self.excluded.contains(f));
+        out.retain(|f| (is_game_file(f) || is_animation(f)) && !self.excluded.contains(f));
         for f in &self.files {
             if !out.contains(f) {
                 out.push(f.clone());

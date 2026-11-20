@@ -23,6 +23,7 @@ use crate::theme::{self, icon};
 use crate::tour::{self, Tour, TourEvent};
 use crate::viewers::Gpu;
 use crate::viewers::anim::AnimViewer;
+use crate::viewers::anim_editor::AnimEditor;
 use crate::viewers::hex::HexViewer;
 use crate::viewers::model::ModelViewer;
 use crate::viewers::text::TextViewer;
@@ -64,6 +65,8 @@ pub enum Tab {
     Model(Box<ModelViewer>),
     /// A clip dictionary's clips played on a ped.
     Anim(Box<AnimViewer>),
+    /// An animation being made: a ped posed at frames.
+    AnimEdit(Box<AnimEditor>),
     Texture(Box<TextureViewer>),
     Text(Box<TextViewer>),
     Hex(Box<HexViewer>),
@@ -151,6 +154,7 @@ fn tab_key(t: &Tab) -> Option<(&'static str, &str)> {
     Some(match t {
         Tab::Model(v) => ("model", v.path.as_str()),
         Tab::Anim(v) => ("anim", v.path.as_str()),
+        Tab::AnimEdit(v) => ("anim-edit", v.path.as_str()),
         Tab::Texture(v) => ("texture", v.path.as_str()),
         Tab::Text(v) => ("text", v.path.as_str()),
         Tab::Hex(v) => ("hex", v.path.as_str()),
@@ -499,6 +503,36 @@ impl RedForgeApp {
     }
 
     /// Shows a document with the others (in place of the welcome page).
+    /// File > New animation: the animation editor, with nothing keyed.
+    fn new_animation(&mut self, ctx: &egui::Context) {
+        let GameState::Ready(game) = &self.game else { return };
+        let game = game.clone();
+        let number = self.dock.iter_all_tabs().filter(|(_, t)| matches!(t, Tab::AnimEdit(_))).count() + 1;
+        self.show_tab(Tab::AnimEdit(Box::new(AnimEditor::new(ctx, &game, number))));
+    }
+
+    /// File > Open animation: an animation's keys (asked for when not given),
+    /// in the editor; open already, its tab comes to the front.
+    fn open_animation(&mut self, ctx: &egui::Context, file: Option<PathBuf>) {
+        let GameState::Ready(game) = &self.game else { return };
+        let game = game.clone();
+        let file = file.or_else(|| {
+            rfd::FileDialog::new()
+                .set_title("Open an animation")
+                .add_filter("RedForge animation", &["json"])
+                .pick_file()
+        });
+        let Some(file) = file else { return };
+        let path = file.display().to_string();
+        if self.focus_tab(|t| tab_key(t).is_some_and(|(k, p)| k == "anim-edit" && p == path)) {
+            return;
+        }
+        match AnimEditor::open(ctx, &game, file) {
+            Ok(v) => self.show_tab(Tab::AnimEdit(Box::new(v))),
+            Err(e) => self.tools.fail(format!("Can't open {path}: {e:#}")),
+        }
+    }
+
     fn show_tab(&mut self, tab: Tab) {
         let document = |t: &Tab| {
             matches!(
@@ -507,6 +541,7 @@ impl RedForgeApp {
                     | Tab::Map(_)
                     | Tab::Model(_)
                     | Tab::Anim(_)
+                    | Tab::AnimEdit(_)
                     | Tab::Texture(_)
                     | Tab::Text(_)
                     | Tab::Hex(_)
@@ -898,6 +933,14 @@ impl RedForgeApp {
                 if a.open == "welcome" {
                     return;
                 }
+                // `anim-edit`: a new animation; `anim-edit:<file>`: an animation's keys.
+                if let Some(file) = a.open.strip_prefix("anim-edit").map(str::to_owned) {
+                    match file.strip_prefix(':') {
+                        Some(f) => self.open_animation(ctx, Some(PathBuf::from(f))),
+                        None => self.new_animation(ctx),
+                    }
+                    return;
+                }
                 let (path, hex) = match a.open.strip_prefix("hex:") {
                     Some(p) => (p.to_owned(), true),
                     None => (a.open.clone(), false),
@@ -1119,6 +1162,8 @@ impl TabViewer for Tabs<'_> {
             Tab::Welcome => icon_text(icon::HOUSE, "Welcome"),
             Tab::Model(v) => icon_text(icon::CUBE, &v.title),
             Tab::Anim(v) => icon_text(icon::PERSON_SIMPLE_RUN, &v.title),
+            Tab::AnimEdit(v) if v.is_dirty() => icon_text(icon::PERSON_ARMS_SPREAD, &format!("{} •", v.title)),
+            Tab::AnimEdit(v) => icon_text(icon::PERSON_ARMS_SPREAD, &v.title),
             Tab::Texture(v) => icon_text(icon::IMAGE, &v.title),
             Tab::Text(v) => icon_text(icon::FILE_CODE, &v.title),
             Tab::Hex(v) => icon_text(icon::BINARY, &format!("{} (hex)", v.title)),
@@ -1135,9 +1180,13 @@ impl TabViewer for Tabs<'_> {
     fn id(&mut self, tab: &mut Tab) -> egui::Id {
         match tab {
             Tab::Welcome => egui::Id::new("welcome"),
-            Tab::Model(_) | Tab::Anim(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_) | Tab::Map(_) => {
-                egui::Id::new(tab_key(tab))
-            }
+            Tab::Model(_)
+            | Tab::Anim(_)
+            | Tab::AnimEdit(_)
+            | Tab::Texture(_)
+            | Tab::Text(_)
+            | Tab::Hex(_)
+            | Tab::Map(_) => egui::Id::new(tab_key(tab)),
             Tab::Properties => egui::Id::new("properties"),
             Tab::Project => egui::Id::new("project"),
             Tab::Hierarchy => egui::Id::new("hierarchy"),
@@ -1165,6 +1214,26 @@ impl TabViewer for Tabs<'_> {
                 }
             },
             Tab::Anim(v) => v.ui(ui, self.gpu),
+            Tab::AnimEdit(v) => {
+                let file = v.file().map(Path::to_path_buf);
+                // Listed in it, that is: one saved into a project's folder isn't until it's added.
+                v.in_project = self.editor.as_deref().filter(|e| e.project.is_some()).map(|e| {
+                    file.as_ref().is_some_and(|f| e.project_entries().iter().any(|entry| entry.path.as_ref() == Some(f)))
+                });
+                v.ui(ui, self.gpu);
+                // One saved into a folder of the project is the project's, without asking.
+                let folders = v.in_project == Some(false)
+                    && self.editor.as_deref().and_then(|e| e.project.as_ref()).zip(file.as_ref()).is_some_and(|(p, f)| {
+                        f.exists() && p.in_folders(f) && !p.excluded.contains(f)
+                    });
+                if (std::mem::take(&mut v.add_to_project) || folders)
+                    && let (Some(file), Some(ed)) = (file, self.editor.as_deref_mut())
+                {
+                    for problem in ed.add_project_files(&[file]) {
+                        self.tools.fail(problem);
+                    }
+                }
+            }
             Tab::Texture(v) => v.ui(ui, self.gpu),
             Tab::Text(v) => v.ui(ui),
             Tab::Hex(v) => v.ui(ui),
@@ -1215,6 +1284,7 @@ impl TabViewer for Tabs<'_> {
         match tab {
             Tab::Model(v) => v.free(self.gpu),
             Tab::Anim(v) => v.free(self.gpu),
+            Tab::AnimEdit(v) => v.free(self.gpu),
             Tab::Texture(v) => v.free(self.gpu),
             Tab::Map(v) => {
                 if v.is_world() {
@@ -1391,6 +1461,21 @@ impl eframe::App for RedForgeApp {
                 ui.menu_button("File", |ui| {
                     if let Some(ed) = self.editor.as_mut().filter(|_| game_ready) {
                         self.project_pane.file_menu(ui, ed, &mut self.settings);
+                        ui.separator();
+                    }
+                    if game_ready {
+                        if ui
+                            .button("New animation")
+                            .on_hover_text("Pose a ped's bones at frames, and export the ycd")
+                            .clicked()
+                        {
+                            self.new_animation(ctx);
+                            ui.close();
+                        }
+                        if ui.button("Open animation…").clicked() {
+                            self.open_animation(ctx, None);
+                            ui.close();
+                        }
                         ui.separator();
                     }
                     if ui.button("Game folder…").clicked() {
@@ -1615,6 +1700,14 @@ impl eframe::App for RedForgeApp {
             {
                 let _ = self.dock.set_active_tab(path);
             }
+            self.project_pane.unsaved_animations = self
+                .dock
+                .iter_all_tabs()
+                .filter_map(|(_, t)| match t {
+                    Tab::AnimEdit(v) if v.is_dirty() => v.file().map(Path::to_path_buf),
+                    _ => None,
+                })
+                .collect();
             match self.project_pane.update(ctx, ed, &mut self.settings, incoming) {
                 Some(Ask::Quit) => {
                     self.quitting = true;
@@ -1623,6 +1716,9 @@ impl eframe::App for RedForgeApp {
                 Some(Ask::GameFolder) => self.ask_game_folder(),
                 None => {}
             }
+        }
+        if let Some(file) = self.project_pane.open_animation.take() {
+            self.open_animation(ctx, Some(file));
         }
         if std::mem::take(&mut self.reopen_world)
             && let Some(g) = &game
@@ -1749,7 +1845,7 @@ impl eframe::App for RedForgeApp {
 
         // Viewers waiting on a background job need frames to notice it finishing.
         let waiting = self.dock.iter_all_tabs().any(|(_, t)| match t {
-            Tab::Model(_) | Tab::Anim(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_) => true,
+            Tab::Model(_) | Tab::Anim(_) | Tab::AnimEdit(_) | Tab::Texture(_) | Tab::Text(_) | Tab::Hex(_) => true,
             // The map and Objects ask for frames themselves while they load.
             Tab::Map(_)
             | Tab::Welcome

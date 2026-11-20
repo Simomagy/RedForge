@@ -94,6 +94,27 @@ enum Command {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+    /// List the bones of a ped's skeleton: their tags, parents and rest pose,
+    /// as an animation's keys are written.
+    Skeleton {
+        /// A ped's skeleton by name (`player`, `male`, `female`: the game's
+        /// `meta_base_<name>.yft`), or a yft file.
+        model: String,
+        /// Only bones whose name contains this text.
+        #[arg(long)]
+        filter: Option<String>,
+        /// As JSON: every bone with its tag, parent, rotation and position.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Bake animations being made (their keys, as JSON) into the ycd the game
+    /// plays, named after each one's dictionary.
+    AnimBake {
+        files: Vec<PathBuf>,
+        /// Output folder (default: next to each file).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
     /// Convert game files with both this port and the C# RedForge (rf-oracle) and
     /// report every difference.
     Compare {
@@ -146,6 +167,42 @@ fn main() -> Result<()> {
         Command::FromXml { files, out } => {
             let strings = load_strings(&cli)?;
             convert_files(files, out.as_deref(), &strings, false)
+        }
+        Command::AnimBake { files, out } => bake_animations(files, out.as_deref()),
+        Command::Skeleton { model, filter, json } => {
+            let strings = load_strings(&cli)?;
+            let cx = rf_formats::formats::XmlContext { hashes: &strings, folder: None };
+            let data = if Path::new(model).is_file() {
+                std::fs::read(model)?
+            } else {
+                // The game's later archives (updates) replace the earlier ones' files.
+                let fs = open_fs_with(&cli, &strings)?;
+                let names = [format!("/{model}.yft"), format!("/meta_base_{model}.yft")];
+                let found =
+                    fs.files().filter(|(p, _)| names.iter().any(|n| p.to_lowercase().ends_with(&n.to_lowercase())));
+                let Some((path, file)) = found.last() else {
+                    bail!("no {model}.yft or meta_base_{model}.yft in the game")
+                };
+                log::info!("{path}");
+                fs.extract_loose(file)?
+            };
+            let skeleton = rf_formats::formats::yft::read(&data, &cx)?.drawable.and_then(|d| d.base.skeleton);
+            let Some(skeleton) = skeleton else { bail!("{model} has no skeleton") };
+            let rig = rf_editor::anim::Rig::from_skeleton(&skeleton);
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&rig)?);
+                return Ok(());
+            }
+            let wanted = filter.as_deref().unwrap_or("").to_lowercase();
+            println!("{:>5}  {:<28} {:<24} {:<36} position", "tag", "bone", "parent", "rotation (x y z w)");
+            for b in rig.bones.iter().filter(|b| b.name.to_lowercase().contains(&wanted)) {
+                let parent = b.parent.map_or("-", |p| rig.bones[p].name.as_str());
+                let [x, y, z, w] = b.rotation;
+                let [px, py, pz] = b.position;
+                let rotation = format!("{x:.4} {y:.4} {z:.4} {w:.4}");
+                println!("{:>5}  {:<28} {:<24} {:<36} {px:.4} {py:.4} {pz:.4}", b.tag, b.name, parent, rotation);
+            }
+            Ok(())
         }
         Command::Compare { ext, filter, limit, work, write, oracle, verbose } => {
             let strings = load_strings(&cli)?;
@@ -412,6 +469,33 @@ fn open_fs_with(cli: &Cli, strings: &HashIndex) -> Result<Rpf8FileSystem> {
         log::warn!("{}: {}", e.path, e.error);
     }
     Ok(fs)
+}
+
+/// `rf anim-bake`: each source's ycd, next to it or in `out`.
+fn bake_animations(files: &[PathBuf], out: Option<&Path>) -> Result<()> {
+    let mut failed = 0;
+    for file in files {
+        let result = (|| -> Result<PathBuf> {
+            let source = rf_editor::anim::AnimSource::from_json(&std::fs::read_to_string(file)?)?;
+            let data = source.bake()?;
+            let dir = out.map(Path::to_owned).unwrap_or_else(|| file.parent().map(Path::to_owned).unwrap_or_default());
+            std::fs::create_dir_all(&dir)?;
+            let dest = dir.join(format!("{}.ycd", source.dictionary));
+            std::fs::write(&dest, data)?;
+            Ok(dest)
+        })();
+        match result {
+            Ok(dest) => println!("{} -> {}", file.display(), dest.display()),
+            Err(e) => {
+                failed += 1;
+                eprintln!("{}: {e:#}", file.display());
+            }
+        }
+    }
+    if failed > 0 {
+        bail!("{failed} of {} files failed", files.len());
+    }
+    Ok(())
 }
 
 /// `rf xml` and `rf from-xml`.

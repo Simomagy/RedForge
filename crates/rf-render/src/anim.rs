@@ -189,6 +189,20 @@ impl Pose {
         self.by_tag.get(&tag).copied()
     }
 
+    /// Poses one bone, relative to its parent (what's `None` stays as it is);
+    /// [`Pose::update`] then moves the model.
+    pub fn set_local(&mut self, bone: usize, rotation: Option<Quat>, translation: Option<Vec3>) {
+        if let Some(b) = self.bones.get_mut(bone) {
+            b.rotation = rotation.unwrap_or(b.rotation);
+            b.translation = translation.unwrap_or(b.translation);
+        }
+    }
+
+    /// A bone's model-space transform by index, as of the last [`Pose::update`].
+    pub fn model(&self, bone: usize) -> Option<Mat4> {
+        self.model.get(bone).copied()
+    }
+
     /// Puts every bone back in its rest pose (`ResetBoneTransforms`, without
     /// [`Pose::update`]).
     pub fn reset(&mut self) {
@@ -251,6 +265,7 @@ impl Pose {
         let duration = clip.duration();
         if duration > 0.0 {
             let mut time = if looping { time.rem_euclid(duration) } else { time.clamp(0.0, duration) };
+            let whole = time;
             match &clip.kind {
                 ClipKind::Single(s) => {
                     if let Some(a) = anim(s.animation_hash) {
@@ -273,6 +288,16 @@ impl Pose {
                         break;
                     }
                 }
+            }
+            // The root is given from the ped's own place, which is turned
+            // (half way round, for a standing ped): shown from there, as the
+            // game does, the ped faces the way it does at rest.
+            if let Some((_, [x, y, z, w])) = clip_mover(clip, &anim, whole)
+                && let Some(&root) = self.by_tag.get(&0)
+            {
+                let turn = Quat::from_xyzw(x, y, z, w).normalize();
+                let bone = &mut self.bones[root];
+                (bone.rotation, bone.translation) = (turn * bone.rotation, turn * bone.translation);
             }
         }
         self.update();
@@ -300,6 +325,43 @@ impl Pose {
             }
         }
     }
+}
+
+/// The ped's own place at a time of a clip (the tracks 5 and 6 of bone 0, which
+/// the root bone is given from): its position, and its rotation as x, y, z, w.
+/// `None` for a clip without both.
+pub fn clip_mover<'a>(clip: &Clip, anim: impl Fn(u32) -> Option<&'a Anim>, time: f32) -> Option<([f32; 3], [f32; 4])> {
+    let mut time = time.clamp(0.0, clip.duration().max(0.0));
+    let layers: Vec<(u32, f32, f32)> = match &clip.kind {
+        ClipKind::Single(s) => vec![(s.animation_hash, s.start_time, s.speed)],
+        ClipKind::Multi(m) => {
+            let parts = m.parts.as_deref().unwrap_or(&[]);
+            let mut layers = Vec::new();
+            for (i, part) in parts.iter().enumerate() {
+                if time > part.duration && i + 1 < parts.len() {
+                    time -= part.duration;
+                    continue;
+                }
+                layers.extend(part.clips.iter().flatten().map(|l| (l.animation_hash, l.start_time, l.speed)));
+                break;
+            }
+            layers
+        }
+    };
+    let (mut position, mut rotation) = (None, None);
+    for (hash, start, speed) in layers {
+        let Some(a) = anim(hash).filter(|a| a.duration > 0.0 && a.sequence_size != 0) else { continue };
+        let frame = a.frame_position((start + time * speed).clamp(0.0, a.duration));
+        for (i, id) in a.bone_ids.iter().flatten().enumerate().filter(|(_, id)| id.bone_id == 0) {
+            let [x, y, z, w] = a.evaluate(&frame, i);
+            match (id.type_id, id.track_id) {
+                (0, 5) => position = Some([x, y, z]),
+                (1, 6) if [x, y, z, w] != [0.0; 4] => rotation = Some([x, y, z, w]),
+                _ => {}
+            }
+        }
+    }
+    Some((position?, rotation?))
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ use super::{Gpu, Job, status_ui};
 use crate::game::Game;
 
 /// The ped the C# plays clips on.
-const DEFAULT_PED: &str = "mp_male";
+pub(super) const DEFAULT_PED: &str = "mp_male";
 
 struct Loaded {
     dict: ClipDictionary,
@@ -58,7 +58,7 @@ impl Loaded {
 }
 
 /// A clip's name as listed: without its pack and extension (`pack:/walk.clip`).
-fn clip_label(clip: &ycd::Clip) -> &str {
+pub(super) fn clip_label(clip: &ycd::Clip) -> &str {
     let name = clip.name.as_deref().unwrap_or("");
     let name = name.rsplit(['/', '\\', ':']).next().unwrap_or(name);
     name.strip_suffix(".clip").unwrap_or(name)
@@ -84,19 +84,19 @@ fn default_ped(peds: &Peds, file_name: &str) -> String {
 }
 
 /// A ped on the GPU: its parts, posed by one skeleton.
-struct GpuPed {
-    name: String,
-    pose: Pose,
-    models: Vec<GpuModel>,
-    min: glam::Vec3,
-    max: glam::Vec3,
-    missing: Vec<String>,
+pub(super) struct GpuPed {
+    pub name: String,
+    pub pose: Pose,
+    pub models: Vec<GpuModel>,
+    pub min: glam::Vec3,
+    pub max: glam::Vec3,
+    pub missing: Vec<String>,
 }
 
 impl GpuPed {
     /// `RDR2Ped.BuildPiece`: the fragment's skeleton, then each part's
     /// skeletons and drawable, with the part's textures.
-    fn new(gpu: &Gpu, hashes: &rf_formats::hash::HashIndex, ped: LoadedPed) -> Self {
+    pub(super) fn new(gpu: &Gpu, hashes: &rf_formats::hash::HashIndex, ped: LoadedPed) -> Self {
         let mut pose = Pose::default();
         if let Some(s) = &ped.skeleton {
             pose.attach(s);
@@ -369,7 +369,12 @@ impl AnimViewer {
 }
 
 /// Starts reading a ped's files (`ChangePed`/`LoadPed`), named with the job.
-fn load_ped(ctx: &egui::Context, game: &Arc<Game>, peds: &Arc<Peds>, name: String) -> (String, Job<LoadedPed>) {
+pub(super) fn load_ped(
+    ctx: &egui::Context,
+    game: &Arc<Game>,
+    peds: &Arc<Peds>,
+    name: String,
+) -> (String, Job<LoadedPed>) {
     let (g, p, n) = (game.clone(), peds.clone(), name.clone());
     let job = Job::spawn(ctx, move || {
         let def =

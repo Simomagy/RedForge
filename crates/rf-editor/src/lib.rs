@@ -19,6 +19,7 @@
 //!   the ytyp, and the world places every instance again. Rooms, portals and
 //!   entity sets point at them by index, which deletes keep right.
 
+pub mod anim;
 pub mod autosave;
 pub mod batches;
 pub mod interior;

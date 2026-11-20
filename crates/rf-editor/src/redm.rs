@@ -7,7 +7,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::project::is_game_file;
+use crate::anim::AnimSource;
+use crate::project::{is_animation, is_game_file};
 
 /// RedM won't start a resource without it.
 const WARNING: &str = "rdr3_warning 'I acknowledge that this is a prerelease build of RedM, and I am aware my resources *will* become incompatible once RedM ships.'";
@@ -80,7 +81,8 @@ pub fn read_info(resource: &Path) -> BTreeMap<String, String> {
 pub struct Exported {
     /// The files that aren't game files, left out.
     pub skipped: Vec<String>,
-    /// The game files written to `stream`.
+    /// The game files written to `stream`: the project's, and the ycd baked
+    /// from each of its animations (named after its dictionary).
     pub written: Vec<String>,
     /// Files an export before wrote (`before`) that aren't in the project
     /// any more: taken out of `stream`, so they don't load in game.
@@ -103,6 +105,15 @@ pub fn export(
             let to = stream.join(&name);
             std::fs::copy(f, &to).map_err(|e| io(e, f))?;
             done.written.push(name);
+        } else if is_animation(f) {
+            // An animation being made goes as the dictionary the game plays.
+            let text = std::fs::read_to_string(f).map_err(|e| io(e, f))?;
+            let anim = AnimSource::from_json(&text).map_err(|e| format!("{name}: {e}"))?;
+            let ycd = anim.bake().map_err(|e| format!("{name}: {e}"))?;
+            let baked = format!("{}.ycd", anim.dictionary);
+            let to = stream.join(&baked);
+            std::fs::write(&to, ycd).map_err(|e| io(e, &to))?;
+            done.written.push(baked);
         } else {
             done.skipped.push(name);
         }
@@ -224,5 +235,34 @@ mod tests {
         assert!(again.contains("-- mine") && again.contains("version '1.1.0'") && !again.contains("1.0.0"));
         assert_eq!(again.matches("DLC_ITYP_REQUEST").count(), 1);
         assert_eq!(again.matches("this_is_a_map").count(), 1);
+    }
+
+    #[test]
+    fn animations_go_as_the_dictionary_the_game_plays() {
+        use crate::anim::BoneKeys;
+        let dir = tempfile::tempdir().unwrap();
+        let mut anim = AnimSource { dictionary: "my@wave".into(), clip: "wave".into(), frames: 31, ..Default::default() };
+        let mut arm = BoneKeys::new(40269, "SKEL_R_UpperArm", glam::Quat::IDENTITY, glam::Vec3::ZERO);
+        arm.key_rotation(0.0, glam::Quat::IDENTITY);
+        anim.bones.push(arm);
+        let file = dir.path().join("wave.rfanim.json");
+        std::fs::write(&file, anim.to_json()).unwrap();
+        let res = dir.path().join("res");
+        let done = export(&res, std::slice::from_ref(&file), &BTreeMap::new(), &[]).unwrap();
+        assert_eq!(done.written, ["my@wave.ycd"]);
+        assert!(done.skipped.is_empty());
+        assert_eq!(std::fs::read(res.join("stream/my@wave.ycd")).unwrap(), anim.bake().unwrap());
+
+        // Its dictionary renamed: the one written before goes.
+        anim.dictionary = "my@hello".into();
+        std::fs::write(&file, anim.to_json()).unwrap();
+        let again = export(&res, std::slice::from_ref(&file), &BTreeMap::new(), &done.written).unwrap();
+        assert_eq!((again.written, again.removed), (vec!["my@hello.ycd".to_string()], vec!["my@wave.ycd".to_string()]));
+
+        // One that can't be baked stops the export, saying which.
+        anim.bones.clear();
+        std::fs::write(&file, anim.to_json()).unwrap();
+        let e = export(&res, &[file], &BTreeMap::new(), &[]).unwrap_err();
+        assert!(e.starts_with("wave.rfanim.json: "), "{e}");
     }
 }
