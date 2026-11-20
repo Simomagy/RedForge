@@ -5,6 +5,7 @@ use std::time::Instant;
 
 mod amv;
 mod compare;
+mod probe;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -155,6 +156,27 @@ enum Command {
         #[arg(long, value_parser = amv::triple::<u32>)]
         cells: Option<[u32; 3]>,
     },
+    /// Draw a reflection probe for an interior (what its metals and glass
+    /// reflect): the four dictionaries of its textures, from the interior's
+    /// ytyp, the ymap placing it and the ydr models next to them.
+    ProbeBake {
+        /// The ytyp with the interior.
+        ytyp: PathBuf,
+        /// The ymap that places it.
+        #[arg(long)]
+        ymap: PathBuf,
+        /// More models (ydr) than those next to the ytyp and the ymap.
+        models: Vec<PathBuf>,
+        /// Output folder (default: next to the ytyp).
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Where it is drawn from in the interior's space, as x,y,z (default: the middle of its first room).
+        #[arg(long, value_parser = amv::triple::<f32>, allow_hyphen_values = true)]
+        from: Option<[f32; 3]>,
+        /// The probe's guid, in hexadecimal (default: one from the interior's name).
+        #[arg(long, value_parser = |s: &str| u64::from_str_radix(s.trim_start_matches("0x"), 16))]
+        guid: Option<u64>,
+    },
     /// Convert game files with both this port and the C# RedForge (rf-oracle) and
     /// report every difference.
     Compare {
@@ -209,6 +231,18 @@ fn main() -> Result<()> {
             convert_files(files, out.as_deref(), &strings, false)
         }
         Command::AnimBake { files, out } => bake_animations(files, out.as_deref()),
+        Command::ProbeBake { ytyp, ymap, models, out, from, guid } => {
+            let strings = load_strings(&cli)?;
+            let options = probe::Options {
+                ytyp: ytyp.clone(),
+                ymap: ymap.clone(),
+                models: models.clone(),
+                out: out.clone(),
+                from: from.map(Into::into),
+                guid: *guid,
+            };
+            probe::run(&options, &strings)
+        }
         Command::AmvBake { ytyp, ymap, models, out, zone, cell, rays, centre, half, heading, cells } => {
             let strings = load_strings(&cli)?;
             let options = amv::Options {

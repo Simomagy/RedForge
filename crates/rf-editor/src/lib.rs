@@ -26,6 +26,7 @@ pub mod batches;
 pub mod interior;
 pub mod lod;
 pub mod placement;
+pub mod probe;
 pub mod project;
 pub mod redm;
 pub mod save;

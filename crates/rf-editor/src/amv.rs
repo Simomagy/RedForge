@@ -86,6 +86,8 @@ impl Volume {
 /// Triangles to cast rays against, in a tree of boxes.
 pub struct Mesh {
     triangles: Vec<[Vec3; 3]>,
+    /// Where each triangle was in the list the mesh was made from.
+    ids: Vec<u32>,
     nodes: Vec<Node>,
 }
 
@@ -99,8 +101,13 @@ struct Node {
 }
 
 impl Mesh {
-    pub fn new(mut triangles: Vec<[Vec3; 3]>) -> Self {
-        triangles.retain(|t| t.iter().all(|p| p.is_finite()));
+    pub fn new(triangles: Vec<[Vec3; 3]>) -> Self {
+        let mut triangles: Vec<([Vec3; 3], u32)> = triangles
+            .into_iter()
+            .enumerate()
+            .filter(|(_, t)| t.iter().all(|p| p.is_finite()))
+            .map(|(i, t)| (t, i as u32))
+            .collect();
         let mut nodes = Vec::new();
         if !triangles.is_empty() {
             nodes.push(Node { min: Vec3::ZERO, max: Vec3::ZERO, start: 0, count: triangles.len() as u32 });
@@ -110,7 +117,7 @@ impl Mesh {
                 let slice = &mut triangles[start..start + count];
                 let (mut min, mut max) = (Vec3::MAX, Vec3::MIN);
                 let (mut cmin, mut cmax) = (Vec3::MAX, Vec3::MIN);
-                for t in slice.iter() {
+                for (t, _) in slice.iter() {
                     for p in t {
                         min = min.min(*p);
                         max = max.max(*p);
@@ -133,7 +140,7 @@ impl Mesh {
                     continue;
                 }
                 let mid = count / 2;
-                let key = |t: &[Vec3; 3]| t[0][axis] + t[1][axis] + t[2][axis];
+                let key = |t: &([Vec3; 3], u32)| t.0[0][axis] + t.0[1][axis] + t.0[2][axis];
                 slice.select_nth_unstable_by(mid, |a, b| key(a).total_cmp(&key(b)));
                 let child = nodes.len();
                 nodes.push(Node { min, max, start: start as u32, count: mid as u32 });
@@ -144,7 +151,46 @@ impl Mesh {
                 pending.push(child + 1);
             }
         }
-        Self { triangles, nodes }
+        let ids = triangles.iter().map(|t| t.1).collect();
+        Self { triangles: triangles.into_iter().map(|t| t.0).collect(), ids, nodes }
+    }
+
+    /// The nearest thing hit from `origin` along `dir` within `reach`: how far,
+    /// and which triangle (its place in the list the mesh was made from).
+    pub fn nearest(&self, origin: Vec3, dir: Vec3, reach: f32) -> Option<(f32, u32)> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+        let inv = dir.recip();
+        let mut best: Option<(f32, u32)> = None;
+        let mut stack = [0u32; 64];
+        let mut top = 1;
+        while top > 0 {
+            top -= 1;
+            let node = &self.nodes[stack[top] as usize];
+            let limit = best.map_or(reach, |b| b.0);
+            let (a, b) = ((node.min - origin) * inv, (node.max - origin) * inv);
+            let (near, far) = (a.min(b).max_element().max(0.0), a.max(b).min_element().min(limit));
+            if near > far {
+                continue;
+            }
+            if node.count == 0 {
+                if top + 2 <= stack.len() {
+                    stack[top] = node.start;
+                    stack[top + 1] = node.start + 1;
+                    top += 2;
+                }
+                continue;
+            }
+            for i in node.start as usize..(node.start + node.count) as usize {
+                if let Some(d) = hit(origin, dir, &self.triangles[i])
+                    && d < best.map_or(reach, |b| b.0)
+                {
+                    best = Some((d, self.ids[i]));
+                }
+            }
+        }
+        best
     }
 
     pub fn len(&self) -> usize {
@@ -326,7 +372,7 @@ pub fn bake(volume: &Volume, mesh: &Mesh, settings: &Settings) -> Baked {
 /// Whether a point is inside the building: with something over it and
 /// something under it. (A little off the vertical too, so that a gap between
 /// two boards doesn't count as the sky.)
-fn indoors(mesh: &Mesh, at: Vec3, reach: f32) -> bool {
+pub(crate) fn indoors(mesh: &Mesh, at: Vec3, reach: f32) -> bool {
     let lean = [Vec3::ZERO, Vec3::new(0.08, 0.0, 0.0), Vec3::new(-0.04, 0.07, 0.0), Vec3::new(-0.04, -0.07, 0.0)];
     let covered = |way: Vec3| lean.iter().filter(|l| mesh.blocked(at, (way + **l).normalize(), reach)).count() >= 3;
     covered(Vec3::Z) && covered(Vec3::NEG_Z)
@@ -572,7 +618,7 @@ pub fn model_files(paths: impl IntoIterator<Item = PathBuf>) -> HashMap<u32, Pat
 /// Whether a model isn't what's seen of the interior: the stand-ins drawn only
 /// into shadows or reflections (so flagged, or so named: the shadow ones have
 /// no flag of their own), which are closed where the interior is open.
-fn is_proxy(path: &Path, flags: u32) -> bool {
+pub(crate) fn is_proxy(path: &Path, flags: u32) -> bool {
     const ONLY_IN_A_PASS: u32 = 0x2A00_0000;
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_ascii_lowercase();
     flags & ONLY_IN_A_PASS != 0
@@ -664,7 +710,15 @@ pub struct ProjectBake {
     pub zone: Option<ZoneFiles>,
     /// How many interiors have a volume in it.
     pub volumes: usize,
-    /// Interiors left without one, and why; what else an interior's lighting lacks.
+    /// How many interiors got a reflection probe.
+    pub probes: usize,
+    /// The ytyps a probe was put in a room of: the project's file, and what
+    /// goes out in its place.
+    pub ytyps: Vec<(PathBuf, Vec<u8>)>,
+    /// The probes' texture dictionaries, by file name.
+    pub textures: Vec<(String, Vec<u8>)>,
+    /// Interiors left without a volume or a probe, and why; what else an
+    /// interior's lighting lacks.
     pub notes: Vec<String>,
 }
 
@@ -694,40 +748,74 @@ pub fn is_zone_file(path: &Path) -> bool {
     name.starts_with("amv_zone_") && name.ends_with(".ymt")
 }
 
-/// Zone `number` for a project's interiors: a volume for each interior its
-/// ytyps have and its ymaps place, baked against its models. Nothing for a project
-/// with a zone of its own among its files (it has seen to it), or with no
-/// interior.
+/// What a project's interiors need to be lit as the game's own are, for each
+/// interior its ytyps have and its ymaps place, from its models:
+///
+/// - a reflection probe, for an interior with none in any room: its textures,
+///   and its ytyp with the probe in a room;
+/// - a volume in zone `number`, unless the project has a zone of its own
+///   among its files (it has seen to it).
 pub fn bake_project(files: &[PathBuf], number: u32, hashes: &HashIndex) -> ProjectBake {
-    if files.iter().any(|f| is_zone_file(f)) {
-        return ProjectBake::default();
-    }
-    let metas = |ext: &str| -> Vec<DataBag> {
-        let of_kind = files.iter().filter(|f| f.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)));
-        of_kind.filter_map(|f| Meta::read(&std::fs::read(f).ok()?).ok()?.root).collect()
-    };
-    let (ytyps, maps) = (metas("ytyp"), metas("ymap"));
-    let interiors = placed(&ytyps, &maps);
-    if interiors.is_empty() {
-        return ProjectBake::default();
-    }
+    let of_kind =
+        |ext: &'static str| files.iter().filter(move |f| f.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)));
+    let read = |f: &PathBuf| Some((f.clone(), Meta::read(&std::fs::read(f).ok()?).ok()?.root?));
+    let (paths, mut ytyps): (Vec<PathBuf>, Vec<DataBag>) = of_kind("ytyp").filter_map(read).unzip();
+    let maps: Vec<DataBag> = of_kind("ymap").filter_map(read).map(|m| m.1).collect();
     let models = model_files(files.iter().cloned());
-    let (mut items, mut textures, mut notes) = (Vec::new(), Vec::new(), Vec::new());
+    let mut out = ProjectBake::default();
+
+    // The probes first: what is said of an interior's lighting below is with them in.
+    let mut probes: HashMap<u32, DataBag> = HashMap::new();
+    for interior in placed(&ytyps, &maps).iter().filter(|i| !crate::probe::has_probe(i.mlo)) {
+        let name = hashes.name(interior.name());
+        match crate::probe::bake_interior(interior, &models, hashes) {
+            Ok(Some(baked)) => {
+                probes.insert(interior.name(), baked.data);
+                out.textures.extend(baked.dictionaries);
+            }
+            Ok(None) => out.notes.push(format!("{name}: no reflection probe, none of its models is in the project")),
+            Err(e) => out.notes.push(format!("{name}: no reflection probe ({e})")),
+        }
+    }
+    for (path, ytyp) in paths.iter().zip(ytyps.iter_mut()) {
+        let mut changed = false;
+        for mlo in interior::archetypes_mut(ytyp).into_iter().flatten().flatten() {
+            if let Some(probe) = probes.remove(&mlo.hash("name"))
+                && crate::probe::add_to_room(mlo, probe)
+            {
+                changed = true;
+                out.probes += 1;
+            }
+        }
+        if changed {
+            match Meta::new(Some(ytyp.clone())).save() {
+                Ok(data) => out.ytyps.push((path.clone(), data)),
+                Err(e) => out.notes.push(format!("{}: {e}", path.display())),
+            }
+        }
+    }
+
+    let interiors = placed(&ytyps, &maps);
+    let own_zone = files.iter().any(|f| is_zone_file(f));
+    let (mut items, mut textures) = (Vec::new(), Vec::new());
     for (index, interior) in interiors.iter().enumerate() {
         let name = hashes.name(interior.name());
-        notes.extend(lighting_notes(&name, &interior::lighting(interior.mlo)));
+        out.notes.extend(lighting_notes(&name, &interior::lighting(interior.mlo)));
+        if own_zone {
+            continue;
+        }
         let Some(volume) = interior.volume(0.5) else {
-            notes.push(format!("{name}: no ambient mask volume, its first room has no size"));
+            out.notes.push(format!("{name}: no ambient mask volume, its first room has no size"));
             continue;
         };
         let triangles = match interior.occluders(&models, hashes) {
             Ok((triangles, _)) if !triangles.is_empty() => triangles,
             Ok(_) => {
-                notes.push(format!("{name}: no ambient mask volume, none of its models is in the project"));
+                out.notes.push(format!("{name}: no ambient mask volume, none of its models is in the project"));
                 continue;
             }
             Err(e) => {
-                notes.push(format!("{name}: no ambient mask volume ({e})"));
+                out.notes.push(format!("{name}: no ambient mask volume ({e})"));
                 continue;
             }
         };
@@ -737,17 +825,17 @@ pub fn bake_project(files: &[PathBuf], number: u32, hashes: &HashIndex) -> Proje
         items.push(item);
         textures.extend(baked.textures(uuid));
     }
-    if items.is_empty() {
-        return ProjectBake { notes, ..Default::default() };
-    }
-    let volumes = items.len();
-    match zone_file(number, items) {
-        Ok(ymt) => ProjectBake { zone: Some(ZoneFiles { number, ymt, ytd: zone_textures(textures) }), volumes, notes },
-        Err(e) => {
-            notes.push(format!("no ambient mask volume ({e})"));
-            ProjectBake { notes, ..Default::default() }
+    if !items.is_empty() {
+        let volumes = items.len();
+        match zone_file(number, items) {
+            Ok(ymt) => {
+                out.zone = Some(ZoneFiles { number, ymt, ytd: zone_textures(textures) });
+                out.volumes = volumes;
+            }
+            Err(e) => out.notes.push(format!("no ambient mask volume ({e})")),
         }
     }
+    out
 }
 
 #[cfg(test)]

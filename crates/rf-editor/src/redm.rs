@@ -93,8 +93,12 @@ pub struct Exported {
     /// How many of the project's interiors got an ambient mask volume, baked
     /// into an `amv_zone_<n>.ymt` and `.ytd` (among `written`).
     pub volumes: usize,
-    /// What to tell of the interiors: those left without a volume, and what
-    /// else their lighting lacks.
+    /// How many of the project's interiors got a reflection probe: drawn
+    /// into four texture dictionaries (among `written`), and put in a room in
+    /// the ytyp that went out.
+    pub probes: usize,
+    /// What to tell of the interiors: those left without a volume or a probe,
+    /// and what else their lighting lacks.
     pub notes: Vec<String>,
 }
 
@@ -131,7 +135,8 @@ pub fn export(
     }
     // An interior with no ambient mask volume is lit as if outdoors, its metals
     // black by day: one is baked for each into zone `zone`, unless the project
-    // has a zone of its own.
+    // has a zone of its own. And one with no reflection probe has nothing of
+    // its own for them to reflect.
     let baked = amv::bake_project(files, zone, hashes);
     if let Some(zone) = &baked.zone {
         for (ext, data) in [("ymt", &zone.ymt), ("ytd", &zone.ytd)] {
@@ -141,7 +146,19 @@ pub fn export(
             done.written.push(name);
         }
     }
+    // An interior with no reflection probe gets one: its textures, and its ytyp
+    // goes out with the probe in a room (the project's own file stays as it is).
+    for (path, data) in &baked.ytyps {
+        let to = stream.join(path.file_name().unwrap_or_default());
+        std::fs::write(&to, data).map_err(|e| io(e, &to))?;
+    }
+    for (name, data) in &baked.textures {
+        let to = stream.join(name);
+        std::fs::write(&to, data).map_err(|e| io(e, &to))?;
+        done.written.push(name.clone());
+    }
     done.volumes = baked.volumes;
+    done.probes = baked.probes;
     done.notes = baked.notes;
     // Only what RedForge wrote goes; other files in stream stay.
     for name in before {
@@ -263,21 +280,36 @@ mod tests {
 
         let res = dir.path().join("res/town");
         let done = export(&res, &files, &BTreeMap::new(), &[], 184, &hashes).unwrap();
-        assert_eq!(done.volumes, 1, "{:?}", done.notes);
+        assert_eq!((done.volumes, done.probes), (1, 1), "{:?}", done.notes);
         let zone = amv::zone_name(184);
-        assert_eq!(done.written[3..], [format!("{zone}.ymt"), format!("{zone}.ytd")]);
-        assert!(res.join("stream").join(format!("{zone}.ytd")).exists());
+        let probe = crate::probe::texture_name(amv::uuid_for(joaat("house"), 0), joaat("house"));
+        let baked = [
+            format!("{zone}.ymt"),
+            format!("{zone}.ytd"),
+            format!("{probe}_ul.ytd"),
+            format!("{probe}_hi.ytd"),
+            format!("{probe}.ytd"),
+            format!("{probe}_lo.ytd"),
+        ];
+        assert_eq!(done.written[3..], baked);
+        assert!(baked.iter().all(|f| res.join("stream").join(f).exists()));
+        // The ytyp that went out has the probe in its room; the project's own hasn't.
+        let rooms_with_probe = |file: &Path| {
+            let ytyp = Meta::read(&std::fs::read(file).unwrap()).unwrap().root.unwrap();
+            crate::interior::archetypes(&ytyp).iter().flatten().filter(|m| crate::probe::has_probe(m)).count()
+        };
+        assert_eq!((rooms_with_probe(&res.join("stream/house.ytyp")), rooms_with_probe(&files[1])), (1, 0));
         // The entity has none of the usual flags: said, not fixed. (Its only room is
-        // the whole of it, which needs no time cycle or probe.)
+        // the whole of it, which needs no time cycle; and it has its probe now.)
         assert_eq!(done.notes.len(), 1, "{:?}", done.notes);
         assert!(done.notes[0].contains("1 of 1 entities"), "{:?}", done.notes);
 
-        // With a zone of its own in the project, nothing is baked, and the one baked before goes.
+        // With a zone of its own in the project no volume is baked, and the one baked before goes.
         let own = dir.path().join("amv_zone_200.ymt");
         std::fs::write(&own, b"x").unwrap();
         let all: Vec<PathBuf> = files.iter().cloned().chain([own]).collect();
         let again = export(&res, &all, &BTreeMap::new(), &done.written, 184, &hashes).unwrap();
-        assert_eq!((again.volumes, again.notes.len()), (0, 0));
+        assert_eq!((again.volumes, again.probes), (0, 1));
         assert_eq!(again.removed, [format!("{zone}.ymt"), format!("{zone}.ytd")]);
     }
 

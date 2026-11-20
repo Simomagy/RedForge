@@ -9,6 +9,17 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 ## [Unreleased]
 
 ### Added
+- Exporting a project to a RedM resource draws a **reflection probe** for each
+  of its interiors that has none in any room: what its metals and glass
+  reflect, which the game lights again as the hour changes. The interior is
+  drawn from the middle of it, at the height of the eyes, in the six
+  directions of a cube, with its models' own textures: the colour of what is
+  seen and how open to the light it is, which way it faces and where the
+  windows are, and how far it is, in the four sizes the game picks from
+  (`<name>_lo`, `<name>`, `<name>_hi`, `<name>_ul`.ytd, named as the game
+  looks for them from the probe and the interior's name). The ytyp that goes
+  out has the probe in the interior's room; the project's own file stays as
+  it is. `rf probe-bake` does the same from the command line.
 - Exporting a project to a RedM resource bakes an **ambient mask volume** for
   each of its interiors (those its ytyps have and its ymaps place), into an
   `amv_zone_<n>.ymt` and `.ytd` in the resource's stream folder: nothing to

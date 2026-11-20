@@ -1193,6 +1193,11 @@ impl ProjectPane {
             1 => format!("{removed}; baked an ambient mask volume for its interior"),
             n => format!("{removed}; baked ambient mask volumes for its {n} interiors"),
         };
+        let removed = match done.probes {
+            0 => removed,
+            1 => format!("{removed}; drew a reflection probe for its interior"),
+            n => format!("{removed}; drew reflection probes for {n} interiors"),
+        };
         let removed = match done.notes.is_empty() {
             true => removed,
             false => format!("{removed}; {}", done.notes.join("; ")),
