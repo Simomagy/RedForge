@@ -8,6 +8,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-11-20
+
 ### Added
 - Exporting a project to a RedM resource draws a **reflection probe** for each
   of its interiors that has none in any room: what its metals and glass
@@ -384,7 +386,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.4.0...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.4.1...HEAD
+[2.4.1]: https://github.com/Simomagy/RedForge/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/Simomagy/RedForge/compare/v2.3.6...v2.4.0
 [2.3.6]: https://github.com/Simomagy/RedForge/compare/v2.3.5...v2.3.6
 [2.3.5]: https://github.com/Simomagy/RedForge/compare/v2.3.0...v2.3.5
