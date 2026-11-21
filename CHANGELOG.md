@@ -8,6 +8,100 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-21
+
+### Added
+- RedForge for Blender has a **Guide**: the sidebar's RedForge tab asks what
+  you want to make and takes you there in steps, each with a sentence on what
+  it is for and the few controls it needs. A step reads where it stands from
+  the scene (done, to do, to fix, optional), so a model that was imported or
+  made by hand shows its steps as done, any step can be opened at any time,
+  and the last one lists what is left to fix with a button to the step that
+  fixes it, then exports to a folder or sends to RedForge. With something of
+  that kind selected, the Guide's home offers to carry on with it from the
+  first step that is left.
+- Guide, **Model (YDR)**: from plain meshes to the `.ydr` and its archetype in
+  seven steps. The meshes are checked (rotation and scale not applied, no
+  faces, no UV map), become one model with a name the game takes, get their
+  materials made game shaders (each can be given any of the game's shaders
+  from a list to search in, keeping the textures and values the two shaders
+  share), their textures chosen per material and put in the model's file or in
+  a `.ytd`, their levels of detail made from the High one, a collision from
+  the model's own shape or from meshes made for it, and an archetype in a new
+  or existing ytyp.
+- Guide, **Interior (MLO)**: from plain meshes to every file of an interior in
+  seven steps, each saying what the piece is and how it is made. The shell
+  (one static model, with no collision in it), the collision (an object of its
+  own, a `.ybn`), the interior made on the collision, which takes its name,
+  the rooms (a box around the selected objects), the portals (from a plane
+  placed in the opening, or four selected vertices), and the entities, each
+  put in the room its centre is in. Export and Send write every model, the
+  collision, the textures and the ytyps.
+- Guide, **Collision (YBN)**: a collision of its own in five steps. Meshes
+  become one collision named after its file, simple shapes (box, sphere,
+  capsule, cylinder) are added at the 3D cursor, a material goes on the whole
+  of it, on the selected meshes, or next to another one to give to some faces.
+- The Guide's **Flags** step gives each part of a collision one of the seven
+  kinds the game's own interior collisions have (46 files, 179 parts looked
+  at: no other combination of flags is in them), each explained under its
+  button with how many of the 179 have it: solid for everything, movement
+  only, bullets only (the game pairs a simple mesh to walk on with a detailed
+  one to shoot at), cover only, camera only, stair slope, and movement only
+  that horses avoid. Every part is listed with its kind, and Flag by Flag
+  shows the single flags of a part under plain names, in what it is and what
+  is checked against it.
+- The Guide's Portals step says what **From and To** are, as the game's
+  interiors have them (25 looked at, 315 portals): From is the room the
+  opening is in, To what is on its other side, limbo for the outside; limbo is
+  always To, never From; the portal's arrow points from From to To. A new
+  portal is turned to face To, and its rooms swapped when limbo was chosen as
+  From; one that is wrong is marked in the list, with Set It Right.
+- An interior made with the Guide has what the game's own have where the add-
+  on's defaults differed: the shell in limbo, flags 32 on limbo and on every
+  room, flags 1572864 on its entities, limbo's box around the whole collision
+  and every room, and a room's lighting set to a timecycle modifier that is in
+  RDR2. The last step tells an interior made before from these, and gives it
+  the game's values with one button.
+- A model's textures that are not in its own file go out as a **texture
+  dictionary**: Export and Send write `<name>.ytd.xml` with the textures next
+  to it, which RedForge makes a `.ytd` of, and the model's archetype names it.
+  Before, choosing textures outside the model's file left them nowhere, and
+  the model came out white.
+- **Expert Tools**, in the Guide and in the add-on's preferences, brings back
+  the panels by kind of file (Files, View, Models, Collisions, Fragments,
+  Animations, Map, Archetypes & Interiors, Tools) under the Guide.
+
+### Changed
+- The sidebar's RedForge tab shows the link with RedForge, closed, and the
+  Guide. The panels by kind of file are hidden until Expert Tools is ticked.
+- A model's textures are written as `.dds`, the only thing RedForge reads them
+  from: a picture that is not a DDS (a `.png`, a `.jpg`) is made one when the
+  model is exported or sent, uncompressed, with its smaller levels when its
+  sizes are powers of two; a `.dds` is copied as it is. Before, the file was
+  copied whatever it was and RedForge found no texture.
+- A new room's lighting is `val_genstore_int` instead of `int_gasstation`, GTA
+  V's, which is not among RDR2's timecycle modifiers.
+- While the Guide is on an interior, selecting one of its models no longer
+  selects that model's own archetype in the ytyp list in place of the
+  interior.
+
+### Fixed
+- Auto Convert never converted a material: it asked for GTA V's shaders
+  (`default.sps`) and texture names (`DiffuseSampler`). It picks among
+  `default`, `normal`, `spec` and `normal_spec`, and carries the colour,
+  normal and specular pictures over to `diffusetex`, `bumptex` and
+  `speculartex`.
+- On Blender 5.3 (Python 3.14) changing a preference of the add-on raised an
+  error and nothing was saved, and setting the flags of a room, portal,
+  entity, archetype or collision by their total left the single flags as they
+  were. The same error is gone from the fragments' panels and from copying an
+  extension.
+- A mesh with an empty material slot raised an error wherever a model's
+  materials are listed, exporting it included. The slot is skipped, and the
+  Guide removes it.
+- Exporting with warnings from a Blender with no window raised an error after
+  the files were written.
+
 ## [2.4.1] - 2026-11-20
 
 ### Added
@@ -386,7 +480,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.4.1...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/Simomagy/RedForge/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/Simomagy/RedForge/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/Simomagy/RedForge/compare/v2.3.6...v2.4.0
 [2.3.6]: https://github.com/Simomagy/RedForge/compare/v2.3.5...v2.3.6
