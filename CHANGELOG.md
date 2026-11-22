@@ -8,6 +8,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-11-22
+
 ### Added
 - Game Files has **My folders**: folders of your own on disk (a RedM
   resource, the models you exported...), added with the + next to the search
@@ -521,7 +523,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.5.0...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.5.1...HEAD
+[2.5.1]: https://github.com/Simomagy/RedForge/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/Simomagy/RedForge/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/Simomagy/RedForge/compare/v2.4.0...v2.4.1
 [2.4.0]: https://github.com/Simomagy/RedForge/compare/v2.3.6...v2.4.0
