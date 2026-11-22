@@ -17,6 +17,8 @@ use rf_render::assets::AssetIndex;
 pub struct Folder {
     pub folders: BTreeMap<String, Folder>,
     pub files: Vec<(String, FileRef)>,
+    /// How many files are in it, its folders' included.
+    pub count: usize,
 }
 
 impl Folder {
@@ -27,9 +29,11 @@ impl Folder {
         }
     }
 
-    fn sort(&mut self) {
+    /// Sorts the files, and counts them.
+    fn sort(&mut self) -> usize {
         self.files.sort_by(|a, b| a.0.cmp(&b.0));
-        self.folders.values_mut().for_each(Folder::sort);
+        self.count = self.files.len() + self.folders.values_mut().map(Folder::sort).sum::<usize>();
+        self.count
     }
 }
 

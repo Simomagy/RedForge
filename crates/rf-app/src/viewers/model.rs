@@ -1,11 +1,12 @@
 //! The model viewer: a drawable, ydd entry or fragment in 3D.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use eframe::egui::{self, Sense, Vec2};
 use rf_formats::formats::ytd::TextureDictionary;
 use rf_formats::hash::HashIndex;
-use rf_formats::rpf8::FileRef;
+use rf_formats::rpf8::{FileRef, LOOSE};
 use rf_render::assets::{DictionaryTextures, ModelFile, read_model, read_texture_dictionary, related_dictionaries};
 use rf_render::{DebugView, GpuModel, OrbitCamera, RenderTargets, ViewSettings};
 
@@ -36,25 +37,96 @@ pub struct ModelViewer {
     ready: Option<Box<Ready>>,
 }
 
+/// Most files taken from around a model on disk, and most dictionaries of
+/// its folder tried for its textures.
+const MAX_AROUND: usize = 5000;
+const MAX_BESIDE: usize = 32;
+
+/// What's around a model on disk.
+#[derive(Default)]
+struct Around {
+    /// The texture dictionaries and ytyps of its resource, mounted.
+    resource: Vec<FileRef>,
+    /// The texture dictionaries of its own folder.
+    beside: Vec<FileRef>,
+}
+
+/// The texture dictionaries and ytyps of a model on disk's resource: its
+/// `stream` folder when it's in one (with the folders in it), or else its
+/// own folder.
+fn files_around(game: &Game, model: &Path) -> Around {
+    let Some(folder) = model.parent() else { return Around::default() };
+    let is_stream = |p: &&Path| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("stream"));
+    let root = folder.ancestors().find(is_stream).unwrap_or(folder);
+    let mut around = Around::default();
+    let mut folders = vec![root.to_owned()];
+    while let Some(dir) = folders.pop() {
+        let mut entries: Vec<_> = std::fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for path in entries {
+            if around.resource.len() >= MAX_AROUND {
+                return around;
+            }
+            if path.is_dir() {
+                if root != folder {
+                    folders.push(path);
+                }
+                continue;
+            }
+            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+            if ext != "ytd" && ext != "ytyp" {
+                continue;
+            }
+            match game.fs.mount(&path) {
+                Ok(f) => {
+                    around.resource.push(f);
+                    if ext == "ytd" && path.parent() == Some(folder) && around.beside.len() < MAX_BESIDE {
+                        around.beside.push(f);
+                    }
+                }
+                Err(e) => log::warn!("{}: {e}", path.display()),
+            }
+        }
+    }
+    around
+}
+
 impl ModelViewer {
     pub fn open(ctx: &egui::Context, game: &Arc<Game>, file: FileRef) -> Self {
         let path = game.path(file);
         let title = path.rsplit('/').next().unwrap_or(&path).to_owned();
         let g = game.clone();
         let p = path.clone();
+        let is_on_disk = file.archive == LOOSE;
         let job = Job::spawn(ctx, move || {
             let data = g.fs.extract_loose(file)?;
             let file = read_model(&p, &data, &g.hashes)?;
             // The dictionaries the game would use for each drawable's archetype,
             // then the ones named like the file.
-            let file_name = p.rsplit('/').next().unwrap_or(&p);
+            let file_name = p.rsplit(['/', '\\']).next().unwrap_or(&p);
             let file_hash = rf_game::file_hash(file_name);
             let mut refs: Vec<FileRef> = Vec::new();
+            // A model on disk (one of Game Files' own folders): what's around
+            // it counts as the game's, as a RedM resource's files do.
+            let around = if is_on_disk { files_around(&g, Path::new(&p)) } else { Around::default() };
+            let data = match around.resource.is_empty() {
+                true => g.data(),
+                false => Arc::new(g.data().with_project(&g.fs, &g.hashes, &around.resource)),
+            };
+            if is_on_disk {
+                let stem = file_name.rsplit_once('.').map_or(file_name, |(s, _)| s).to_lowercase();
+                let named =
+                    |suffix: &str| data.stream_entry("ytd", rf_formats::hash::joaat(&format!("{stem}{suffix}")));
+                refs.extend(["+hidr", "+hi", ""].into_iter().filter_map(named).filter(|f| f.archive == LOOSE));
+            }
             for (name, _) in &file.drawables {
                 let piece = rf_formats::hash::joaat(&name.to_lowercase());
-                refs.extend(g.data().txds_for_piece(piece, file_hash));
+                refs.extend(data.txds_for_piece(piece, file_hash));
             }
             refs.extend(related_dictionaries(&g.fs, &g.index, &p));
+            // Last, the other dictionaries of its folder: a model no ytyp
+            // there names still finds its textures.
+            refs.extend(around.beside);
             let mut seen = std::collections::HashSet::new();
             refs.retain(|f| seen.insert(*f));
             let mut dictionaries = Vec::new();

@@ -231,7 +231,7 @@ impl RedForgeApp {
             egui: rs.renderer.clone(),
             ctx,
         };
-        let settings = Settings::load();
+        let mut settings = Settings::load();
         let folder = std::env::var("REDFORGE_GAME_DIR").ok().or_else(|| settings.get(GAME_FOLDER).map(str::to_owned));
         let auto = match (std::env::var("REDFORGE_OPEN"), std::env::var("REDFORGE_SCREENSHOT")) {
             (Ok(open), Ok(out)) => Some(AutoShot {
@@ -270,13 +270,14 @@ impl RedForgeApp {
             _ => None,
         };
         let tile_size = settings.get(crate::objects::TILE_SIZE).and_then(|v| v.parse().ok());
+        let browser = Browser::new(&mut settings, std::env::var("REDFORGE_FILES_SEARCH").unwrap_or_default());
         let mut app = Self {
             auto,
             settings,
             gpu,
             game: GameState::ask(folder.clone().unwrap_or_default(), None, None),
             dock: default_dock(),
-            browser: Browser::with_search(std::env::var("REDFORGE_FILES_SEARCH").unwrap_or_default()),
+            browser,
             editor: None,
             tools: Tools::default(),
             properties: Properties::default(),
@@ -945,7 +946,9 @@ impl RedForgeApp {
                     Some(p) => (p.to_owned(), true),
                     None => (a.open.clone(), false),
                 };
-                match game.fs.find(&path) {
+                // (a file on disk opens as one of Game Files' own folders does)
+                let on_disk = || Path::new(&path).is_file().then(|| game.fs.mount(Path::new(&path)).ok()).flatten();
+                match game.fs.find(&path).or_else(on_disk) {
                     Some(f) if hex => self.open(ctx, game, BrowserAction::OpenHex(f)),
                     Some(f) => self.open(ctx, game, BrowserAction::Open(f)),
                     None => {
@@ -1263,7 +1266,7 @@ impl TabViewer for Tabs<'_> {
             },
             Tab::GameFiles => match self.game {
                 Some(g) => {
-                    if let Some(a) = self.browser.ui(ui, g) {
+                    if let Some(a) = self.browser.ui(ui, g, self.settings) {
                         *self.action = Some(a);
                     }
                 }

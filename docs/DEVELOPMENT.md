@@ -64,7 +64,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | Variable | What it does |
 |---|---|
 | `REDFORGE_GAME_DIR` | The game folder (instead of the saved one) |
-| `REDFORGE_OPEN` | `welcome` (nothing), `folder` (the game folder's dialog), a game path (a model, texture, clip dictionary or ymap; `hex:<path>` for the hex viewer), `world`, `world:<place>` or `world:x,y,z[,yaw,pitch]` |
+| `REDFORGE_OPEN` | `welcome` (nothing), `folder` (the game folder's dialog), a game path or a file on disk (a model, texture, clip dictionary or ymap; `hex:<path>` for the hex viewer), `world`, `world:<place>` or `world:x,y,z[,yaw,pitch]` |
 | `REDFORGE_SCREENSHOT`, `REDFORGE_SCREENSHOT_DELAY` | Where the screenshot goes, and how many seconds after opening (6 by default) |
 | `REDFORGE_SCREENSHOT_AGAIN` | A second screenshot half a second later, to compare frames of a still view (flickering) |
 | `REDFORGE_HOUR` | The map's hour |
@@ -80,6 +80,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | `REDFORGE_OBJECTS_SEARCH` | Shows Objects with that search and chooses the first object (the Place tool) |
 | `REDFORGE_SHOW_TAB` | Brings a pane to the front (Project, Hierarchy...) |
 | `REDFORGE_FILES_SEARCH` | Starts Game Files with that search |
+| `REDFORGE_TEST_ADD_FOLDER` | A folder added to Game Files' My folders as its button adds it (kept in the settings: use it with a `XDG_CONFIG_HOME` of its own) |
 | `REDFORGE_PROJECT` | A project to open instead of the last one (not remembered) |
 | `REDFORGE_HOLD_LOADING` | Keeps the loading screen up that many seconds |
 | `REDFORGE_DROP_HOVER=1` | Shows the card files dragged over the window get |

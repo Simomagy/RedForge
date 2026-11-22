@@ -25,8 +25,9 @@ const STEPS: [(Option<&str>, &str, &str); 8] = [
     (
         Some(GAME_FILES),
         "Game Files",
-        "The game's archives as folders. Double-click a model, texture or clip to open it; right-click a file \
-         to see it as XML or hex.",
+        "The game's archives as folders, and under My folders the folders of your own you add with +: they \
+         stay there between runs. Double-click a model, texture or clip to open it; right-click a file to see \
+         it as XML or hex.",
     ),
     (
         Some(PROJECT),

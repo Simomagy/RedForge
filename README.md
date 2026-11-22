@@ -162,6 +162,13 @@ show on the map, and moving objects in Blender moves them in RedForge.
 The add-on is a fork of Sollumz RDR for Red Dead Redemption 2 only, under the
 GPL-3.0-or-later like it (RedForge itself isn't): see `blender/README.md`.
 
+## Your own folders in Game Files
+
+Game Files lists the game's archives, and under **My folders** the folders on
+disk you add with the + (a RedM resource, the models you exported...). They
+stay there between runs, and their files open, search and export like the
+game's.
+
 ## Exporting game files
 
 In Game Files, a file's or a folder's right click exports it into a folder of

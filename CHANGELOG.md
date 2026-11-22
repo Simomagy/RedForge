@@ -8,6 +8,34 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Added
+- Game Files has **My folders**: folders of your own on disk (a RedM
+  resource, the models you exported...), added with the + next to the search
+  or on the section. They are kept in the settings, so they are still there
+  the next time RedForge opens. Their files open in the viewers, show as XML
+  or hex and export like the game's, the search finds them (first, before the
+  game's), and they are read again when the window gets the focus back or
+  with **Read again**. A folder's right click also shows it in the file
+  manager, copies its path, or removes it from Game Files (nothing is deleted
+  on disk); one that isn't there (a disk not plugged in) stays listed as not
+  found.
+- A model opened from one of My folders finds its textures around it, as it
+  would streamed by RedM: in the texture dictionary of its name, in the ones
+  the ytyps of its resource name for it (its `stream` folder, with the
+  folders in it; else its own folder), and last in the other dictionaries of
+  its folder.
+- Game Files: a filter next to the search shows one kind of file only
+  (models, textures, maps and archetypes, collisions, animations), in the
+  tree and in the search.
+
+### Changed
+- Game Files has a new look. The tree is in two sections, My folders and
+  Game, that fold; each folder says how many files it holds and each file
+  has its kind's icon; the chosen file's whole path is at the bottom (a click
+  copies it). A search says where each result is (its archive and its
+  folder), and has a button to clear it. A folder lists all its files now,
+  not the first 3000.
+
 ### Fixed
 - Guide, **Interior (MLO)**: an interior made with it no longer disappears,
   shell and all, when it's walked into. Its collision said nothing of which
