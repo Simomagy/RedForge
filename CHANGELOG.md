@@ -8,6 +8,19 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Fixed
+- Guide, **Interior (MLO)**: an interior made with it no longer disappears,
+  shell and all, when it's walked into. Its collision said nothing of which
+  room is stood in, so the game took whoever was inside to be outside. On
+  export each face of the collision now carries its room's number (the room
+  its centre is in; with one room, that one), and the collision has what the
+  game's interior collisions have besides (64 in a bound's unnamed field, a
+  mass of 1).
+- RedForge for Blender on Linux: a model imported from XML has its textures
+  again. The folder next to the XML was looked for with a Windows path, so
+  none was found: every texture came in as a blank image, and the model went
+  back out with no texture names and nothing in its texture dictionary.
+
 ## [2.5.0] - 2026-11-21
 
 ### Added
