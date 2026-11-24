@@ -8,6 +8,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-11-24
+
 ### Added
 - The map's **Occlusion** selection mode edits what it shows, the game's own
   occluders included: the gizmo moves, rotates and scales the selected box
@@ -544,7 +546,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.5.1...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.6.0...HEAD
+[2.6.0]: https://github.com/Simomagy/RedForge/compare/v2.5.1...v2.6.0
 [2.5.1]: https://github.com/Simomagy/RedForge/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/Simomagy/RedForge/compare/v2.4.1...v2.5.0
 [2.4.1]: https://github.com/Simomagy/RedForge/compare/v2.4.0...v2.4.1
