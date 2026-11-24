@@ -25,6 +25,7 @@ pub mod autosave;
 pub mod batches;
 pub mod interior;
 pub mod lod;
+pub mod occlusion;
 pub mod placement;
 pub mod probe;
 pub mod project;
@@ -42,6 +43,7 @@ use rf_formats::rpf8::{FileRef, Rpf8FileSystem};
 use rf_game::GameData;
 pub use rf_world::{EntityId, World};
 
+pub use crate::occlusion::{OccluderId, OccluderKind};
 pub use crate::placement::Placement;
 pub use crate::project::Project;
 

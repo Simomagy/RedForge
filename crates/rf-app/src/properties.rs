@@ -6,13 +6,13 @@
 
 use eframe::egui::{self, DragValue, RichText};
 use glam::{EulerRot, Quat, Vec3};
-use rf_editor::{Editor, EntityId, Placement};
+use rf_editor::{Editor, EntityId, OccluderId, OccluderKind, Placement, occlusion};
 use rf_formats::formats::databag::{DataBag, SchemaField, ValueType};
 use rf_formats::formats::meta::rsc_schema;
 use rf_formats::hash::joaat;
 
 use crate::map::helpers::HelperPart;
-use crate::map::tools::Tools;
+use crate::map::tools::{Tools, occluder_key};
 
 /// `RDR2EntityFlags`, by bit (the C#'s names; the others are unused).
 const ENTITY_FLAGS: [(u32, &str); 24] = [
@@ -49,6 +49,8 @@ const SKIPPED: [&str; 6] = ["archetypeName", "position", "rotation", "scaleXY", 
 pub struct Properties {
     /// A placement being dragged: committed when let go.
     pending: Option<(EntityId, Placement)>,
+    /// An occluder's placement being dragged.
+    pending_occluder: Option<(OccluderId, Placement)>,
     /// A field being dragged.
     pending_field: Option<(u32, f64)>,
     archetype_text: String,
@@ -94,8 +96,12 @@ fn parts_ui(ui: &mut egui::Ui, parts: &[HelperPart]) {
 impl Properties {
     pub fn ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, tools: Option<&mut Tools>) {
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-            match tools.as_deref() {
-                Some(t) if !t.selected_parts.is_empty() => parts_ui(ui, &t.selected_parts),
+            let mut tools = tools;
+            match tools.as_deref_mut() {
+                Some(t) if !t.selected_parts.is_empty() => {
+                    parts_ui(ui, &t.selected_parts);
+                    self.occluder_ui(ui, editor, t);
+                }
                 _ => self.selection_ui(ui, editor),
             }
             ui.separator();
@@ -112,6 +118,79 @@ impl Properties {
                 ui.colored_label(egui::Color32::from_rgb(230, 110, 90), e);
             }
         });
+    }
+
+    /// The last selected occluder's placement, to edit: a box's centre, size
+    /// and angle, a model's position (its vertices move with it).
+    fn occluder_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools) {
+        let occluders = tools.selected_occluders();
+        let Some(&id) = occluders.last() else { return };
+        if !editor.open_map(id.map) {
+            return;
+        }
+        let Some(saved) = editor.occluder_placement(id) else { return };
+        let mut p = match self.pending_occluder {
+            Some((pid, p)) if pid == id => p,
+            _ => saved,
+        };
+        let is_box = id.kind == OccluderKind::Box;
+        let mut pos = p.position.to_array();
+        let mut size = p.scale.to_array();
+        let mut angle = [occlusion::yaw(&p).to_degrees()];
+        let mut changed = false;
+        let mut released = false;
+        let mut row = |ui: &mut egui::Ui, label: &str, values: &mut [f32], speed: f64| {
+            ui.horizontal(|ui| {
+                ui.label(label);
+                for v in values.iter_mut() {
+                    let r = ui.add(DragValue::new(v).speed(speed).max_decimals(4).update_while_editing(false));
+                    changed |= r.changed();
+                    released |= r.drag_stopped() || (r.changed() && !r.dragged());
+                }
+            });
+        };
+        ui.add_space(4.0);
+        row(ui, if is_box { "Centre" } else { "Position" }, &mut pos, 0.05);
+        if is_box {
+            row(ui, "Size", &mut size, 0.05);
+            row(ui, "Angle °", &mut angle, 0.5);
+        }
+        let n = occluders.len();
+        let delete = if n == 1 { "Delete".to_owned() } else { format!("Delete {n}") };
+        let mut deleted = false;
+        ui.horizontal(|ui| {
+            if ui.small_button(delete).on_hover_text("Remove from the ymap (Delete)").clicked() {
+                deleted = true;
+            }
+            if editor.map(id.map).is_some_and(|m| m.is_edited()) {
+                ui.label(RichText::new("ymap edited").color(egui::Color32::from_rgb(255, 160, 40)));
+            }
+        });
+        ui.label(
+            RichText::new(
+                "Move, rotate and scale it with the gizmo (Q, E, T). A changed ymap of the game goes in \
+                 the project, and replaces the game's when exported.",
+            )
+            .weak(),
+        );
+        if deleted {
+            self.pending_occluder = None;
+            tools.delete(editor);
+            return;
+        }
+        if changed {
+            p = Placement {
+                position: Vec3::from(pos),
+                orientation: if is_box { Quat::from_rotation_z(angle[0].to_radians()) } else { p.orientation },
+                scale: if is_box { Vec3::from(size).max(Vec3::splat(0.01)) } else { p.scale },
+            };
+            self.pending_occluder = Some((id, p));
+            tools.helper_preview = vec![(occluder_key(id), occlusion::change(&saved, &p))];
+        }
+        if released && let Some((pid, p)) = self.pending_occluder.take() {
+            tools.helper_preview.clear();
+            editor.set_occluders("Edit occluder", &[(pid, saved, p)]);
+        }
     }
 
     fn selection_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor) {

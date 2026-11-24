@@ -888,7 +888,9 @@ impl MapView {
                 }
                 let id = batches::FIRST_HELPER_ID + helper_keys.len() as u32;
                 helper_keys.push(p.key);
-                let inst = Instance::helper(p.transform, id, p.colour);
+                // A helper being dragged shows where the drag has it.
+                let moved = tools.helper_preview.iter().find(|(k, _)| *k == p.key).map(|(_, m)| *m);
+                let inst = Instance::helper(moved.map_or(p.transform, |m| m * p.transform), id, p.colour);
                 let key = Arc::as_ptr(&p.mesh) as usize;
                 let add = |g: &mut HelperGroups| {
                     let seen = g.len();

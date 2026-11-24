@@ -17,7 +17,8 @@ use crate::math::{self, Aabb, Quat, Vec3};
 pub struct BoxOccluder {
     pub centre: Vec3,
     pub size: Vec3,
-    /// About Z, radians: `atan2(CosZ, SinZ)`, as the C# reads it.
+    /// About Z, radians: `atan2(SinZ, CosZ)` (the C# has them the other way
+    /// round, which shows a box at 90° less its angle).
     pub angle: f32,
 }
 
@@ -142,7 +143,7 @@ impl MapHelpers {
                 BoxOccluder {
                     centre: [centre_cos[0], centre_cos[1], centre_cos[2]],
                     size: [size_sin[0], size_sin[1], size_sin[2]],
-                    angle: centre_cos[3].atan2(size_sin[3]),
+                    angle: size_sin[3].atan2(centre_cos[3]),
                 }
             })
             .collect();

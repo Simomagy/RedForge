@@ -8,6 +8,27 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Added
+- The map's **Occlusion** selection mode edits what it shows, the game's own
+  occluders included: the gizmo moves, rotates and scales the selected box
+  occluders and occlude models (a box turns about Z only; a model's vertices
+  follow), the arrows nudge them, **Delete** removes them, and Properties has
+  a box's centre, size and angle and a model's position. Undo and redo work as
+  for entities. A changed ymap of the game goes in the project, and exported
+  it replaces the game's: an occluder that hid a new interior can be moved
+  away or deleted.
+
+### Fixed
+- Box occluders showed turned the wrong way (at 90° less their angle).
+- RedForge for Blender, the Guide's Interior (MLO): **Add All Models** (and
+  **Add Selected**) no longer crashes Blender when many models are added at
+  once, nor does making several portals from several selected planes.
+- RedForge for Blender, the Guide's Interior (MLO): collision just outside a
+  portal to the outside (a porch, a doorstep, the walkway into a cave: up to
+  6 m in front of the portal, 1 m to its sides) is exported as the outside's.
+  It was the room's, so standing on it the game took you to be inside, and
+  drew the world only through the door.
+
 ## [2.5.1] - 2026-11-22
 
 ### Added

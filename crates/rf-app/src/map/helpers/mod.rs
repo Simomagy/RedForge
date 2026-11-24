@@ -83,7 +83,9 @@ impl Mode {
             Mode::Physics => "The collisions: the world's and the entities'",
             Mode::Navmesh => "The navigation meshes",
             Mode::Skeleton => "The skeletons of the entities that have one",
-            Mode::Occlusion => "The ymaps' box occluders and occlude models",
+            Mode::Occlusion => {
+                "The ymaps' box occluders and occlude models: move, rotate and scale them with the gizmo, Delete removes them"
+            }
             Mode::InteriorInstance => "The interiors' rooms, portals and time cycle modifiers",
             Mode::TimeCycleModifier => "The ymaps' time cycle modifier boxes",
             Mode::AmbientMaskVolume => "The ambient mask volumes",

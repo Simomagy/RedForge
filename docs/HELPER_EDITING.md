@@ -56,14 +56,18 @@ navmeshes, occlude models (but through its mesh editor) or scenario points.
   - A model: `bmin`/`bmax` (the vertices' box), `verts` (`numVertsInBytes/12`
     world-space f32 vertices, then u8 indices), `dataSize = 12v + 3t`,
     `numTris = 0x8000 | t`, `flags = 0`; at most 255 vertices.
-- **Bug**: `rf-world/src/helpers.rs:145` reads the angle as the C# does,
-  `atan2(CosZ, SinZ)`, so boxes show at 90° − θ. The game's extents and
-  `rf-editor/src/save.rs` agree with `atan2(SinZ, CosZ)`. Verified.
+- **Done** (`rf-editor/src/occlusion.rs`, the app's `map/tools.rs`): boxes
+  and models move, turn, scale and are deleted, with undo; the selection
+  stays the app's (`Tools::helper_selection`), dropped when undo or redo
+  changes how many occluders its ymaps have. New occluders, copies and a
+  model's vertices are still to do.
+- **Bug, fixed**: the angle was read as the C# does, `atan2(CosZ, SinZ)`, so
+  boxes showed at 90° − θ. The game's extents and `rf-editor/src/save.rs`
+  agree with `atan2(SinZ, CosZ)`. Verified.
 - **Saving**: ymaps are already edited and saved (`MapDoc`), occluders pass
   through as read, and `save::update_map` already counts them in the extents.
-  Only the editor's streaming box (`World::set_map`, `edit.rs:54`) grows from
-  entities alone: occluders moved out of it, or in a ymap with only occluders,
-  wouldn't show.
+  The editor's streaming box (`World::set_map`) grows to take in the
+  occluders too.
 - **RedM**: ymaps stream as they do today. Nothing to test.
 - **Operations**:
   1. Box occluders: move, turn about Z, resize, delete, new (from the

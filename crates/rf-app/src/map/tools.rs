@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Event, Key, Pos2, Rect, Stroke};
 use glam::{Mat4, Quat, Vec2, Vec3};
-use rf_editor::{Editor, EntityId, Placement};
+use rf_editor::{Editor, EntityId, OccluderId, OccluderKind, Placement, occlusion};
 use rf_render::{CameraView, PickRequest};
 
 use super::helpers::{HelperKey, HelperPart, Mode};
@@ -59,6 +59,9 @@ pub struct Tools {
     pub helper_selection: Vec<HelperKey>,
     /// The selected helpers as last drawn, for Properties.
     pub selected_parts: Vec<HelperPart>,
+    /// Helpers shown elsewhere while they're dragged: each one's change from
+    /// where it is in its file.
+    pub helper_preview: Vec<(HelperKey, Mat4)>,
     /// Asks the map view to look at the selection (Hierarchy's double click).
     pub focus: bool,
     /// Asks the world map to drop the selection to the ground (End).
@@ -108,10 +111,37 @@ impl Toast {
     }
 }
 
-/// A gizmo drag: the dragged entities where they started and are now.
+/// What the gizmo, the arrows and Delete work on: an entity, or in
+/// "Occlusion" mode an occluder of a ymap.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Item {
+    Entity(EntityId),
+    Occluder(OccluderId),
+}
+
+/// The occluder a helper of "Occlusion" mode is.
+pub fn occluder_of(key: &HelperKey) -> Option<OccluderId> {
+    let kind = match (key.mode, key.group) {
+        (Mode::Occlusion, 0) => OccluderKind::Box,
+        (Mode::Occlusion, 1) => OccluderKind::Model,
+        _ => return None,
+    };
+    Some(OccluderId { map: key.source, kind, index: key.index })
+}
+
+/// An occluder's helper in "Occlusion" mode.
+pub fn occluder_key(id: OccluderId) -> HelperKey {
+    let group = match id.kind {
+        OccluderKind::Box => 0,
+        OccluderKind::Model => 1,
+    };
+    HelperKey { mode: Mode::Occlusion, source: id.map, group, index: id.index }
+}
+
+/// A gizmo drag: what's dragged, where it started and is now.
 struct Drag {
-    start: Vec<(EntityId, Placement)>,
-    now: Vec<(EntityId, Placement)>,
+    start: Vec<(Item, Placement)>,
+    now: Vec<(Item, Placement)>,
     /// Copies are dragged (Shift at the start): their duplicate is a step
     /// already, which the move joins.
     copy: bool,
@@ -150,6 +180,7 @@ impl Default for Tools {
             hover_helper: None,
             helper_selection: Vec::new(),
             selected_parts: Vec::new(),
+            helper_preview: Vec::new(),
             focus: false,
             drop: false,
             hover_point: None,
@@ -175,6 +206,84 @@ impl Tools {
         if mode != self.mode {
             self.mode = mode;
             self.hover_helper = None;
+            self.helper_selection.clear();
+            self.selected_parts.clear();
+            self.helper_preview.clear();
+        }
+    }
+
+    /// The selected occluders ("Occlusion" mode).
+    pub fn selected_occluders(&self) -> Vec<OccluderId> {
+        if self.mode != Mode::Occlusion {
+            return Vec::new();
+        }
+        self.helper_selection.iter().filter_map(occluder_of).collect()
+    }
+
+    /// What the gizmo and the arrows move, and where each is: the selected
+    /// occluders in "Occlusion" mode, else the selected entities.
+    fn items(&self, editor: &mut Editor) -> Vec<(Item, Placement)> {
+        let occluders = self.selected_occluders();
+        if !occluders.is_empty() {
+            return occluders
+                .into_iter()
+                .filter_map(|id| {
+                    let open = editor.open_map(id.map);
+                    Some((Item::Occluder(id), editor.occluder_placement(id).filter(|_| open)?))
+                })
+                .collect();
+        }
+        editor
+            .selection()
+            .iter()
+            .filter(|id| editor.is_editable(**id))
+            .filter_map(|id| Some((Item::Entity(*id), editor.placement(*id)?)))
+            .collect()
+    }
+
+    /// Shows what's dragged where it is now, without a step.
+    fn preview(&mut self, editor: &mut Editor, start: &[(Item, Placement)], now: &[(Item, Placement)]) {
+        let mut entities = Vec::new();
+        self.helper_preview.clear();
+        for ((item, to), (_, from)) in now.iter().zip(start) {
+            match item {
+                Item::Entity(id) => entities.push((*id, *to)),
+                Item::Occluder(id) => self.helper_preview.push((occluder_key(*id), occlusion::change(from, to))),
+            }
+        }
+        editor.preview(&entities);
+    }
+
+    /// Puts what was moved where it is now: one step.
+    fn commit(&mut self, editor: &mut Editor, label: &str, start: &[(Item, Placement)], now: &[(Item, Placement)]) {
+        let mut entities = Vec::new();
+        let mut occluders = Vec::new();
+        for ((item, to), (_, from)) in now.iter().zip(start) {
+            match item {
+                Item::Entity(id) => entities.push((*id, *to)),
+                Item::Occluder(id) => occluders.push((*id, *from, *to)),
+            }
+        }
+        self.helper_preview.clear();
+        if !entities.is_empty() {
+            editor.set_placements(label, &entities);
+        }
+        if !occluders.is_empty() {
+            let label = format!("{label} occluder{}", if occluders.len() == 1 { "" } else { "s" });
+            editor.set_occluders(&label, &occluders);
+        }
+    }
+
+    /// How many occluders each selected one's list has: undo and redo may
+    /// change it, and the selection's indices then mean other occluders.
+    fn occluder_counts(&self, editor: &Editor) -> Vec<usize> {
+        self.selected_occluders().iter().map(|id| editor.occluder_count(id.map, id.kind)).collect()
+    }
+
+    /// Drops the occluder selection when undo or redo changed what it's of.
+    fn after_history(&mut self, editor: &Editor, before: Vec<usize>) {
+        self.helper_preview.clear();
+        if before != self.occluder_counts(editor) {
             self.helper_selection.clear();
             self.selected_parts.clear();
         }
@@ -234,17 +343,21 @@ impl Tools {
 
     pub fn undo(&mut self, editor: &mut Editor) {
         self.finish_drag(editor);
+        let before = self.occluder_counts(editor);
         match editor.undo() {
             Some(l) => self.say(format!("Undid {l}")),
             None => self.say("Nothing to undo"),
         }
+        self.after_history(editor, before);
     }
 
     pub fn redo(&mut self, editor: &mut Editor) {
+        let before = self.occluder_counts(editor);
         match editor.redo() {
             Some(l) => self.say(format!("Redid {l}")),
             None => self.say("Nothing to redo"),
         }
+        self.after_history(editor, before);
     }
 
     /// Copies the selection, with a line about it on the clipboard (which
@@ -311,6 +424,18 @@ impl Tools {
     }
 
     pub fn delete(&mut self, editor: &mut Editor) {
+        let occluders = self.selected_occluders();
+        if !occluders.is_empty() {
+            self.finish_drag(editor);
+            match editor.delete_occluders(&occluders) {
+                Ok(n) => self.say(format!("Deleted {}", count(n, "occluder"))),
+                Err(e) => self.fail(e),
+            }
+            self.helper_selection.clear();
+            self.selected_parts.clear();
+            self.helper_preview.clear();
+            return;
+        }
         let n = editor.selection().len();
         if n == 0 {
             return;
@@ -401,7 +526,7 @@ impl Tools {
         rect: Rect,
     ) -> bool {
         self.gizmo_shown = false;
-        let modes = match self.tool {
+        let mut modes = match self.tool {
             Tool::Move => GizmoMode::all_translate(),
             Tool::Rotate => GizmoMode::all_rotate(),
             Tool::Scale => GizmoMode::all_scale(),
@@ -412,15 +537,15 @@ impl Tools {
         };
         let mut current = match &self.drag {
             Some(d) => d.now.clone(),
-            None => editor
-                .selection()
-                .iter()
-                .filter(|id| editor.is_editable(**id))
-                .filter_map(|id| Some((*id, editor.placement(*id)?)))
-                .collect::<Vec<_>>(),
+            None => self.items(editor),
         };
         if current.is_empty() {
             return false;
+        }
+        // A box occluder only turns about Z.
+        let is_box = |i: &Item| matches!(i, Item::Occluder(o) if o.kind == OccluderKind::Box);
+        if self.tool == Tool::Rotate && current.iter().all(|(i, _)| is_box(i)) {
+            modes = GizmoMode::RotateZ.into();
         }
         self.gizmo_shown = true;
         // The gizmo works in OpenGL's clip space: give it its own projection.
@@ -476,7 +601,7 @@ impl Tools {
                 self.grab
                     .filter(|_| !in_view(pivot))
                     .and_then(|(id, offset)| {
-                        let p = current.iter().find(|(i, _)| *i == id)?.1;
+                        let p = current.iter().find(|(i, _)| *i == Item::Entity(id))?.1;
                         Some(p.position + offset)
                     })
                     .filter(|&at| in_view(at))
@@ -502,13 +627,14 @@ impl Tools {
                 if self.drag.is_none() {
                     // Shift at the start drags copies, as in the C#; if they
                     // can't be made, nothing moves.
-                    let copy = ui.input(|i| i.modifiers.shift);
+                    let entities = current.iter().all(|(i, _)| matches!(i, Item::Entity(_)));
+                    let copy = entities && ui.input(|i| i.modifiers.shift);
                     if copy {
                         match editor.duplicate_selected() {
                             Ok(()) => {
                                 let copies = editor.selection().to_vec();
                                 for (c, id) in current.iter_mut().zip(copies) {
-                                    c.0 = id;
+                                    c.0 = Item::Entity(id);
                                 }
                             }
                             Err(e) => {
@@ -531,7 +657,18 @@ impl Tools {
                         .start
                         .iter()
                         .zip(moved)
-                        .map(|((id, start), t)| (*id, from_transform(&t).lock_scale_xy(start)))
+                        .map(|((item, start), t)| {
+                            let p = from_transform(&t);
+                            match item {
+                                Item::Entity(_) => (*item, p.lock_scale_xy(start)),
+                                // A box's turn is about Z, whatever the gizmo gave.
+                                Item::Occluder(o) if o.kind == OccluderKind::Box => {
+                                    let orientation = Quat::from_rotation_z(occlusion::yaw(&p));
+                                    (*item, Placement { orientation, ..p })
+                                }
+                                Item::Occluder(_) => (*item, p),
+                            }
+                        })
                         .collect(),
                 };
                 // The move snap puts the first entity on the world's grid,
@@ -545,8 +682,9 @@ impl Tools {
                         p.position += fix;
                     }
                 }
-                editor.preview(&d.now);
-                self.readout = readout(self.tool, &d.start[0].1, &d.now[0].1).map(|t| (t, real));
+                let (start, now) = (d.start.clone(), d.now.clone());
+                self.preview(editor, &start, &now);
+                self.readout = readout(self.tool, &start[0].1, &now[0].1).map(|t| (t, real));
             }
             None => {
                 self.finish_drag(editor);
@@ -573,7 +711,7 @@ impl Tools {
         };
         let (start, now) = (d.start[0].1, d.now[0].1);
         self.last_move = Some((now.position - start.position, now.orientation * start.orientation.inverse()));
-        editor.set_placements(label, &d.now);
+        self.commit(editor, label, &d.start, &d.now);
         if d.copy {
             editor.merge_last_steps(&format!("Copy and {}", label.to_lowercase()));
         }
@@ -582,7 +720,7 @@ impl Tools {
     /// The arrows (and Page Up / Down) move the selection a step of the move
     /// snap, or 10 cm (Shift: ten times as far).
     fn nudge(&mut self, ui: &egui::Ui, editor: &mut Editor, forward: Vec3, shift: bool) {
-        if self.tool == Tool::Place || self.drag.is_some() || editor.selection().is_empty() {
+        if self.tool == Tool::Place || self.drag.is_some() {
             return;
         }
         let axis = |v: Vec2| {
@@ -609,25 +747,19 @@ impl Tools {
         if by == Vec3::ZERO {
             return;
         }
-        let moved: Vec<(EntityId, Placement)> = editor
-            .selection()
-            .iter()
-            .filter(|id| editor.is_editable(**id))
-            .filter_map(|id| {
-                let mut p = editor.placement(*id)?;
-                p.position += by;
-                Some((*id, p))
-            })
-            .collect();
+        let start = self.items(editor);
+        let moved: Vec<(Item, Placement)> =
+            start.iter().map(|(item, p)| (*item, Placement { position: p.position + by, ..*p })).collect();
         if !moved.is_empty() {
-            editor.set_placements("Nudge", &moved);
+            self.commit(editor, "Nudge", &start, &moved);
         }
     }
 
     /// Esc during a drag: everything goes back, copies too.
     fn cancel_drag(&mut self, editor: &mut Editor) -> bool {
         let Some(d) = self.drag.take() else { return false };
-        editor.preview(&d.start);
+        self.preview(editor, &d.start, &d.start);
+        self.helper_preview.clear();
         if d.copy {
             editor.undo();
         }
@@ -778,6 +910,7 @@ impl Tools {
                 editor.select(Vec::new());
                 self.helper_selection.clear();
                 self.selected_parts.clear();
+                self.helper_preview.clear();
             }
         }
     }

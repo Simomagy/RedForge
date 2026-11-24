@@ -57,6 +57,16 @@ impl World {
             reach.extend(e.bounds.min.map(|v| v - d));
             reach.extend(e.bounds.max.map(|v| v + d));
         }
+        // Its occluders too: one moved out of the box would stop showing.
+        for b in &map.helpers.box_occluders {
+            let r = (b.size[0].hypot(b.size[1]) * 0.5).max(b.size[2] * 0.5);
+            reach.extend(b.centre.map(|v| v - r));
+            reach.extend(b.centre.map(|v| v + r));
+        }
+        for m in &map.helpers.occlude_models {
+            reach.extend(m.min);
+            reach.extend(m.max);
+        }
         let grown = reach != Aabb::EMPTY && reach != n.streaming;
         if grown {
             n.streaming = reach;

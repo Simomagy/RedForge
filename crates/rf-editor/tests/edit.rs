@@ -354,3 +354,83 @@ fn batch_instances() {
     assert!((Vec3::new(t[12], t[13], t[14]) - moved.position).length() < 1e-3);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The game's occluders around Valentine: moved, deleted, undone, and saved.
+#[test]
+fn occluders_move_delete_undo_and_save() {
+    use rf_editor::{OccluderId, OccluderKind, occlusion};
+
+    let Some(mut ed) = editor() else { return };
+    let val = ed.world.places().into_iter().find(|(n, _)| n == "Valentine").unwrap().1;
+    settle(&mut ed, val);
+    let helpers = ed.world.map_helpers();
+    let (boxes, _) = helpers.iter().find(|(_, h)| !h.box_occluders.is_empty()).expect("a ymap with box occluders");
+    let (models, m) = helpers.iter().find(|(_, h)| h.occlude_models.len() > 1).expect("a ymap with occlude models");
+    let (boxes, models, model_count) = (*boxes, *models, m.occlude_models.len());
+
+    // A box: 5 m up, a quarter turn, twice as wide.
+    let id = OccluderId { map: boxes, kind: OccluderKind::Box, index: 0 };
+    assert!(ed.open_map(boxes));
+    let from = ed.occluder_placement(id).unwrap();
+    let to = Placement {
+        position: from.position + Vec3::Z * 5.0,
+        orientation: glam::Quat::from_rotation_z(occlusion::yaw(&from) + 1.0),
+        scale: from.scale * Vec3::new(2.0, 1.0, 1.0),
+    };
+    assert!(ed.set_occluders("Move occluder", &[(id, from, to)]));
+    let shown = |ed: &Editor, map: u32| ed.world.map_helpers().into_iter().find(|(n, _)| *n == map).unwrap().1;
+    let b = &shown(&ed, boxes).box_occluders[0];
+    assert!((Vec3::from(b.centre) - to.position).length() < 1e-4);
+    assert!((Vec3::from(b.size) - to.scale).length() < 1e-3);
+    assert!((b.angle - occlusion::yaw(&to)).abs() < 1e-4);
+    assert!(ed.map(boxes).unwrap().is_edited() && ed.map(boxes).unwrap().in_project);
+
+    // A model: 3 m east; its vertices and box follow.
+    let mid = OccluderId { map: models, kind: OccluderKind::Model, index: 1 };
+    assert!(ed.open_map(models));
+    let before = shown(&ed, models).occlude_models[1].clone();
+    let mfrom = ed.occluder_placement(mid).unwrap();
+    let mto = Placement { position: mfrom.position + Vec3::X * 3.0, ..mfrom };
+    assert!(ed.set_occluders("Move occluder", &[(mid, mfrom, mto)]));
+    let after = shown(&ed, models).occlude_models[1].clone();
+    assert_eq!((after.vertices.len(), &after.indices), (before.vertices.len(), &before.indices));
+    for (a, b) in after.vertices.iter().zip(&before.vertices) {
+        assert!((Vec3::from(*a) - Vec3::from(*b) - Vec3::X * 3.0).length() < 1e-3);
+    }
+    assert!((after.min[0] - before.min[0] - 3.0).abs() < 1e-3);
+
+    // Deleted, the others stay; undone, it's back as moved.
+    let other = shown(&ed, models).occlude_models[0].clone();
+    assert_eq!(ed.delete_occluders(&[mid]).unwrap(), 1);
+    let left = shown(&ed, models);
+    assert_eq!((left.occlude_models.len(), &left.occlude_models[0]), (model_count - 1, &other));
+    ed.undo();
+    assert_eq!(shown(&ed, models).occlude_models[1], after);
+    ed.undo();
+    assert_eq!(shown(&ed, models).occlude_models[1], before);
+    assert!(!ed.map(models).unwrap().is_edited());
+    ed.redo();
+    ed.redo();
+
+    // Saved and read again: the ymap has what the editor shows.
+    let dir = std::env::temp_dir().join(format!("rf-occluders-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for map in [boxes, models] {
+        let path = dir.join(format!("{}.ymap", ed.map(map).unwrap().file_name));
+        ed.save_map(map, &path).unwrap();
+        let root = Meta::read(&std::fs::read(&path).unwrap()).unwrap().root.unwrap();
+        assert_eq!(
+            occlusion::count(&root, OccluderKind::Model),
+            occlusion::count(&ed.map(map).unwrap().root, OccluderKind::Model)
+        );
+        if map == boxes {
+            let p = occlusion::placement(&root, OccluderKind::Box, 0).unwrap();
+            assert!(
+                (p.position - to.position).length() < 1e-4 && (occlusion::yaw(&p) - occlusion::yaw(&to)).abs() < 1e-4
+            );
+        } else {
+            assert_eq!(occlusion::count(&root, OccluderKind::Model), model_count - 1);
+        }
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
