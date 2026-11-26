@@ -145,12 +145,8 @@ pub fn add(mlo: &mut DataBag, entity: DataBag, position: [f32; 3]) -> Slot {
     let list = lod::entities_mut(mlo);
     let index = list.len();
     list.push(Some(entity));
+    let inside = room_at(mlo, position);
     if let Some(rooms) = mlo.bags_mut("rooms") {
-        let holds = |r: &DataBag| {
-            let (lo, hi) = (r.vec3("bbMin"), r.vec3("bbMax"));
-            (0..3).all(|i| lo[i] <= position[i] && position[i] <= hi[i])
-        };
-        let inside = rooms.iter().enumerate().skip(1).find(|(_, r)| r.as_ref().is_some_and(holds)).map(|(i, _)| i);
         let room = inside.unwrap_or(if rooms.len() > 1 { 1 } else { 0 });
         if let Some(Some(r)) = rooms.get_mut(room) {
             match u32s_mut(r, ATTACHED) {
@@ -160,6 +156,125 @@ pub fn add(mlo: &mut DataBag, entity: DataBag, position: [f32; 3]) -> Slot {
         }
     }
     Slot { set: None, index }
+}
+
+fn u32s<'a>(bag: &'a DataBag, name: &str) -> &'a [u32] {
+    match bag.object(name) {
+        Some(Value::U32s(v) | Value::Hashes(v)) => v,
+        _ => &[],
+    }
+}
+
+/// A set entity's location that is a portal's, not a room's.
+const PORTAL_LOCATION: u32 = 1 << 31;
+
+/// The interior's rooms by name, in their order: the first is limbo, the
+/// outside.
+pub fn room_names(mlo: &DataBag) -> Vec<String> {
+    let rooms = mlo.bags("rooms").unwrap_or_default().iter().enumerate();
+    rooms
+        .map(|(i, r)| r.as_ref().and_then(|r| r.string("name")).map_or_else(|| format!("room {i}"), str::to_owned))
+        .collect()
+}
+
+/// The room an interior entity is in: the first that lists it, or the one its
+/// set gives it. `None` for one in no room (a door or window in its portal
+/// only, or one nothing lists).
+pub fn room_of(mlo: &DataBag, slot: Slot) -> Option<usize> {
+    let rooms = mlo.bags("rooms").unwrap_or_default();
+    match slot.set {
+        None => rooms.iter().position(|r| r.as_ref().is_some_and(|r| u32s(r, ATTACHED).contains(&(slot.index as u32)))),
+        Some(set) => {
+            let s = mlo.bags(ENTITY_SETS)?.get(set)?.as_ref()?;
+            let room = *u32s(s, LOCATIONS).get(slot.index)?;
+            (room & PORTAL_LOCATION == 0 && (room as usize) < rooms.len()).then_some(room as usize)
+        }
+    }
+}
+
+/// Whether an interior entity is attached to a portal: a door or a window,
+/// drawn with what's on either side of it.
+pub fn in_portal(mlo: &DataBag, slot: Slot) -> bool {
+    match slot.set {
+        None => mlo
+            .bags("portals")
+            .unwrap_or_default()
+            .iter()
+            .flatten()
+            .any(|p| u32s(p, ATTACHED).contains(&(slot.index as u32))),
+        Some(set) => mlo
+            .bags(ENTITY_SETS)
+            .and_then(|l| l.get(set))
+            .and_then(Option::as_ref)
+            .and_then(|s| u32s(s, LOCATIONS).get(slot.index))
+            .is_some_and(|l| l & PORTAL_LOCATION != 0),
+    }
+}
+
+fn room_holds(room: &DataBag, position: [f32; 3]) -> bool {
+    let (lo, hi) = (room.vec3("bbMin"), room.vec3("bbMax"));
+    (0..3).all(|i| lo[i] <= position[i] && position[i] <= hi[i])
+}
+
+/// The room a position (in the interior's space) is in: the first but limbo
+/// whose box holds it.
+pub fn room_at(mlo: &DataBag, position: [f32; 3]) -> Option<usize> {
+    let mut rooms = mlo.bags("rooms").unwrap_or_default().iter().enumerate().skip(1);
+    rooms.find(|(_, r)| r.as_ref().is_some_and(|r| room_holds(r, position))).map(|(i, _)| i)
+}
+
+/// Puts an interior entity in a room, and in that one only: it's taken out of
+/// the other rooms and of the portals. Returns whether anything changed.
+pub fn set_room(mlo: &mut DataBag, slot: Slot, room: usize) -> bool {
+    if mlo.bags("rooms").is_none_or(|r| r.get(room).is_none_or(Option::is_none)) {
+        return false;
+    }
+    match slot.set {
+        None => {
+            if slot.index >= lod::entities(mlo).len() || (room_of(mlo, slot) == Some(room) && !in_portal(mlo, slot)) {
+                return false;
+            }
+            let index = slot.index as u32;
+            each_attached(mlo, |list| list.retain(|&i| i != index));
+            if let Some(Some(r)) = mlo.bags_mut("rooms").and_then(|l| l.get_mut(room)) {
+                match u32s_mut(r, ATTACHED) {
+                    Some(v) => v.push(index),
+                    None => r.set_object(ATTACHED, Some(Value::U32s(vec![index]))),
+                }
+            }
+            true
+        }
+        Some(set) => {
+            let Some(Some(s)) = mlo.bags_mut(ENTITY_SETS).and_then(|l| l.get_mut(set)) else { return false };
+            match u32s_mut(s, LOCATIONS).and_then(|l| l.get_mut(slot.index)) {
+                Some(location) if *location != room as u32 => {
+                    *location = room as u32;
+                    true
+                }
+                _ => false,
+            }
+        }
+    }
+}
+
+/// The room an interior entity goes to when it's moved to `position` (in the
+/// interior's space): the one that holds it now, when that isn't the room it's
+/// in. `None` when it stays where it is: still inside its room's box, or
+/// outside every room; and for what isn't in a room by where it stands: the
+/// shell and whatever else is in limbo, a door or window in its portal.
+pub fn room_after_move(mlo: &DataBag, slot: Slot, position: [f32; 3]) -> Option<usize> {
+    if in_portal(mlo, slot) {
+        return None;
+    }
+    let current = room_of(mlo, slot);
+    if current == Some(0) {
+        return None;
+    }
+    let rooms = mlo.bags("rooms").unwrap_or_default();
+    if current.and_then(|r| rooms[r].as_ref()).is_some_and(|r| room_holds(r, position)) {
+        return None;
+    }
+    room_at(mlo, position).filter(|r| Some(*r) != current)
 }
 
 /// Adds a copy of an interior entity next to it: a plain entity goes in the
@@ -283,6 +398,78 @@ mod tests {
         assert_eq!(add(&mut m, entity(), [-5.0, 0.0, 0.0]).index, 2);
         assert_eq!((attached(&mut m, 0), attached(&mut m, 1), attached(&mut m, 2)), (vec![], vec![1, 2], vec![0]));
         assert_eq!(lod::entities(&m).len(), 3);
+    }
+
+    /// Limbo, a hall and a kitchen next to it, with four entities: the shell
+    /// in limbo, a chair in the hall, a door in a portal, a lamp nothing lists.
+    fn house() -> DataBag {
+        let room = |name: &str, lo: [f32; 3], hi: [f32; 3], attached: &[u32]| {
+            let mut r = Meta::create("CMloRoomDef").unwrap();
+            r.set_string("name", name);
+            r.set_vec3("bbMin", lo);
+            r.set_vec3("bbMax", hi);
+            r.set_object(ATTACHED, Some(Value::U32s(attached.to_vec())));
+            Some(r)
+        };
+        let mut m = Meta::create("CMloArchetypeDef").unwrap();
+        *lod::entities_mut(&mut m) = (0..4).map(|_| Meta::create("CEntityDef")).collect();
+        m.set_object(
+            "rooms",
+            Some(Value::Bags(vec![
+                room("limbo", [-9.0; 3], [9.0; 3], &[0]),
+                room("hall", [0.0; 3], [4.0; 3], &[1]),
+                room("kitchen", [4.0, 0.0, 0.0], [8.0, 4.0, 4.0], &[]),
+            ])),
+        );
+        let mut portal = Meta::create("CMloPortalDef").unwrap();
+        portal.set_object(ATTACHED, Some(Value::U32s(vec![2])));
+        m.set_object("portals", Some(Value::Bags(vec![Some(portal)])));
+        m
+    }
+
+    fn plain(index: usize) -> Slot {
+        Slot { set: None, index }
+    }
+
+    #[test]
+    fn an_entity_is_put_in_one_room() {
+        let mut m = house();
+        assert_eq!(room_names(&m), ["limbo", "hall", "kitchen"]);
+        assert_eq!((room_of(&m, plain(1)), room_of(&m, plain(2)), room_of(&m, plain(3))), (Some(1), None, None));
+        assert!(in_portal(&m, plain(2)) && !in_portal(&m, plain(1)));
+        // The chair to the kitchen: out of the hall.
+        assert!(set_room(&mut m, plain(1), 2));
+        assert_eq!(room_of(&m, plain(1)), Some(2));
+        assert!(!set_room(&mut m, plain(1), 2), "it's there already");
+        // The door to the hall: out of its portal.
+        assert!(set_room(&mut m, plain(2), 1));
+        assert_eq!((room_of(&m, plain(2)), in_portal(&m, plain(2))), (Some(1), false));
+        // No such room, no such entity.
+        assert!(!set_room(&mut m, plain(1), 7) && !set_room(&mut m, plain(9), 1));
+        // A set's entity: its location.
+        let mut m = mlo();
+        m.set_object("rooms", house().object("rooms").cloned());
+        let in_set = Slot { set: Some(0), index: 1 };
+        assert_eq!(room_of(&m, in_set), None, "6 isn't a room of it");
+        assert!(set_room(&mut m, in_set, 2));
+        assert_eq!(room_of(&m, in_set), Some(2));
+    }
+
+    #[test]
+    fn a_moved_entity_follows_its_room() {
+        let m = house();
+        // The chair: still in the hall, then in the kitchen, then outside every room.
+        assert_eq!(room_after_move(&m, plain(1), [1.0, 1.0, 1.0]), None);
+        assert_eq!(room_after_move(&m, plain(1), [6.0, 1.0, 1.0]), Some(2));
+        assert_eq!(room_after_move(&m, plain(1), [-5.0, 1.0, 1.0]), None);
+        // On the wall between the two (both boxes hold it): it stays in its room.
+        assert_eq!(room_after_move(&m, plain(1), [4.0, 1.0, 1.0]), None);
+        // The shell stays in limbo and the door in its portal, wherever they're moved.
+        assert_eq!(room_after_move(&m, plain(0), [6.0, 1.0, 1.0]), None);
+        assert_eq!(room_after_move(&m, plain(2), [6.0, 1.0, 1.0]), None);
+        // The lamp nothing lists gets the room it's moved into.
+        assert_eq!(room_after_move(&m, plain(3), [6.0, 1.0, 1.0]), Some(2));
+        assert_eq!(room_at(&m, [-5.0, 1.0, 1.0]), None);
     }
 
     #[test]

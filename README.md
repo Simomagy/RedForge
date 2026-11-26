@@ -205,6 +205,15 @@ cargo run --release -p rf-app
 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) has the crates, the tests and how
 the packages (MSI, Arch, AUR, `.deb`, AppImage, Flatpak) are built.
 
+## Roadmap
+
+What's planned for the next versions is on the
+[RedForge Roadmap](https://github.com/users/Simomagy/projects/3) board: one
+milestone per version, starting with navmesh editing (2.7 and 2.8), then the
+pause map and minimap editor, scenario points and ambient mask volumes,
+vehicles, and animations in Blender. Each area is an epic issue with its
+parts as sub-issues.
+
 ## Contributing
 
 Bug reports and ideas are welcome: open an issue with the bug, file format

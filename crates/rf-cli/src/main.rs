@@ -117,6 +117,20 @@ enum Command {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+    /// Write the game's LOD light ymaps without the lights around a point
+    /// (the lights of far buildings and of interiors seen from outside), to
+    /// stream in place of the game's.
+    LodlightsCut {
+        /// The middle of what loses its lights, as x,y,z.
+        #[arg(long, value_parser = amv::triple::<f32>, allow_hyphen_values = true)]
+        centre: [f32; 3],
+        /// How far from it, in metres.
+        #[arg(long, default_value_t = 100.0)]
+        radius: f32,
+        /// Output folder.
+        #[arg(short, long, default_value = ".")]
+        out: PathBuf,
+    },
     /// Bake an ambient mask volume for an interior that has none (without one
     /// its metals are black by day): an amv_zone_<n>.ymt and .ytd to stream with
     /// it, from the interior's ytyp, the ymap placing it and the ydr models next
@@ -242,6 +256,10 @@ fn main() -> Result<()> {
                 guid: *guid,
             };
             probe::run(&options, &strings)
+        }
+        Command::LodlightsCut { centre, radius, out } => {
+            let fs = open_fs(&cli)?;
+            lodlights_cut(&fs, glam::Vec3::from(*centre), *radius, out)
         }
         Command::AmvBake { ytyp, ymap, models, out, zone, cell, rays, centre, half, heading, cells } => {
             let strings = load_strings(&cli)?;
@@ -634,5 +652,56 @@ fn convert_files(files: &[PathBuf], out: Option<&Path>, strings: &HashIndex, to_
     if failed > 0 {
         bail!("{failed} of {} files failed", files.len());
     }
+    Ok(())
+}
+
+/// `rf lodlights-cut`: each pair of LOD light ymaps with lights within
+/// `radius` of `centre`, written without them.
+fn lodlights_cut(fs: &Rpf8FileSystem, centre: glam::Vec3, radius: f32, out: &Path) -> Result<()> {
+    use rf_editor::lodlights;
+    use rf_formats::formats::meta::Meta;
+
+    // The game's files by name; an update's wins over the base game's.
+    let mut files: std::collections::BTreeMap<String, (bool, rf_formats::rpf8::FileRef)> = Default::default();
+    for (path, file) in fs.files() {
+        let lower = path.to_lowercase();
+        let Some((folder, name)) = lower.rsplit_once('/') else { continue };
+        if !folder.ends_with("/lodlights.rpf") || !name.ends_with(".ymap") {
+            continue;
+        }
+        let update = lower.starts_with("update");
+        if files.get(name).is_none_or(|(u, _)| update || !u) {
+            files.insert(name.to_owned(), (update, file));
+        }
+    }
+    let read = |name: &str| -> Result<Meta> {
+        let (_, file) = files.get(name).with_context(|| format!("{name} not found"))?;
+        Ok(Meta::read(&fs.extract_loose(*file)?)?)
+    };
+    std::fs::create_dir_all(out)?;
+    let (mut total, mut written) = (0, 0);
+    for name in files.keys().filter(|n| n.starts_with("distlodlights_")) {
+        let mut distant = read(name)?;
+        let Some(root) = distant.root.as_mut() else { continue };
+        let gone: Vec<bool> = lodlights::positions(root).iter().map(|p| p.distance(centre) <= radius).collect();
+        let n = gone.iter().filter(|g| **g).count();
+        if n == 0 {
+            continue;
+        }
+        let near_name = name.trim_start_matches("dist");
+        let mut near = read(near_name)?;
+        let near_root = near.root.as_mut().context("no map data")?;
+        if lodlights::count(near_root) != gone.len() {
+            bail!("{near_name} and {name} don't have the same lights");
+        }
+        lodlights::remove(root, &gone);
+        lodlights::remove(near_root, &gone);
+        std::fs::write(out.join(name), distant.save()?)?;
+        std::fs::write(out.join(near_name), near.save()?)?;
+        println!("{near_name} + {name}: {n} of {} lights removed", gone.len());
+        total += n;
+        written += 2;
+    }
+    println!("{total} lights removed, {written} ymaps written to {}", out.display());
     Ok(())
 }

@@ -8,6 +8,19 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Added
+- An interior's object can be put in another **room**: Properties has a Room
+  list for it (it changes the rest of the selection that's in the same
+  interior too), and in the Hierarchy objects are dragged onto a room's header
+  or onto an object in it. Every room of the interior is listed there, the
+  empty ones too.
+
+### Changed
+- An interior's object moved into another room's box is that room's from then
+  on. It stays in its room while it's still inside its box, and outside every
+  room; the shell and whatever else is in limbo, and a door or window in its
+  portal, aren't touched.
+
 ## [2.6.0] - 2026-11-24
 
 ### Added

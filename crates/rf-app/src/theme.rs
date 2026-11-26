@@ -239,7 +239,12 @@ pub fn group<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
 /// A list row: selectable, its icon and name, a dim note after; selected,
 /// a lighter grey with the accent's bar and icon.
 pub fn row(ui: &mut egui::Ui, selected: bool, glyph: &str, name: &str, note: &str) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW), Sense::click());
+    row_sensing(ui, Sense::click(), selected, glyph, name, note)
+}
+
+/// A [`row`] that senses more than clicks: one that can be dragged.
+pub fn row_sensing(ui: &mut egui::Ui, sense: Sense, selected: bool, glyph: &str, name: &str, note: &str) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW), sense);
     let painter = ui.painter();
     if selected {
         painter.rect_filled(rect, CornerRadius::same(RADIUS), WIDGET);

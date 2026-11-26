@@ -25,6 +25,7 @@ pub mod autosave;
 pub mod batches;
 pub mod interior;
 pub mod lod;
+pub mod lodlights;
 pub mod occlusion;
 pub mod placement;
 pub mod probe;
@@ -1025,11 +1026,67 @@ impl Editor {
                 None => (id, p),
             })
             .collect();
+        // An interior's entity moved into another room is that room's from then on.
+        for (id, local) in &edits {
+            let Some(r) = self.interior_ref(*id) else { continue };
+            let key = DocKey::Types(r.ytyp);
+            let position: [f32; 3] = local.position.into();
+            let Some(base) = self.root(key) else { continue };
+            let root = seed.get(&key).unwrap_or(base);
+            let room = interior::archetypes(root)
+                .get(r.archetype)
+                .and_then(Option::as_ref)
+                .and_then(|mlo| interior::room_after_move(mlo, r.slot, position));
+            let Some(room) = room else { continue };
+            let root = seed.entry(key).or_insert_with(|| (**base).clone());
+            if let Some(Some(mlo)) = interior::archetypes_mut(root).and_then(|l| l.get_mut(r.archetype)) {
+                interior::set_room(mlo, r.slot, room);
+            }
+        }
         self.change_entities_into(seed, label, edits.iter().map(|(id, _)| *id), |id, def| {
             if let Some((_, p)) = edits.iter().find(|(i, _)| *i == id) {
                 p.write_entity(def);
             }
         });
+    }
+
+    /// The room an interior's entity is in, by its place among the interior's
+    /// rooms ([`interior::room_names`]); `None` for one in no room, and for
+    /// what isn't an interior's entity.
+    pub fn entity_room(&self, id: EntityId) -> Option<usize> {
+        let r = self.interior_ref(id)?;
+        let mlo = interior::archetypes(&self.types.get(&r.ytyp)?.root).get(r.archetype)?.as_ref()?;
+        interior::room_of(mlo, r.slot)
+    }
+
+    /// Puts interior entities in a room of their interior, and in that one
+    /// only: one step. Returns how many changed room.
+    pub fn set_room(&mut self, ids: &[EntityId], room: usize) -> usize {
+        let mut roots: HashMap<DocKey, DataBag> = HashMap::new();
+        let mut moved = 0;
+        for &id in ids {
+            let Some(r) = self.interior_ref(id) else { continue };
+            let key = DocKey::Types(r.ytyp);
+            let Some(base) = self.root(key) else { continue };
+            // (a file is in the step only once something in it changed)
+            let changed_before = roots.remove(&key);
+            let kept = changed_before.is_some();
+            let mut root = changed_before.unwrap_or_else(|| (**base).clone());
+            let changed = interior::archetypes_mut(&mut root)
+                .and_then(|l| l.get_mut(r.archetype))
+                .and_then(Option::as_mut)
+                .is_some_and(|mlo| interior::set_room(mlo, r.slot, room));
+            moved += usize::from(changed);
+            if changed || kept {
+                roots.insert(key, root);
+            }
+        }
+        if moved == 0 {
+            return 0;
+        }
+        let selection = self.selection.clone();
+        self.commit("Move to room", roots.into_iter().collect(), selection);
+        moved
     }
 
     /// The archetype's box and radius of a batch's bag, for refitting it.

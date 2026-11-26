@@ -4,6 +4,8 @@
 //! level, an interior's by room and entity set), searchable, each with an eye
 //! that hides it in the map view. An object selected on the map is scrolled
 //! to; Shift selects a range, and a right click has what's done to objects.
+//! An interior's objects are dragged onto a room (its header, or an object in
+//! it) to put them in it.
 
 use std::collections::HashSet;
 
@@ -17,9 +19,14 @@ use crate::theme::{self, icon};
 /// A row: a group's header, or an object.
 #[derive(Clone)]
 enum Row {
-    Group { name: String, count: usize },
-    Object { id: EntityId, name: String, index: u32, group: String },
+    /// `room`: the interior's room this is, by its place among them.
+    Group { name: String, count: usize, room: Option<usize> },
+    /// `room`: the room of its group; `drag`: whether it can be dragged to another.
+    Object { id: EntityId, name: String, index: u32, group: String, room: Option<usize>, drag: bool },
 }
+
+/// Interior entities being dragged onto a room.
+struct RoomDrag(Vec<EntityId>);
 
 /// What the rows were made from, to make them again only when it changes.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -100,11 +107,11 @@ impl Hierarchy {
         let mut rows: Vec<Row> = Vec::new();
         let mut i = 0;
         while i < self.objects.len() {
-            let Row::Group { name, .. } = &self.objects[i] else {
+            let Row::Group { name, room, .. } = &self.objects[i] else {
                 i += 1;
                 continue;
             };
-            let group = name.clone();
+            let (group, room) = (name.clone(), *room);
             let members: Vec<&Row> = self.objects[i + 1..]
                 .iter()
                 .take_while(|r| matches!(r, Row::Object { .. }))
@@ -114,8 +121,9 @@ impl Hierarchy {
                 })
                 .collect();
             let count = self.objects[i + 1..].iter().take_while(|r| matches!(r, Row::Object { .. })).count();
-            if !members.is_empty() {
-                rows.push(Row::Group { name: group.clone(), count: members.len() });
+            // (a room with nothing in it is still somewhere to drag to)
+            if !members.is_empty() || (room.is_some() && filter.is_empty()) {
+                rows.push(Row::Group { name: group.clone(), count: members.len(), room });
                 if !self.collapsed.contains(&group) || !filter.is_empty() {
                     rows.extend(members.into_iter().cloned());
                 }
@@ -152,20 +160,34 @@ impl Hierarchy {
                 _ => None,
             })
             .collect();
+        let mut dropped: Option<(Vec<EntityId>, usize)> = None;
+        // A row something is dragged over, or dropped on, when it's a room's.
+        let mut target = |ui: &egui::Ui, r: &egui::Response, room: Option<usize>| {
+            let Some(room) = room else { return };
+            if r.dnd_hover_payload::<RoomDrag>().is_some() {
+                let stroke = egui::Stroke::new(1.5, theme::ACCENT);
+                ui.painter().rect_stroke(r.rect, theme::RADIUS, stroke, egui::StrokeKind::Inside);
+            }
+            if let Some(drag) = r.dnd_release_payload::<RoomDrag>() {
+                dropped = Some((drag.0.clone(), room));
+            }
+        };
         scroll.show_rows(ui, row_height, rows.len(), |ui, range| {
             for row in &rows[range] {
                 match row {
-                    Row::Group { name, count } => {
+                    Row::Group { name, count, room } => {
                         let open = !self.collapsed.contains(name);
-                        if theme::section(ui, open, icon::STACK, name, *count).clicked() {
+                        let header = theme::section(ui, open, icon::STACK, name, *count);
+                        if header.clicked() {
                             if open {
                                 self.collapsed.insert(name.clone());
                             } else {
                                 self.collapsed.remove(name);
                             }
                         }
+                        target(ui, &header, *room);
                     }
-                    Row::Object { id, name, index, .. } => {
+                    Row::Object { id, name, index, room, drag, .. } => {
                         ui.horizontal(|ui| {
                             let hidden = editor.world.is_hidden(*id);
                             let (eye, tip) = if hidden { (icon::EYE_SLASH, "Show") } else { (icon::EYE, "Hide") };
@@ -174,7 +196,23 @@ impl Hierarchy {
                                 editor.world.set_hidden(*id, !hidden);
                             }
                             let note = if hidden { format!("#{index}  hidden") } else { format!("#{index}") };
-                            let r = theme::row(ui, selection.contains(id), icon::CUBE, name, &note);
+                            // (an interior's object is dragged to a room; a drag-only widget over the
+                            // row would take its clicks away, so the row itself senses both)
+                            let sense = if *drag { egui::Sense::click_and_drag() } else { egui::Sense::click() };
+                            let r = theme::row_sensing(ui, sense, selection.contains(id), icon::CUBE, name, &note);
+                            if *drag && r.drag_started() {
+                                // The whole selection when it's part of it (what of it is in this interior).
+                                let here = |s: &&EntityId| {
+                                    s.node == id.node && s.entity == id.entity && s.interior_entity != u32::MAX
+                                };
+                                let ids: Vec<EntityId> = if selection.contains(id) {
+                                    editor.selection().iter().filter(here).copied().collect()
+                                } else {
+                                    vec![*id]
+                                };
+                                egui::DragAndDrop::set_payload(ui.ctx(), RoomDrag(ids));
+                            }
+                            target(ui, &r, *room);
                             if r.clicked() {
                                 let (command, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
                                 let from = self.anchor.and_then(|a| order.iter().position(|o| *o == a));
@@ -234,6 +272,23 @@ impl Hierarchy {
                 }
             }
         });
+        // What's dragged, by the pointer.
+        if let Some(drag) = egui::DragAndDrop::payload::<RoomDrag>(ui.ctx())
+            && let Some(at) = ui.ctx().pointer_interact_pos()
+        {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("hierarchy room drag"));
+            let text = match drag.0.len() {
+                1 => "1 object: drop it on a room".to_owned(),
+                n => format!("{n} objects: drop them on a room"),
+            };
+            let font = egui::FontId::proportional(theme::SIZE - 1.0);
+            let at = at + egui::vec2(14.0, 10.0);
+            ui.ctx().layer_painter(layer).text(at, egui::Align2::LEFT_TOP, text, font, theme::TEXT);
+        }
+        if let Some((ids, room)) = dropped {
+            editor.set_room(&ids, room);
+        }
     }
 
     /// Makes the rows again when the selection's ymap or interior, or its
@@ -253,11 +308,14 @@ impl Hierarchy {
         }
         self.source = Some(source);
         let mut objects: Vec<Row> = Vec::new();
+        // An interior's rooms, by name: each is a group, with or without objects.
+        let mut rooms: Vec<String> = Vec::new();
         match mlo {
             Some(mlo) => {
                 let instance = lod::entities(&map.root).get(id.entity as usize).and_then(Option::as_ref);
                 let name = instance.map(|d| hashes.name(d.hash("archetypeName"))).unwrap_or_default();
                 self.title = format!("Interior: {name}");
+                rooms = rf_editor::interior::room_names(mlo);
                 // Plain entities by the room they're attached to.
                 let mut room_of: Vec<Option<String>> = vec![None; lod::entities(mlo).len()];
                 for room in mlo.bags("rooms").unwrap_or_default().iter().flatten() {
@@ -273,7 +331,8 @@ impl Hierarchy {
                     let group = room_of[i].clone().unwrap_or_else(|| "Objects".into());
                     if let Some(e) = e {
                         let id = EntityId { interior_entity: k, ..id };
-                        objects.push(Row::Object { id, name: hashes.name(e.hash("archetypeName")), index: k, group });
+                        let name = hashes.name(e.hash("archetypeName"));
+                        objects.push(Row::Object { id, name, index: k, group, room: None, drag: true });
                     }
                     k += 1;
                 }
@@ -283,7 +342,8 @@ impl Hierarchy {
                         if let Some(e) = e {
                             let id = EntityId { interior_entity: k, ..id };
                             let name = hashes.name(e.hash("archetypeName"));
-                            objects.push(Row::Object { id, name, index: k, group: group.clone() });
+                            let group = group.clone();
+                            objects.push(Row::Object { id, name, index: k, group, room: None, drag: false });
                         }
                         k += 1;
                     }
@@ -304,6 +364,8 @@ impl Hierarchy {
                         name: hashes.name(e.hash("archetypeName")),
                         index: i as u32,
                         group,
+                        room: None,
+                        drag: false,
                     });
                 }
             }
@@ -317,20 +379,31 @@ impl Hierarchy {
                 groups.push(group.clone());
             }
         }
+        for room in &rooms {
+            if !groups.contains(room) {
+                groups.push(room.clone());
+            }
+        }
         groups.sort_by_key(|g| (g != "Objects", g.to_lowercase()));
         self.objects.clear();
         for g in groups {
+            let room = rooms.iter().position(|r| *r == g);
             let members: Vec<Row> = objects
                 .iter()
                 .filter(|r| matches!(r, Row::Object { group, .. } if *group == g))
                 .map(|r| match r {
-                    Row::Object { id, name, index, group } => {
-                        Row::Object { id: *id, name: name.to_lowercase(), index: *index, group: group.clone() }
-                    }
+                    Row::Object { id, name, index, group, drag, .. } => Row::Object {
+                        id: *id,
+                        name: name.to_lowercase(),
+                        index: *index,
+                        group: group.clone(),
+                        room,
+                        drag: *drag,
+                    },
                     other => other.clone(),
                 })
                 .collect();
-            self.objects.push(Row::Group { name: g, count: members.len() });
+            self.objects.push(Row::Group { name: g, count: members.len(), room });
             self.objects.extend(members);
         }
     }

@@ -283,6 +283,7 @@ impl Properties {
             }
         });
 
+        self.room_ui(ui, editor, id);
         self.placement_ui(ui, editor, id);
         let Some(def) = editor.entity_def(id).cloned() else { return };
         ui.add_space(4.0);
@@ -297,6 +298,46 @@ impl Properties {
                 }
             }
         });
+    }
+
+    /// The room an interior's entity is in, and a list to put it (and the
+    /// rest of the selection that's in the same interior) in another.
+    fn room_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, id: EntityId) {
+        if id.interior_entity == u32::MAX {
+            return;
+        }
+        let rooms = editor.interior_archetype(id).map(rf_editor::interior::room_names).unwrap_or_default();
+        if rooms.is_empty() {
+            return;
+        }
+        let current = editor.entity_room(id);
+        let mut chosen = None;
+        ui.horizontal(|ui| {
+            ui.label("Room");
+            let shown = current.and_then(|r| rooms.get(r)).map_or("none", String::as_str);
+            egui::ComboBox::from_id_salt("room")
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for (i, name) in rooms.iter().enumerate() {
+                        if ui.selectable_label(current == Some(i), name).clicked() && current != Some(i) {
+                            chosen = Some(i);
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(
+                    "The room it's drawn with: seen when the player is in it, or sees it through a portal. \
+                     Moving it into another room's box changes it too. limbo is the outside: the shell goes there.",
+                );
+            if current.is_none() {
+                ui.label(RichText::new("in a portal, or in no room").weak());
+            }
+        });
+        if let Some(room) = chosen {
+            let same = |s: &&EntityId| s.node == id.node && s.entity == id.entity && s.interior_entity != u32::MAX;
+            let ids: Vec<EntityId> = editor.selection().iter().filter(same).copied().collect();
+            editor.set_room(&ids, room);
+        }
     }
 
     fn placement_ui(&mut self, ui: &mut egui::Ui, editor: &mut Editor, id: EntityId) {
