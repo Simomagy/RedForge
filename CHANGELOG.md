@@ -8,6 +8,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.6.1] - 2026-11-26
+
 ### Added
 - An interior's object can be put in another **room**: Properties has a Room
   list for it (it changes the rest of the selection that's in the same
@@ -559,7 +561,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.6.0...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.6.1...HEAD
+[2.6.1]: https://github.com/Simomagy/RedForge/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/Simomagy/RedForge/compare/v2.5.1...v2.6.0
 [2.5.1]: https://github.com/Simomagy/RedForge/compare/v2.5.0...v2.5.1
 [2.5.0]: https://github.com/Simomagy/RedForge/compare/v2.4.1...v2.5.0
