@@ -8,6 +8,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-11-27
+
 ### Added
 - The **Pause map** tab (View > Pause map) edits the game's pause map and
   minimap, the Map Editor web app brought into RedForge: roads, trails,
@@ -630,7 +632,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.8.0...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.9.0...HEAD
+[2.9.0]: https://github.com/Simomagy/RedForge/compare/v2.8.0...v2.9.0
 [2.8.0]: https://github.com/Simomagy/RedForge/compare/v2.7.0...v2.8.0
 [2.7.0]: https://github.com/Simomagy/RedForge/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/Simomagy/RedForge/compare/v2.6.0...v2.6.1
