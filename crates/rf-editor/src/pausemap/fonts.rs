@@ -19,6 +19,8 @@ static ZILLA_ITALIC: &[u8] = include_bytes!("../../assets/fonts/ZillaSlab-SemiBo
 pub struct Glyph {
     pub contours: Vec<Vec<Point>>,
     pub advance: f64,
+    /// Filled even-odd (the game's fonts), not by winding (TrueType's).
+    pub even_odd: bool,
 }
 
 enum Source {
@@ -128,7 +130,7 @@ fn ttf_glyph(data: &[u8], ch: char) -> Option<Glyph> {
     let advance = face.glyph_hor_advance(id).unwrap_or(0) as f64 * scale;
     let mut o = Outline { scale, contours: Vec::new(), at: [0.0; 2] };
     face.outline_glyph(id, &mut o);
-    Some(Glyph { contours: o.contours, advance })
+    Some(Glyph { contours: o.contours, advance, even_odd: false })
 }
 
 /// The fonts there are, by name.
@@ -168,6 +170,17 @@ impl Fonts {
     }
     pub fn remove(&mut self, name: &str) {
         self.list.retain(|f| f.name != name || f.origin == "bundled");
+    }
+
+    /// Adds the game's own fonts from its font library (a `.gfx`), after the
+    /// bundled ones. Returns how many.
+    pub fn add_game_fonts(&mut self, library: &[u8]) -> Result<usize, String> {
+        let fonts = super::gfxfont::read_library(library)?;
+        let n = fonts.len();
+        for f in fonts {
+            self.add(Font::from_glyphs(&f.name, "game", f.glyphs));
+        }
+        Ok(n)
     }
 }
 

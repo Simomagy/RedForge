@@ -33,6 +33,8 @@ fn main() {
     let fs = Rpf8FileSystem::open(&dir, Rpf8Keys::from_game_folder(&dir).unwrap(), &strings).unwrap();
     let lib = Library::load(&fs);
     let mut assets = Assets::default();
+    let gfx = rf_editor::pausemap::gfxfont::LIBRARIES.iter().find_map(|p| fs.find(p)).unwrap();
+    assets.fonts.add_game_fonts(&fs.extract(gfx).unwrap()).unwrap();
     let data = project_file::open(&std::fs::read_to_string(map).unwrap(), &assets.fonts.names()).unwrap().data;
     for (id, b) in &data.pictures {
         let _ = assets.pictures.insert(id, b.to_vec());

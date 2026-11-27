@@ -14,6 +14,7 @@ pub mod edt;
 pub mod export;
 pub mod families;
 pub mod fonts;
+pub mod gfxfont;
 pub mod labels;
 pub mod library;
 pub mod linework;

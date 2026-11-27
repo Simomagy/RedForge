@@ -221,6 +221,14 @@ const UNDO_LIMIT: usize = 500;
 impl Editor {
     pub fn new(fs: Arc<Rpf8FileSystem>, hashes: Arc<HashIndex>, data: Arc<GameData>) -> Self {
         let world = World::new(fs.clone(), hashes.clone(), data.clone());
+        // The game's own fonts for the pause map's labels (a few milliseconds).
+        let mut pause_assets = pausemap::Assets::default();
+        let library = pausemap::gfxfont::LIBRARIES.iter().find_map(|p| fs.find(p));
+        match library.map(|f| fs.extract(f).map_err(|e| e.to_string()).and_then(|d| pause_assets.fonts.add_game_fonts(&d))) {
+            Some(Ok(_)) => {}
+            Some(Err(e)) => log::warn!("the game's fonts: {e}"),
+            None => log::warn!("the game's fonts: no font_lib_efigs.gfx"),
+        }
         Self {
             world,
             fs,
@@ -242,7 +250,7 @@ impl Editor {
             pause_map: Arc::default(),
             pause_map_saved: Arc::default(),
             pause_tiles: std::sync::OnceLock::new(),
-            pause_assets: pausemap::Assets::default(),
+            pause_assets,
         }
     }
 

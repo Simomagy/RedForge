@@ -84,9 +84,10 @@ pub fn mask_to_field(
     (data, fw, fh)
 }
 
-/// Fills closed polygons (nonzero winding) into a mask, sampling at the
-/// samples' centres: what a canvas fill gives once its alpha is cut at half.
-pub fn fill_polygons(mask: &mut [u8], w: usize, h: usize, polys: &[Vec<Point>]) {
+/// Fills closed polygons (by nonzero winding, or even-odd) into a mask,
+/// sampling at the samples' centres: what a canvas fill gives once its alpha
+/// is cut at half.
+pub fn fill_polygons(mask: &mut [u8], w: usize, h: usize, polys: &[Vec<Point>], even_odd: bool) {
     let mut crossings: Vec<(f64, i32)> = Vec::new();
     let (mut y0, mut y1) = (f64::MAX, f64::MIN);
     for p in polys.iter().flatten() {
@@ -114,8 +115,9 @@ pub fn fill_polygons(mask: &mut [u8], w: usize, h: usize, polys: &[Vec<Point>]) 
         crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut winding = 0;
         for k in 0..crossings.len() {
-            winding += crossings[k].1;
-            if winding != 0 && k + 1 < crossings.len() {
+            winding += if even_odd { 1 } else { crossings[k].1 };
+            let inside = if even_odd { winding % 2 == 1 } else { winding != 0 };
+            if inside && k + 1 < crossings.len() {
                 let xa = (crossings[k].0 - 0.5).ceil().max(0.0) as usize;
                 let xb = ((crossings[k + 1].0 - 0.5).ceil().max(0.0) as usize).min(w);
                 for x in xa..xb {
@@ -140,7 +142,7 @@ struct Placed {
 fn glyph_of(font: &Font, fonts: &Fonts, ch: char) -> Arc<Glyph> {
     font.glyph(ch)
         .or_else(|| fonts.all()[0].glyph(ch))
-        .unwrap_or_else(|| Arc::new(Glyph { contours: Vec::new(), advance: 0.3 }))
+        .unwrap_or_else(|| Arc::new(Glyph { contours: Vec::new(), advance: 0.3, even_odd: false }))
 }
 
 fn layout(l: &LabelObject, fonts: &Fonts) -> Vec<Placed> {
@@ -190,6 +192,8 @@ fn outlines(glyphs: &[Placed], size: f64) -> Vec<Vec<Point>> {
 #[derive(Clone, Debug)]
 struct Shape {
     outlines: Vec<Vec<Point>>,
+    /// The font's fill rule.
+    even_odd: bool,
     cx: f64,
     cy: f64,
     hw: f64,
@@ -198,6 +202,7 @@ struct Shape {
 
 fn shape_of(l: &LabelObject, fonts: &Fonts) -> Option<Shape> {
     let glyphs = layout(l, fonts);
+    let even_odd = glyphs.iter().any(|g| g.glyph.even_odd);
     let outlines = outlines(&glyphs, l.size);
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in outlines.iter().flatten() {
@@ -208,6 +213,7 @@ fn shape_of(l: &LabelObject, fonts: &Fonts) -> Option<Shape> {
     }
     (x0 < x1).then(|| Shape {
         outlines,
+        even_odd,
         cx: (x0 + x1) / 2.0,
         cy: (y0 + y1) / 2.0,
         hw: (x1 - x0) / 2.0,
@@ -306,7 +312,7 @@ impl Lettering {
             })
             .collect();
         let mut ink = vec![0u8; w * h];
-        fill_polygons(&mut ink, w, h, &polys);
+        fill_polygons(&mut ink, w, h, &polys, shape.even_odd);
         let (data, fw, fh) = mask_to_field(&ink, w, h, ss as usize, grow, unit, encode_text);
         Some(Field { data, w: fw, h: fh, x: x0 as i64, y: y0 as i64 })
     }
@@ -360,11 +366,16 @@ mod tests {
         // A square with a hole the other way round (nonzero: a hole).
         let outer = vec![[1.0, 1.0], [9.0, 1.0], [9.0, 9.0], [1.0, 9.0]];
         let inner = vec![[3.0, 3.0], [3.0, 7.0], [7.0, 7.0], [7.0, 3.0]];
-        fill_polygons(&mut m, 10, 10, &[outer, inner]);
+        fill_polygons(&mut m, 10, 10, &[outer.clone(), inner.clone()], false);
         assert_eq!(m[5 * 10 + 1], 1);
         assert_eq!(m[5 * 10 + 5], 0);
         assert_eq!(m[5 * 10 + 9], 0);
         assert_eq!(m.iter().filter(|&&v| v == 1).count(), 64 - 16);
+        // Even-odd: a hole whichever way round.
+        let mut e = vec![0u8; 10 * 10];
+        let inner_cw: Vec<Point> = inner.iter().rev().copied().collect();
+        fill_polygons(&mut e, 10, 10, &[outer, inner_cw], true);
+        assert_eq!(e, m);
     }
 
     #[test]

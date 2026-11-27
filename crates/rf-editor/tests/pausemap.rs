@@ -144,3 +144,25 @@ fn exported_tiles_carry_a_road() {
         assert!(pixels.iter().zip(game).any(|(a, b)| a < b), "{name}");
     }
 }
+
+#[test]
+fn the_games_fonts_read() {
+    let Some(fs) = fs() else { return };
+    let f = rf_editor::pausemap::gfxfont::LIBRARIES.iter().find_map(|p| fs.find(p)).unwrap();
+    let data = fs.extract(f).unwrap();
+    let t = std::time::Instant::now();
+    let fonts = rf_editor::pausemap::gfxfont::read_library(&data).unwrap();
+    println!("{} fonts in {:.2?}", fonts.len(), t.elapsed());
+    let names: Vec<&str> = fonts.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(fonts.len(), 18, "{names:?}");
+    for want in ["RDR Lino", "Hapna Slab Serif DemiBold", "Redemption"] {
+        assert!(names.contains(&want), "{want} in {names:?}");
+    }
+    let lino = fonts.iter().find(|f| f.name == "RDR Lino").unwrap();
+    let a = &lino.glyphs[&'A'];
+    // 169 of 256 wide; the cap height about 201 of 256, above the baseline.
+    assert!((a.advance - 169.0 / 256.0).abs() < 1e-9);
+    let top = a.contours.iter().flatten().map(|p| p[1]).fold(f64::MAX, f64::min);
+    assert!((top + 201.0 / 256.0).abs() < 0.01, "{top}");
+    assert!(lino.glyphs.len() > 400);
+}
