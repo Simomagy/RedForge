@@ -29,6 +29,7 @@ pub mod lodlights;
 pub mod navgen;
 pub mod navmesh;
 pub mod occlusion;
+pub mod pausemap;
 pub mod placement;
 pub mod probe;
 pub mod project;
@@ -132,6 +133,8 @@ pub enum DocKey {
     Types(FileRef),
     /// A navmesh (ynv), by name hash.
     Navmesh(u32),
+    /// What's drawn on the pause map (kept in the `.rfproj`).
+    PauseMap,
 }
 
 /// A file's data, shared between the document and the undo steps.
@@ -139,6 +142,7 @@ pub enum DocKey {
 pub(crate) enum Root {
     Bag(Arc<DataBag>),
     Navmesh(Arc<rf_formats::formats::ynv::Navmesh>),
+    PauseMap(Arc<pausemap::PauseMapData>),
 }
 
 /// A file's root before and after a step; `None` when it didn't exist.
@@ -202,6 +206,13 @@ pub struct Editor {
     /// The project's other files (models, textures, collisions...): the game
     /// data uses them in place of the game's of the same name.
     pub assets: Vec<PathBuf>,
+    /// What's drawn on the pause map, and as last saved.
+    pause_map: Arc<pausemap::PauseMapData>,
+    pause_map_saved: Arc<pausemap::PauseMapData>,
+    /// The game's pause map tiles, read when first needed.
+    pause_tiles: std::sync::OnceLock<Arc<pausemap::Library>>,
+    /// The fonts and pictures the pause map's marks are made with.
+    pub pause_assets: pausemap::Assets,
 }
 
 /// How many steps undo keeps.
@@ -228,6 +239,10 @@ impl Editor {
             place_interior: None,
             project: None,
             assets: Vec::new(),
+            pause_map: Arc::default(),
+            pause_map_saved: Arc::default(),
+            pause_tiles: std::sync::OnceLock::new(),
+            pause_assets: pausemap::Assets::default(),
         }
     }
 
@@ -403,6 +418,8 @@ impl Editor {
             (DocKey::Map(name), None) => self.apply_map(name, None),
             (DocKey::Types(file), Some(Root::Bag(root))) => self.apply_types(file, root),
             (DocKey::Navmesh(name), Some(Root::Navmesh(root))) => self.apply_navmesh(name, root),
+            (DocKey::PauseMap, Some(Root::PauseMap(root))) => self.apply_pause_map(root),
+            (DocKey::PauseMap, None) => self.apply_pause_map(Arc::default()),
             _ => {}
         }
     }
@@ -411,6 +428,7 @@ impl Editor {
     fn doc_root(&self, key: DocKey) -> Option<Root> {
         match key {
             DocKey::Navmesh(name) => self.navmeshes.get(&name).map(|n| Root::Navmesh(n.root.clone())),
+            DocKey::PauseMap => Some(Root::PauseMap(self.pause_map.clone())),
             _ => self.root(key).cloned().map(Root::Bag),
         }
     }
@@ -419,7 +437,7 @@ impl Editor {
         match key {
             DocKey::Map(name) => self.map(name).map(|m| &m.root),
             DocKey::Types(file) => self.types.get(&file).map(|t| &t.root),
-            DocKey::Navmesh(_) => None,
+            DocKey::Navmesh(_) | DocKey::PauseMap => None,
         }
     }
 
@@ -527,6 +545,7 @@ impl Editor {
                     n.in_project = true;
                 }
             }
+            DocKey::PauseMap => {}
         }
     }
 
@@ -560,6 +579,7 @@ impl Editor {
         self.navmeshes.clear();
         self.project = None;
         self.assets.clear();
+        self.load_pause_map(None);
         self.refresh_data();
         self.selection.clear();
         self.target = None;
@@ -573,6 +593,7 @@ impl Editor {
         let project = Project::load(file)?;
         self.close_project();
         let items = project.items();
+        self.load_pause_map(project.pause_map.as_ref());
         self.project = Some(project);
         Ok(self.load_project_files(&items))
     }
@@ -696,6 +717,14 @@ impl Editor {
             let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
             out.push(ProjectEntry { name, doc: None, path: Some(f.clone()), dirty: false });
         }
+        if !self.pause_map.is_empty() || self.pause_map_dirty() {
+            out.push(ProjectEntry {
+                name: pausemap::DOC_NAME.into(),
+                doc: Some(DocKey::PauseMap),
+                path: self.project.as_ref().and_then(|p| p.file.clone()),
+                dirty: self.pause_map_dirty(),
+            });
+        }
         out.sort_by(|a, b| {
             let order = |e: &ProjectEntry| project::load_order(Path::new(&e.name));
             order(a).cmp(&order(b)).then_with(|| a.name.cmp(&b.name))
@@ -710,6 +739,8 @@ impl Editor {
             DocKey::Map(n) => self.maps.get(&n).map(|m| (m.path.clone(), format!("{}.ymap", m.file_name)))?,
             DocKey::Types(f) => self.types.get(&f).map(|t| (t.path.clone(), format!("{}.ytyp", t.file_name)))?,
             DocKey::Navmesh(n) => self.navmeshes.get(&n).map(|d| (d.path.clone(), format!("{}.ynv", d.file_name)))?,
+            // In the .rfproj.
+            DocKey::PauseMap => return self.project.as_ref()?.file.clone(),
         };
         path.or_else(|| Some(self.project.as_ref()?.dir()?.join(name)))
     }
@@ -719,6 +750,13 @@ impl Editor {
             DocKey::Map(n) => self.save_map(n, path)?,
             DocKey::Types(f) => self.save_types(f, path)?,
             DocKey::Navmesh(n) => self.save_navmesh(n, path)?,
+            // It goes in the .rfproj: a project not saved yet is saved there.
+            DocKey::PauseMap => {
+                let p = self.project.get_or_insert_with(Project::new);
+                if p.file.is_none() {
+                    p.file = Some(path.to_owned());
+                }
+            }
         }
         self.save_project_file()
     }
@@ -726,7 +764,12 @@ impl Editor {
     /// Writes the `.rfproj`, if the project has one.
     pub fn save_project_file(&mut self) -> Result<(), String> {
         match &mut self.project {
-            Some(p) if p.file.is_some() => p.save(None).map(|_| ()),
+            Some(p) if p.file.is_some() => {
+                p.pause_map = (!self.pause_map.is_empty()).then(|| self.pause_map.to_json());
+                p.save(None)?;
+                self.pause_map_saved = self.pause_map.clone();
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -742,6 +785,8 @@ impl Editor {
                     DocKey::Map(n) => self.save_map(n, &path)?,
                     DocKey::Types(f) => self.save_types(f, &path)?,
                     DocKey::Navmesh(n) => self.save_navmesh(n, &path)?,
+                    // Written with the .rfproj, below.
+                    DocKey::PauseMap => {}
                 },
                 None => homeless.push(doc),
             }
@@ -884,6 +929,7 @@ impl Editor {
     pub fn remove_from_project(&mut self, entry: &ProjectEntry) {
         if let Some(path) = &entry.path
             && let Some(p) = &mut self.project
+            && entry.doc != Some(DocKey::PauseMap)
         {
             p.remove_file(path);
         }
@@ -905,6 +951,13 @@ impl Editor {
             }
             Some(DocKey::Navmesh(name)) => {
                 self.navmeshes.remove(&name);
+            }
+            // Nothing drawn on the pause map any more.
+            Some(DocKey::PauseMap) => {
+                self.pause_map = Arc::default();
+                if let Some(p) = &mut self.project {
+                    p.pause_map = None;
+                }
             }
             None => self.assets.retain(|f| Some(f) != entry.path.as_ref()),
         }

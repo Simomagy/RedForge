@@ -40,7 +40,7 @@ pub struct Autosave {
 /// A file in an autosave: which document, and the file in its folder.
 #[derive(Serialize, Deserialize)]
 pub struct Saved {
-    /// `ymap`, `ytyp` or `ynv`.
+    /// `ymap`, `ytyp`, `ynv` or `pausemap` (its JSON).
     pub kind: String,
     /// The ymap's file name, or the ytyp's path in the game's files.
     pub name: String,
@@ -74,6 +74,10 @@ impl Editor {
                     let doc = self.navmesh(n).ok_or("no such navmesh")?;
                     ("ynv", doc.file_name.clone(), self.navmesh_bytes(n)?)
                 }
+                Some(DocKey::PauseMap) => {
+                    let json = serde_json::to_string(&self.pause_map().to_json()).map_err(|e| e.to_string())?;
+                    ("pausemap", crate::pausemap::DOC_NAME.to_owned(), json.into_bytes())
+                }
                 None => continue,
             };
             let file = format!("{i}.{kind}");
@@ -96,6 +100,12 @@ impl Editor {
         let mut navmeshes = Vec::new();
         for s in &index.files {
             let bytes = std::fs::read(dir.join(&s.file)).map_err(|e| format!("{}: {e}", s.name))?;
+            if s.kind == "pausemap" {
+                let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", s.name))?;
+                let data = crate::pausemap::project_file::read(&json);
+                navmeshes.push((DocKey::PauseMap, Root::PauseMap(Arc::new(data))));
+                continue;
+            }
             if s.kind == "ynv" {
                 let name = self.hashes.ensure(&s.name);
                 self.open_navmesh(name)?;

@@ -8,9 +8,14 @@
 //!   "folders": ["maps"],
 //!   "files": ["../other/thing.ymap"],
 //!   "excluded": ["maps/old.ymap"],
-//!   "export": { "author": "..." }
+//!   "export": { "author": "..." },
+//!   "pauseMap": { "app": "rdr-map-editor", "version": 3, "objects": [...] }
 //! }
 //! ```
+//!
+//! `pauseMap` is what's drawn on the pause map, as the Map Editor web app
+//! writes its projects (see [`crate::pausemap::project_file`]); the C#
+//! RedForge leaves it alone when reading.
 //!
 //! A folder brings in every game file (`.y*`) and animation being made
 //! (`.rfanim.json`) in it and its subfolders, except the excluded ones; `files` are those from anywhere else. Paths are
@@ -30,6 +35,8 @@ struct ProjectFile {
     files: Vec<String>,
     excluded: Vec<String>,
     export: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pause_map: Option<serde_json::Value>,
 }
 
 /// The order the game loads files in, by extension (`RDR2Project.FileLoadOrder`);
@@ -74,6 +81,9 @@ pub struct Project {
     pub excluded: BTreeSet<PathBuf>,
     /// The export settings, kept with the project.
     pub export: BTreeMap<String, String>,
+    /// What's drawn on the pause map, as JSON (the editor keeps it as
+    /// objects, and puts it here when saving).
+    pub pause_map: Option<serde_json::Value>,
     /// What the `.rfproj` holds, so it's only written when something changed.
     saved_json: Option<String>,
 }
@@ -119,6 +129,7 @@ impl Default for Project {
             files: Vec::new(),
             excluded: BTreeSet::new(),
             export: BTreeMap::new(),
+            pause_map: None,
             saved_json: None,
         }
     }
@@ -142,6 +153,7 @@ impl Project {
             files: data.files.iter().map(|f| absolute(dir, f)).collect(),
             excluded: data.excluded.iter().map(|f| absolute(dir, f)).collect(),
             export: data.export,
+            pause_map: data.pause_map,
             saved_json: Some(json),
         })
     }
@@ -158,6 +170,7 @@ impl Project {
             files: self.files.iter().filter(|f| !self.in_folders(f)).map(rel).collect(),
             excluded: self.excluded.iter().map(rel).collect(),
             export: self.export.clone(),
+            pause_map: self.pause_map.clone(),
         };
         let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
         if self.file.as_deref() == Some(file.as_path()) && self.saved_json.as_deref() == Some(json.as_str()) {

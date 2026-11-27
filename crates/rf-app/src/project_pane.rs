@@ -1145,8 +1145,20 @@ impl ProjectPane {
             self.fail(format!("_manifest.ymf: {e}"));
             return;
         }
-        let (files, missing): (Vec<PathBuf>, Vec<PathBuf>) =
-            editor.project_entries().into_iter().filter_map(|e| e.path).partition(|p| p.exists());
+        // The pause map is in the .rfproj: its edited tiles go instead.
+        let (files, missing): (Vec<PathBuf>, Vec<PathBuf>) = editor
+            .project_entries()
+            .into_iter()
+            .filter(|e| e.doc != Some(DocKey::PauseMap))
+            .filter_map(|e| e.path)
+            .partition(|p| p.exists());
+        let (tiles, lost_tiles) = match editor.pause_map_export() {
+            Ok(t) => t,
+            Err(e) => {
+                self.fail(format!("The pause map's tiles: {e}"));
+                return;
+            }
+        };
         let before: Vec<String> = editor
             .project
             .as_ref()
@@ -1168,7 +1180,7 @@ impl ProjectPane {
             p.export.insert("folder".into(), form.folder.clone());
             p.export.extend(info.clone());
         }
-        let done = match redm::export(&resource, &files, &info, &before, zone, editor.hashes()) {
+        let done = match redm::export(&resource, &files, &info, &before, zone, editor.hashes(), &tiles) {
             Ok(done) => done,
             Err(e) => {
                 let _ = editor.save_project_file();
@@ -1189,6 +1201,14 @@ impl ProjectPane {
             _ => format!("; took out of stream what's no longer in the project: {}", done.removed.join(", ")),
         };
         // What was baked for the interiors, and what their lighting lacks.
+        let removed = match (tiles.len(), lost_tiles.len()) {
+            (0, _) => removed,
+            (n, 0) => format!("{removed}; drew {n} pause map tiles"),
+            (n, l) => format!(
+                "{removed}; drew {n} pause map tiles ({l} where the game has no tile, so what's drawn there doesn't show: {})",
+                lost_tiles.join(", ")
+            ),
+        };
         let removed = match done.volumes {
             0 => removed,
             1 => format!("{removed}; baked an ambient mask volume for its interior"),

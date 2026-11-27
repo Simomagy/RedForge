@@ -3847,6 +3847,7 @@ version = "2.8.0"
 dependencies = [
  "glam 0.33.12",
  "glam 0.34.2",
+ "image",
  "log",
  "rayon",
  "rerecast",
@@ -3857,6 +3858,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "texture2ddecoder",
+ "ttf-parser",
 ]
 
 [[package]]

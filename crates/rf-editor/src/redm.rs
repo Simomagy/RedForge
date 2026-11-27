@@ -102,6 +102,8 @@ pub struct Exported {
     pub notes: Vec<String>,
 }
 
+/// `generated` are files made for the export (the pause map's tiles): name,
+/// bytes.
 pub fn export(
     resource: &Path,
     files: &[PathBuf],
@@ -109,6 +111,7 @@ pub fn export(
     before: &[String],
     zone: u32,
     hashes: &HashIndex,
+    generated: &[(String, Vec<u8>)],
 ) -> Result<Exported, String> {
     let io = |e: std::io::Error, p: &Path| format!("{}: {e}", p.display());
     let stream = resource.join("stream");
@@ -153,6 +156,11 @@ pub fn export(
         std::fs::write(&to, data).map_err(|e| io(e, &to))?;
     }
     for (name, data) in &baked.textures {
+        let to = stream.join(name);
+        std::fs::write(&to, data).map_err(|e| io(e, &to))?;
+        done.written.push(name.clone());
+    }
+    for (name, data) in generated {
         let to = stream.join(name);
         std::fs::write(&to, data).map_err(|e| io(e, &to))?;
         done.written.push(name.clone());
@@ -279,7 +287,7 @@ mod tests {
         std::fs::write(&files[2], Meta::new(Some(map)).save().unwrap()).unwrap();
 
         let res = dir.path().join("res/town");
-        let done = export(&res, &files, &BTreeMap::new(), &[], 184, &hashes).unwrap();
+        let done = export(&res, &files, &BTreeMap::new(), &[], 184, &hashes, &[]).unwrap();
         assert_eq!((done.volumes, done.probes), (1, 1), "{:?}", done.notes);
         let zone = amv::zone_name(184);
         let probe = crate::probe::texture_name(amv::uuid_for(joaat("house"), 0), joaat("house"));
@@ -308,7 +316,7 @@ mod tests {
         let own = dir.path().join("amv_zone_200.ymt");
         std::fs::write(&own, b"x").unwrap();
         let all: Vec<PathBuf> = files.iter().cloned().chain([own]).collect();
-        let again = export(&res, &all, &BTreeMap::new(), &done.written, 184, &hashes).unwrap();
+        let again = export(&res, &all, &BTreeMap::new(), &done.written, 184, &hashes, &[]).unwrap();
         assert_eq!((again.volumes, again.probes), (0, 1));
         assert_eq!(again.removed, [format!("{zone}.ymt"), format!("{zone}.ytd")]);
     }
@@ -325,7 +333,7 @@ mod tests {
         let res = dir.path().join("res/my_map");
         let mut info =
             BTreeMap::from([("author".to_string(), "Prysma".to_string()), ("version".into(), "1.0.0".into())]);
-        let done = export(&res, &files, &info, &[], amv::FIRST_FREE_ZONE, &HashIndex::new()).unwrap();
+        let done = export(&res, &files, &info, &[], amv::FIRST_FREE_ZONE, &HashIndex::new(), &[]).unwrap();
         assert_eq!(done.skipped, ["notes.txt"]);
         assert_eq!(done.written, ["a.ymap", "b.ytyp"]);
         assert!(res.join("stream/a.ymap").exists() && res.join("stream/b.ytyp").exists());
@@ -346,6 +354,7 @@ mod tests {
             &["a.ymap".into(), "b.ytyp".into()],
             amv::FIRST_FREE_ZONE,
             &HashIndex::new(),
+            &[],
         )
         .unwrap();
         // b.ytyp left the project: it goes, with its DLC_ITYP_REQUEST; a file of the user's stays.
@@ -353,7 +362,7 @@ mod tests {
         assert!(!res.join("stream/b.ytyp").exists() && res.join("stream/mine.ydr").exists());
         let without = std::fs::read_to_string(res.join("fxmanifest.lua")).unwrap();
         assert!(!without.contains("b.ytyp") && without.contains("-- mine"));
-        export(&res, &files, &info, &done.written, amv::FIRST_FREE_ZONE, &HashIndex::new()).unwrap();
+        export(&res, &files, &info, &done.written, amv::FIRST_FREE_ZONE, &HashIndex::new(), &[]).unwrap();
         let again = std::fs::read_to_string(res.join("fxmanifest.lua")).unwrap();
         assert!(again.contains("-- mine") && again.contains("version '1.1.0'") && !again.contains("1.0.0"));
         assert_eq!(again.matches("DLC_ITYP_REQUEST").count(), 1);
@@ -372,9 +381,16 @@ mod tests {
         let file = dir.path().join("wave.rfanim.json");
         std::fs::write(&file, anim.to_json()).unwrap();
         let res = dir.path().join("res");
-        let done =
-            export(&res, std::slice::from_ref(&file), &BTreeMap::new(), &[], amv::FIRST_FREE_ZONE, &HashIndex::new())
-                .unwrap();
+        let done = export(
+            &res,
+            std::slice::from_ref(&file),
+            &BTreeMap::new(),
+            &[],
+            amv::FIRST_FREE_ZONE,
+            &HashIndex::new(),
+            &[],
+        )
+        .unwrap();
         assert_eq!(done.written, ["my@wave.ycd"]);
         assert!(done.skipped.is_empty());
         assert_eq!(std::fs::read(res.join("stream/my@wave.ycd")).unwrap(), anim.bake().unwrap());
@@ -389,6 +405,7 @@ mod tests {
             &done.written,
             amv::FIRST_FREE_ZONE,
             &HashIndex::new(),
+            &[],
         )
         .unwrap();
         assert_eq!((again.written, again.removed), (vec!["my@hello.ycd".to_string()], vec!["my@wave.ycd".to_string()]));
@@ -396,7 +413,7 @@ mod tests {
         // One that can't be baked stops the export, saying which.
         anim.bones.clear();
         std::fs::write(&file, anim.to_json()).unwrap();
-        let e = export(&res, &[file], &BTreeMap::new(), &[], amv::FIRST_FREE_ZONE, &HashIndex::new()).unwrap_err();
+        let e = export(&res, &[file], &BTreeMap::new(), &[], amv::FIRST_FREE_ZONE, &HashIndex::new(), &[]).unwrap_err();
         assert!(e.starts_with("wave.rfanim.json: "), "{e}");
     }
 }

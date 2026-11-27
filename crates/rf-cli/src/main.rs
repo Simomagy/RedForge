@@ -6,6 +6,7 @@ use std::time::Instant;
 mod amv;
 mod compare;
 mod navmake;
+mod pausemap;
 mod probe;
 
 use anyhow::{Context, Result, bail};
@@ -198,7 +199,7 @@ enum Command {
     /// cell's, and the next cells' whose special links lead into it) go to the
     /// output folder, for a resource's stream.
     NavmeshMake {
-        /// The box seen from above: min x, min y, max x, max y (inside one 150 m cell).
+        /// The box seen from above: min x, min y, max x, max y (it may cross cells).
         #[arg(long = "box", value_parser = navmake::four, allow_hyphen_values = true)]
         area: [f32; 4],
         /// The heights to look for ground in: lowest, highest (default: around the
@@ -220,6 +221,19 @@ enum Command {
         /// The steepest ground peds walk on, in degrees.
         #[arg(long, default_value_t = Settings::default().max_slope)]
         slope: f32,
+    },
+    /// Draw what's on the pause map (an .rfproj's, or a Map Editor or Aether
+    /// Cartography project's) into the game's pause map tiles, and write them as
+    /// a RedM resource
+    PausemapExport {
+        /// An .rfproj, a map-project.json or an aether-project.json.
+        map: PathBuf,
+        /// The resource's folder.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Font files (TTF, OTF) for the labels, named after the file.
+        #[arg(long)]
+        font: Vec<PathBuf>,
     },
     /// Convert game files with both this port and the C# RedForge (rf-oracle) and
     /// report every difference.
@@ -288,6 +302,11 @@ fn main() -> Result<()> {
                 settings,
             };
             navmake::run(fs, strings, &options)
+        }
+        Command::PausemapExport { map, out, font } => {
+            let strings = load_strings(&cli)?;
+            let fs = open_fs_with(&cli, &strings)?;
+            pausemap::run(&fs, &strings, &pausemap::Options { map: map.clone(), out: out.clone(), fonts: font.clone() })
         }
         Command::ProbeBake { ytyp, ymap, models, out, from, guid } => {
             let strings = load_strings(&cli)?;
