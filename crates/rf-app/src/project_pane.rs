@@ -65,7 +65,7 @@ pub fn can_add(file: &Path) -> bool {
         || Kind::of_xml_name(&name).is_some()
 }
 
-/// An XML export (`x.ydr.xml`, Sollumz's and CodeX's) as its game file,
+/// An XML export (`x.ydr.xml`, Sollumz's) as its game file,
 /// written next to it (with what's in its folder, the textures).
 fn convert_xml(hashes: &HashIndex, file: &Path) -> Result<PathBuf, String> {
     let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -405,7 +405,7 @@ impl ProjectPane {
             });
         });
         ui.horizontal_wrapped(|ui| {
-            let tip = "Game files, their XML from Sollumz or CodeX (converted), or animations made here \
+            let tip = "Game files, their XML from Sollumz (converted), or animations made here \
                        (.rfanim.json); you can drop them on the window too";
             if ui.button(theme::icon_text(icon::FILE_PLUS, "Add files…")).on_hover_text(tip).clicked() {
                 let mut dialog = rfd::FileDialog::new().add_filter(

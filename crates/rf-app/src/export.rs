@@ -1,5 +1,5 @@
 //! Exporting the game's files into a folder, as the C#'s Game Files and
-//! Export Selection did: as XML (Sollumz and CodeX's, textures as DDS files
+//! Export Selection did: as XML (Sollumz's, textures as DDS files
 //! next to it), extracted as RedM loads them from a resource, or
 //! decompressed; and the selection's models with the textures they use. On a
 //! thread of its own: a folder of an archive can be thousands of files.

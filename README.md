@@ -21,7 +21,7 @@ RedForge streams the game's map around you and lets you change it: move, add
 and remove entities, interiors, trees and grass, place any object of the game
 or of your mod, and export the result as a RedM resource. It reads and writes
 the game's file formats exactly as RedForge 1.x did, converts them to and from
-the CodeX/Sollumz XML, and works hand in hand with Blender.
+the Sollumz XML, and works hand in hand with Blender.
 
 This is RedForge 2, rewritten in Rust. What changed in each version is in the
 [changelog](CHANGELOG.md); the versions follow [Semantic Versioning](https://semver.org).
@@ -141,7 +141,7 @@ Unsaved changes are autosaved every two minutes, and offered back if
 RedForge closes before they're saved.
 Double-clicking an `.rfproj`, or dropping it on the window, opens it too (in
 the RedForge already open, if there's one); game files dropped on the window
-join the project, and their XML from Sollumz or CodeX is converted first.
+join the project, and their XML from Sollumz is converted first.
 
 **RedM resource** exports the project to `<resources folder>/<name>/`, with
 a `stream` folder and an `fxmanifest.lua` (an existing manifest keeps your
@@ -172,7 +172,7 @@ game's.
 ## Exporting game files
 
 In Game Files, a file's or a folder's right click exports it into a folder of
-your choice: **Export as XML** (as Sollumz and CodeX read it, textures as DDS
+your choice: **Export as XML** (as Sollumz reads it, textures as DDS
 files next to it), **Extract** (as a RedM resource streams it) or **Extract
 uncompressed**. **Edit > Export selection** writes the selected objects'
 models as XML, with the textures they use.
@@ -221,9 +221,8 @@ or feature form. Please follow the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Credits
 
-RedForge 2 is a rewrite of RedForge 1.x (C#), which grew out of CodeX. Its
-XML is CodeX's and Sollumz's, so files go back and forth with them. Built
-with [egui](https://github.com/emilk/egui) and [wgpu](https://github.com/gfx-rs/wgpu).
+RedForge 2 is a rewrite of RedForge 1.x (C#). Its XML is Sollumz's, so files
+go back and forth with it. Built with [egui](https://github.com/emilk/egui) and [wgpu](https://github.com/gfx-rs/wgpu).
 
 Red Dead Redemption 2 is Rockstar Games'. RedForge is a fan-made tool, not
 affiliated with or endorsed by Rockstar Games or Take-Two Interactive.

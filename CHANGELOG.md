@@ -369,7 +369,7 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 - `.rfproj` files have an icon of their own in the file manager: a page with
   "PROJ" and RedForge's anvil.
 - Game files dropped on the window, or chosen with **Add files…**, join the
-  project: ydr, ytd, ybn, ymap, ytyp… and their XML from Sollumz or CodeX,
+  project: ydr, ytd, ybn, ymap, ytyp… and their XML from Sollumz,
   converted to the game's file next to the XML (as in RedForge 1.x), and
   folders. Files from another folder are copied into the project's, so the
   project keeps them (Project pane, More).
@@ -548,7 +548,7 @@ compatible with 1.x projects, settings and the Blender add-on.
 
 ### Kept from 1.x
 - Every file format read, written and converted to XML exactly as 1.x does
-  (Sollumz/CodeX XML).
+  (Sollumz XML).
 - World streaming, entities and interiors editing with undo, the Objects pane
   with thumbnails, `.rfproj` projects, the RedM resource export, the Blender
   bridge, the model, texture, animation and hex viewers.

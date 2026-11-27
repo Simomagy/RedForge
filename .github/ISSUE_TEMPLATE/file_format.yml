@@ -5,8 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        RedForge reads and writes the game's files as RedForge 1.x (C#) does, and its XML is the CodeX/Sollumz XML.
-        Telling how 1.x, CodeX or Sollumz handle the same file helps find the difference.
+        RedForge reads and writes the game's files as RedForge 1.x (C#) does, and its XML is the Sollumz XML.
+        Telling how 1.x or Sollumz handle the same file helps find the difference.
   - type: dropdown
     id: format
     attributes:
@@ -59,7 +59,7 @@ body:
     id: compare
     attributes:
       label: Compared with
-      description: What RedForge 1.x, CodeX or Sollumz do with the same file, if you know.
+      description: What RedForge 1.x or Sollumz do with the same file, if you know.
   - type: input
     id: version
     attributes:

@@ -722,7 +722,7 @@ impl AnimSource {
         Ok(())
     }
 
-    /// The clip dictionary as CodeX XML, which [`rf_formats`] turns into a ycd.
+    /// The clip dictionary as XML, which [`rf_formats`] turns into a ycd.
     fn to_xml(&self) -> String {
         let frames = (0..self.frames).map(f32::from);
         // The game's order: positions (track 0), then rotations (track 1), each by bone.

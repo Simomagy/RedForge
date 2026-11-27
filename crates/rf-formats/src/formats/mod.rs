@@ -1,5 +1,5 @@
 //! The game's file formats, and their conversion to and from XML the way the C#
-//! RedForge (and CodeX) does it, so the XML stays compatible with Sollumz.
+//! RedForge does it, so the XML stays compatible with Sollumz.
 //!
 //! Each format module has its plain-data structs plus two functions used by the
 //! dispatch below:

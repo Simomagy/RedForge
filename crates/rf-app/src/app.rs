@@ -779,7 +779,7 @@ fn drop_card(ctx: &egui::Context, what: Dropping) {
             (icon::FILE_ARROW_DOWN, "Drop to open the project", "RedForge asks before closing the one open")
         }
         Dropping::Files => {
-            (icon::FILE_PLUS, "Drop to add to the project", "XML from Sollumz or CodeX becomes the game's file")
+            (icon::FILE_PLUS, "Drop to add to the project", "XML from Sollumz becomes the game's file")
         }
         Dropping::Unknown => {
             (icon::FILE_ARROW_DOWN, "Drop a project to open it", "or game files and their XML to add them")

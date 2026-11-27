@@ -363,7 +363,7 @@ fn row(ui: &mut egui::Ui, l: Look) -> egui::Response {
 /// The export commands of a file's or a folder's menu.
 fn export_menu(ui: &mut egui::Ui, cmds: &mut Vec<Cmd>, all: bool, files: impl Fn() -> Vec<(Item, PathBuf)>) {
     let items = [
-        (How::Xml, "Export as XML…", "As Sollumz and CodeX read it, textures as DDS files in a folder next to it"),
+        (How::Xml, "Export as XML…", "As Sollumz reads it, textures as DDS files in a folder next to it"),
         (How::Loose, "Extract…", "As a RedM resource streams it"),
         (How::Uncompressed, "Extract uncompressed…", "Decrypted and decompressed"),
     ];

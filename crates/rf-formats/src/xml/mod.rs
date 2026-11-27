@@ -1,4 +1,4 @@
-//! XML in the format RedForge (and CodeX before it) reads and writes.
+//! XML in the format RedForge reads and writes.
 
 pub mod number;
 pub mod reader;
