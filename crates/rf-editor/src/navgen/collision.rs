@@ -10,7 +10,9 @@
 //! - A composite's children only when peds or horses collide with them
 //!   (`CF_MAP_TYPE_MOVER`, `CF_MAP_TYPE_HORSE`): the ones only for weapons or
 //!   the camera are left out, and triangles whose material says
-//!   `FLAG_NO_NAVMESH` too.
+//!   `FLAG_NO_NAVMESH` too. A child with no type flags (a drawable's own
+//!   collision often has none, a relocated building's included) takes its
+//!   instance's, which peds collide with.
 //! - Spheres, capsules and cylinders are obstacles (posts, barrels, trunks):
 //!   they come as the box around them, which is all a navmesh needs of them.
 //!
@@ -123,9 +125,11 @@ fn child_transform(m: &[f32; 16]) -> Mat4 {
     Mat4::from_cols_array(&m)
 }
 
-/// Whether peds or horses collide with a composite's child.
+/// Whether peds or horses collide with a composite's child: one without type
+/// flags of its own takes its instance's, which they collide with.
 fn walked_on(b: &Bounds, in_composite: bool) -> bool {
-    !in_composite || b.composite_flags1.type_flags & (MOVER | HORSE) != 0
+    let flags = b.composite_flags1.type_flags;
+    !in_composite || flags == 0 || flags & (MOVER | HORSE) != 0
 }
 
 /// The triangles of a ybn's bounds in `area`, placed.
@@ -302,6 +306,17 @@ fn aabb_triangles(min: Vec3, max: Vec3, material: BoundMaterial, out: &mut Vec<T
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn children_peds_walk_on() {
+        let mut b = Bounds::new(BoundsType::GeometryBvh);
+        assert!(walked_on(&b, true), "no flags: the instance's");
+        b.composite_flags1.type_flags = MOVER;
+        assert!(walked_on(&b, true));
+        b.composite_flags1.type_flags = 1 << 1;
+        assert!(!walked_on(&b, true), "only for weapons");
+        assert!(walked_on(&b, false));
+    }
 
     #[test]
     fn a_box_faces_out() {

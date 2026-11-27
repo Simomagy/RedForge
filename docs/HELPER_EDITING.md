@@ -160,8 +160,12 @@ fields and slopes around), 80 m each, and compared it with the game's on a
 - **Collision**: the game's triangles face up for floors (as stored);
   composite children with `CF_MAP_TYPE_MOVER` or `CF_MAP_TYPE_HORSE` are the
   ones walked on (`hi@` and the horse avoidance ybns have none);
-  `FLAG_NO_NAVMESH` materials are left out. A custom interior isn't in the
-  game data's interiors: its collision is the ybn of its archetype's name.
+  `FLAG_NO_NAVMESH` materials are left out. A child with no type flags at
+  all takes its instance's, which peds collide with: no game model has one
+  (Valentine, Tumbleweed), but a custom building's own collision can (the
+  Tumbleweed school's stairs and railings were missed without it). A custom
+  interior isn't in the game data's interiors: its collision is the ybn of
+  its archetype's name.
 - **Settings** (`navgen::Settings::default`): agent radius 0.25-0.3 m fits
   best (91% of the walkable ground the same, recall 0.96-0.99); the step
   (0.35-0.55 m) and the slope (50-60°) hardly matter. Strawberry (wooden
