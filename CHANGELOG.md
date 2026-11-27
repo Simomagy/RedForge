@@ -8,6 +8,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-11-27
+
 ### Added
 - The Navmesh selection mode **makes navmesh from collisions**: **Make from
   collisions** in Properties makes the navmesh of the box around the
@@ -608,7 +610,8 @@ compatible with 1.x projects, settings and the Blender add-on.
 - Tree impostors past the last LOD are missing.
 - The Windows installer still has to be tried on Windows.
 
-[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.7.0...HEAD
+[Unreleased]: https://github.com/Simomagy/RedForge/compare/v2.8.0...HEAD
+[2.8.0]: https://github.com/Simomagy/RedForge/compare/v2.7.0...v2.8.0
 [2.7.0]: https://github.com/Simomagy/RedForge/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/Simomagy/RedForge/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/Simomagy/RedForge/compare/v2.5.1...v2.6.0
