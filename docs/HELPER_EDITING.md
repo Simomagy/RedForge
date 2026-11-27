@@ -185,22 +185,30 @@ fields and slopes around), 80 m each, and compared it with the game's on a
   56% of the time. Pavement, Road, Boardwalk, Vegetation, Water,
   NetworkSpawnCandidate and the shelters are the game's choice by place, not
   by material (Valentine's deep mud is Pavement and Road): generated polygons
-  take them from the game's polygon under them.
+  take them from the game's polygon under them. `Door` is on the polygons
+  in an interior's doorways: of the game's polygons within 0.25 m of a
+  portal (seen from above, at its heights), 80-99% have it, and they are
+  73-85% of those that do (Valentine, Tumbleweed, Rhodes); door entities
+  don't say it (Rhodes' Door polygons are 24 m from one on average).
 - **Done** (`rf-editor/src/navgen/`): `collision` (the static ybns, the
   interiors' and the models' of the entities around, doors and gates left
   out), `generate` (Recast, Y-up: x, z, y), `stitch` (the region's polygons
   replaced, the ones crossing it cut into convex pieces, the sides' vertices
   shared, joins by position and two-way only, links put on the polygon under
   their end or the nearest within 1 m), and `Editor::generate_navmesh` (the
-  4 m grid, the ground's height under each corner, the flags, the next cells'
-  links into the cell, one undo step). `rf navmesh-make` does it from the
+  4 m grid, the ground's height under each corner, the flags, `Door` within
+  0.25 m of a portal, the next cells' links into the cell, one undo step). `rf navmesh-make` does it from the
   command line. Areas and slopes are computed from the first corner in f64:
   at Tumbleweed (x -5600) f32 products were 2 m² off.
 - **Tested offline**: Valentine's main street (20 m box: 258 polygons out, 512
   in, still walkable across, 2 links of 316 lost, the next cell's 61 links
   moved); the Tumbleweed school, a custom interior (28 m box: its 436 floor
-  polygons, `Interior`, all reachable from outside through the door). **Not
-  tested in game yet** (issue #11).
+  polygons, `Interior`, all reachable from outside through the door).
+- **Tested in game** (RedM, `rf_navtest_school`): a ped walks from outside
+  into the school's classroom through its south-east door, on the path the
+  game finds (24 m, 22 s, no stop). The first try walked into the stairs'
+  railing: the building's own collision (`pry_schoolhouse.ydr`, children
+  without type flags) had been left out.
 
 ## Scenario points
 

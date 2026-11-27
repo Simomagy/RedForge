@@ -16,7 +16,8 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   and gates left out). The polygons around are cut to fit and joined to it,
   special links (ladders, climbs, drops) follow, and the flags the collision
   doesn't say (pavement, road, boardwalk...) come from the polygons that were
-  there; interiors' floors are flagged as such. One undo step. For a custom
+  there; interiors' floors are flagged as such, and their doorways as doors.
+  One undo step. For a custom
   interior or a new building: select the ground around it, then Make. The
   settings (distance from walls, headroom, step, slope, detail) are under
   Making settings, with the ones closest to the game's navmeshes by default.

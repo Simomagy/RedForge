@@ -28,6 +28,10 @@ const STEEP: f32 = 45.0;
 /// The Recast area of stairs (others are 1), so that they stay polygons of
 /// their own.
 const STAIRS_AREA: u8 = 2;
+/// Polygons this near an interior's portal, seen from above, are `Door`: the
+/// game's are (80-99% of these have it, and they are 73-85% of those that
+/// do, in Valentine, Tumbleweed and Rhodes).
+const DOOR_REACH: f32 = 0.25;
 
 /// The flags a generated polygon takes from the game's polygon under it:
 /// those about what's there, which collision doesn't say.
@@ -121,6 +125,56 @@ fn inside(c: &[Vec3], p: Vec2) -> bool {
         }
     }
     inside
+}
+
+/// An interior's portal seen from above: the line it stands on, and its
+/// heights.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Doorway {
+    a: Vec2,
+    b: Vec2,
+    z_min: f32,
+    z_max: f32,
+}
+
+impl Doorway {
+    /// A portal's corners in the world: its ends are the two furthest apart
+    /// seen from above (it stands upright).
+    fn new(c: [Vec3; 4]) -> Self {
+        let mut ends = (c[0], c[1]);
+        for i in 0..4 {
+            for j in i + 1..4 {
+                if c[i].truncate().distance(c[j].truncate()) > ends.0.truncate().distance(ends.1.truncate()) {
+                    ends = (c[i], c[j]);
+                }
+            }
+        }
+        let (z_min, z_max) = c.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.z), hi.max(p.z)));
+        Doorway { a: ends.0.truncate(), b: ends.1.truncate(), z_min, z_max }
+    }
+
+    /// Whether a polygon at its heights reaches within [`DOOR_REACH`] of it.
+    fn touches(&self, c: &[Vec3]) -> bool {
+        let z = c.iter().map(|p| p.z).sum::<f32>() / c.len() as f32;
+        if z < self.z_min - 1.0 || z > self.z_max {
+            return false;
+        }
+        if stitch::distance_to(c, self.a) <= DOOR_REACH || stitch::distance_to(c, self.b) <= DOOR_REACH {
+            return true;
+        }
+        let cross = |o: Vec2, p: Vec2, q: Vec2| (p - o).perp_dot(q - o);
+        let to_line = |p: Vec2| {
+            let ab = self.b - self.a;
+            let t = ((p - self.a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0.0, 1.0);
+            (self.a + ab * t - p).length()
+        };
+        (0..c.len()).any(|i| {
+            let (p, q) = (c[i].truncate(), c[(i + 1) % c.len()].truncate());
+            let crosses = cross(self.a, self.b, p) * cross(self.a, self.b, q) < 0.0
+                && cross(p, q, self.a) * cross(p, q, self.b) < 0.0;
+            crosses || to_line(p) <= DOOR_REACH
+        })
+    }
 }
 
 /// Walkable triangles by 2 m squares, for the ground's height.
@@ -290,7 +344,7 @@ impl Editor {
         let ground = Ground::new(&triangles, area.0.truncate(), area.1.truncate(), slope_cos);
         let reach = s.max_climb + 2.0 * s.cell_height;
         let before = Flat::new(&old);
-        let interiors = self.interior_rooms();
+        let (rooms, doorways) = self.interior_parts();
         let mut added = Vec::new();
         for p in &made {
             let part = stitch::inside_part(&p.corners, &region);
@@ -303,7 +357,7 @@ impl Editor {
                         c.z = z;
                     }
                 }
-                let attributes = attributes(&corners, p.area, &before, &ground, &interiors);
+                let attributes = attributes(&corners, p.area, &before, &ground, &rooms, &doorways);
                 added.push(NewPolygon { corners, attributes });
             }
         }
@@ -376,12 +430,16 @@ impl Editor {
         })
     }
 
-    /// The rooms of the interiors placed around (their boxes in the world).
-    fn interior_rooms(&self) -> Vec<(Vec3, Vec3)> {
-        let mut out = Vec::new();
+    /// The rooms of the interiors placed around (their boxes in the world)
+    /// and their portals.
+    fn interior_parts(&self) -> (Vec<(Vec3, Vec3)>, Vec<Doorway>) {
+        let (mut out, mut doorways) = (Vec::new(), Vec::new());
         for (_, h) in self.world.map_helpers() {
             for i in &h.interiors {
                 let m = Mat4::from_cols_array(&i.transform);
+                doorways.extend(
+                    i.portals.iter().map(|p| Doorway::new(p.corners.map(|c| m.transform_point3(Vec3::from(c))))),
+                );
                 for r in &i.rooms {
                     if r.name.eq_ignore_ascii_case("limbo") {
                         continue;
@@ -400,13 +458,20 @@ impl Editor {
                 }
             }
         }
-        out
+        (out, doorways)
     }
 }
 
 /// A generated polygon's attributes: what the game's polygon under it had
 /// that collision doesn't say, and what its shape and collision do.
-fn attributes(corners: &[Vec3], area: u8, before: &Flat, ground: &Ground, rooms: &[(Vec3, Vec3)]) -> NavmeshPolygon {
+fn attributes(
+    corners: &[Vec3],
+    area: u8,
+    before: &Flat,
+    ground: &Ground,
+    rooms: &[(Vec3, Vec3)],
+    doorways: &[Doorway],
+) -> NavmeshPolygon {
     let centre = corners.iter().sum::<Vec3>() / corners.len() as f32;
     let mut p = NavmeshPolygon::default();
     let mut flags = 0u64;
@@ -432,6 +497,9 @@ fn attributes(corners: &[Vec3], area: u8, before: &Flat, ground: &Ground, rooms:
         flags |= poly_flags::INTERIOR;
         flags &= !(poly_flags::PAVEMENT | poly_flags::ROAD | poly_flags::VEGETATION);
     }
+    if doorways.iter().any(|d| d.touches(corners)) {
+        flags |= poly_flags::DOOR;
+    }
     p.set_flags(flags);
     p
 }
@@ -453,5 +521,25 @@ mod tests {
         let steep = [Vec3::ZERO, Vec3::new(1.0, 0.0, 1.0), Vec3::new(1.0, 1.0, 1.0), Vec3::new(0.0, 1.0, 0.0)];
         assert!((slope(&steep) - 45.0).abs() < 0.01);
         assert!(opens("p_door_val_bank02x") && opens("P_GATE01X") && !opens("p_fencewood01x"));
+    }
+
+    #[test]
+    fn doorways() {
+        // A 1 m wide portal along x, 2.2 m high, on a floor at 0.
+        let d = Doorway::new([
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 2.2),
+            Vec3::new(0.0, 0.0, 2.2),
+        ]);
+        assert_eq!((d.a, d.b, d.z_min, d.z_max), (Vec2::ZERO, Vec2::X, 0.0, 2.2));
+        let square = |x: f32, y: f32, s: f32, z: f32| {
+            vec![Vec3::new(x, y, z), Vec3::new(x + s, y, z), Vec3::new(x + s, y + s, z), Vec3::new(x, y + s, z)]
+        };
+        assert!(d.touches(&square(0.3, -0.2, 0.4, 0.0)), "across it");
+        assert!(d.touches(&square(-1.0, -1.0, 3.0, 0.0)), "around it");
+        assert!(d.touches(&square(0.3, 0.2, 0.4, 0.0)), "0.2 m from it");
+        assert!(!d.touches(&square(0.3, 0.5, 0.4, 0.0)), "0.5 m from it");
+        assert!(!d.touches(&square(0.3, -0.2, 0.4, 3.0)), "the floor over it");
     }
 }
