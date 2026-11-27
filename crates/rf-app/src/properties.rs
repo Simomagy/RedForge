@@ -98,9 +98,16 @@ impl Properties {
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
             let mut tools = tools;
             match tools.as_deref_mut() {
+                Some(t) if !crate::navmesh_props::selected(t).is_empty() => {
+                    crate::navmesh_props::ui(ui, editor, t, &mut self.error);
+                }
                 Some(t) if !t.selected_parts.is_empty() => {
                     parts_ui(ui, &t.selected_parts);
                     self.occluder_ui(ui, editor, t);
+                }
+                Some(t) if t.mode == crate::map::helpers::Mode::Navmesh => {
+                    ui.label(RichText::new("Click a navmesh polygon to select it.").weak());
+                    crate::navmesh_props::highlight_ui(ui, t);
                 }
                 _ => self.selection_ui(ui, editor),
             }

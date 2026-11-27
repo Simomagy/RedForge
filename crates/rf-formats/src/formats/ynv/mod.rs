@@ -108,7 +108,7 @@ pub(crate) const EDGE_FLAG_NAMES: &[(u64, &str)] = &[
 ];
 
 /// The names of `Rsc8NavmeshPolyFlags`.
-pub(crate) const POLY_FLAG_NAMES: &[(u64, &str)] = &[
+pub const POLY_FLAG_NAMES: &[(u64, &str)] = &[
     (0x1, "Small"),
     (0x2, "Large"),
     (0x4, "Unk3"),
@@ -187,6 +187,11 @@ pub(crate) fn format_flags(value: u64, names: &[(u64, &str)]) -> String {
     }
     found.reverse();
     found.join(", ")
+}
+
+/// A polygon's flags by name (as the XML has them).
+pub fn format_poly_flags(value: u64) -> String {
+    format_flags(value, POLY_FLAG_NAMES)
 }
 
 /// .NET's `Enum.TryParse` for a `[Flags]` enum: a number, or names separated by
@@ -570,6 +575,20 @@ impl<T: Pod> NavmeshList<T> {
         let parts = self.list_parts.as_ref()?;
         let items: Vec<T> = parts.iter().filter_map(|p| p.items.as_deref()).flatten().copied().collect();
         (!items.is_empty()).then_some(items)
+    }
+
+    /// The item at `index` of the whole list (across its parts), to change in
+    /// place: the list keeps its parts as read.
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        let mut index = index;
+        for part in self.list_parts.iter_mut().flatten() {
+            let Some(items) = part.items.as_mut() else { continue };
+            if index < items.len() {
+                return items.get_mut(index);
+            }
+            index -= items.len();
+        }
+        None
     }
 
     /// `Rebuild`: the items split into parts of at most 16 KB.
@@ -1080,6 +1099,19 @@ mod tests {
         assert_eq!(parse_flags(Some("0"), EDGE_FLAG_NAMES), Some(0));
         assert_eq!(parse_flags(Some("Nope"), EDGE_FLAG_NAMES), None);
         assert_eq!(parse_flags(None, EDGE_FLAG_NAMES), None);
+    }
+
+    #[test]
+    fn list_items_change_in_place() {
+        let items: Vec<u16> = (0..20000).collect();
+        let mut list = NavmeshList::rebuild(&items);
+        assert_eq!(list.list_parts.as_ref().map(Vec::len), Some(3));
+        *list.get_mut(8192).unwrap() = 7;
+        *list.get_mut(19999).unwrap() = 9;
+        assert!(list.get_mut(20000).is_none());
+        let all = list.all_items().unwrap();
+        assert_eq!((all[8191], all[8192], all[19999]), (8191, 7, 9));
+        assert_eq!(list.list_parts.as_ref().map(Vec::len), Some(3));
     }
 
     #[test]

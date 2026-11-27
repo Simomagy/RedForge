@@ -108,14 +108,30 @@ navmeshes, occlude models (but through its mesh editor) or scenario points.
   quadtree and the polygons' boxes, but not adjacency, the box, the centroids,
   or polygon ids.
 - **C#**: showed and converted them, never edited them.
-- **App**: one part per render chunk of up to 65280 vertices, so a polygon
-  can't be picked today; the parsed navmesh is thrown away after making the
-  meshes.
-- **RedM**: a ynv of the same name in `stream` should replace the game's, as
-  in FiveM. **Not tested.**
+- **App**: one part per render chunk of up to 65280 vertices; a polygon is
+  picked on the CPU from the point the GPU pick hit (`Flat::polygon_at`), and
+  the selection and hover are drawn over the navmesh.
+- **RedM** (tested 2026-11-27, issue #2): a ynv of the same name in a
+  resource's `stream` replaces the game's. The client log's
+  `ResourceCache::AddEntry: Saved cache:v1:<sha1>` is the file's SHA-1,
+  fetched when the game first needs the cell. A file written by RedForge
+  loads, and the cell still joins its neighbours. A changed ynv needs a
+  reconnect: `restart` of the resource while connected ended in
+  `RAGE error: 0x1F045E58:441` from `RageHddReader` and a crash.
+  - `SwitchedOffForPeds` alone does not stop the paths scripts ask for
+    (`NAVMESH_REQUEST_PATH` went straight through); its effect on ambient peds
+    is untested.
+  - Cutting every edge between a set of polygons and the rest (both ways,
+    as the mesh's border: area 65535, polygon 0x7FFF) does: the path went
+    around, and the ped too.
+- **Done** (`rf-editor/src/navmesh.rs`, 2.7): navmeshes as documents
+  (`DocKey::Navmesh`, undo, project, autosave), polygons' flags, audio and
+  water depth, **Block** (the island above, plus switched off for peds) and
+  **Unblock** (the game's edges back). Edits are in place
+  (`NavmeshList::get_mut`): the lists, vertices and quadtree stay as read.
 - **Operations**, cheapest first:
   1. Polygon flags and attributes (switched off for peds, audio, water…):
-     nothing to rebuild. Needs picking polygons, and painting them.
+     nothing to rebuild. Done, with blocking by cutting edges.
   2. Moving vertices inside the cell: the box's Z, every vertex and link
      quantised again, the polygons' boxes and centroids, the quadtree; border
      vertices stay; the slope flags go stale.

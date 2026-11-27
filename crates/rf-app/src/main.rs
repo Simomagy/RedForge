@@ -13,6 +13,7 @@ mod hierarchy;
 mod instance;
 mod loading;
 mod map;
+mod navmesh_props;
 mod objects;
 mod project_pane;
 mod properties;

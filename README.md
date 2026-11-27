@@ -109,7 +109,7 @@ select it for its fields in Properties.
 | Entity | The map's entities (the default) |
 | Light | The entities' lights, picked by their reach |
 | Physics | The collisions around you, the world's and the entities', by material |
-| Navmesh | The navigation meshes around you |
+| Navmesh | The navigation meshes around you: select polygons to edit their flags, or block them off so no path goes in or out |
 | Skeleton | The bones of the entities that have one |
 | Occlusion | The ymaps' box occluders and occlude models |
 | Interior Instance | The interiors' rooms, portals and time cycle modifiers |

@@ -8,8 +8,15 @@
 //! normal and colour (`DisplayColour`), in meshes of at most [`MAX_VERTICES`]
 //! vertices (the C#'s `ShapeBuilder`). Each mesh is a part: the navmesh and
 //! its `PartChildren`.
+//!
+//! A navmesh open in the editor is drawn from its document, and again when
+//! it changes. Polygons are what's hovered and selected: the GPU pick finds the
+//! mesh and the point under the mouse, [`Navmesh::polygon_at`] the polygon
+//! there. The selected polygons and the hovered one are drawn over their
+//! navmesh, outlined.
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -23,6 +30,32 @@ use rf_render::HelperVertex;
 use super::shapes::Shapes;
 use super::{Collect, HelperKey, HelperPart, Mode, PartInfo};
 use crate::game::Game;
+
+/// The groups of a navmesh's helper keys (`source` is the navmesh's name hash).
+pub mod group {
+    /// One of its meshes; `index` is the mesh's.
+    pub const MESH: u32 = 0;
+    /// A polygon, what's hovered and selected; `index` is the polygon's.
+    pub const POLYGON: u32 = 1;
+    /// Its selected polygons, drawn over it.
+    pub const SELECTED: u32 = 2;
+    /// Its hovered polygon, drawn over it.
+    pub const HOVERED: u32 = 3;
+}
+
+/// The key of a navmesh's polygon.
+pub fn polygon_key(navmesh: u32, index: u32) -> HelperKey {
+    HelperKey { mode: Mode::Navmesh, source: navmesh, group: group::POLYGON, index }
+}
+
+/// How high over the navmesh the selection and the hover are drawn.
+const OVERLAY_LIFT: f32 = 0.04;
+
+/// Polygons with the flag "colour by flag" shows, and the others.
+const HIGHLIGHTED: [u8; 4] = [255, 205, 40, 255];
+const NOT_HIGHLIGHTED: [u8; 4] = [45, 45, 50, 255];
+/// Polygons switched off for peds (blocked ones are).
+const SWITCHED_OFF: [u8; 4] = [225, 30, 200, 255];
 
 /// `StreamNavmeshesRange`.
 const RANGE: f32 = 200.0;
@@ -60,6 +93,17 @@ fn cells(eye: Vec3) -> Vec<(i32, i32)> {
 /// The name of a grid cell's navmesh file (without its extension).
 fn file_name((x, y): (i32, i32)) -> String {
     format!("navmesh[{}][{}]", x * 3, y * 3)
+}
+
+/// A polygon's colour: with "colour by flag", whether it has the flag; else
+/// switched off for peds, or as the C# shows it.
+fn colour(p: &NavmeshPolygon, highlight: Option<u64>) -> [u8; 4] {
+    match highlight {
+        Some(flag) if p.flags() & flag == flag => HIGHLIGHTED,
+        Some(_) => NOT_HIGHLIGHTED,
+        None if p.flags() & poly_flags::SWITCHED_OFF_FOR_PEDS != 0 => SWITCHED_OFF,
+        None => display_colour(p),
+    }
 }
 
 /// `Rsc8NavmeshPolygon.DisplayColour`.
@@ -177,12 +221,12 @@ impl Builder {
 }
 
 /// `InitNavmesh`: the triangle meshes, then the line meshes.
-fn meshes(vertices: &[[f32; 3]], indices: &[u16], polygons: &[NavmeshPolygon]) -> Vec<Chunk> {
+fn meshes(vertices: &[[f32; 3]], indices: &[u16], polygons: &[NavmeshPolygon], highlight: Option<u64>) -> Vec<Chunk> {
     let mut tris = Builder::new(false);
     let mut lines = Builder::new(true);
     for poly in polygons {
         let count = poly.index_count() as usize;
-        let colour = display_colour(poly);
+        let colour = colour(poly, highlight);
         let n = normal(poly, vertices, indices);
         let corner = |i: usize| Vec3::from(poly.vertex(i, vertices, indices));
         match count {
@@ -247,36 +291,143 @@ fn fields(nm: &ynv::Navmesh) -> Vec<(String, String)> {
     ]
 }
 
-/// A navmesh file to read.
+/// What Properties shows of a polygon.
+fn polygon_fields(flat: &Flat, index: u32) -> Vec<(String, String)> {
+    let Some(p) = flat.polygons.get(index as usize) else { return Vec::new() };
+    let corners: Vec<Vec3> = flat.corners(p).collect();
+    let centre = corners.iter().sum::<Vec3>() / corners.len().max(1) as f32;
+    vec![
+        ("Polygon".into(), index.to_string()),
+        ("Corners".into(), corners.len().to_string()),
+        ("Centre".into(), v3(centre.to_array())),
+        ("Flags".into(), ynv::format_poly_flags(p.flags())),
+    ]
+}
+
+/// A navmesh's polygons on the CPU: for finding the one under the mouse, and
+/// drawing the selection.
+pub struct Flat {
+    vertices: Vec<[f32; 3]>,
+    indices: Vec<u16>,
+    polygons: Vec<NavmeshPolygon>,
+}
+
+impl Flat {
+    fn new(nm: &ynv::Navmesh) -> Option<Self> {
+        Some(Self { vertices: nm.vertex_positions()?, indices: nm.indices()?, polygons: nm.polygons()? })
+    }
+
+    fn corners<'a>(&'a self, p: &'a NavmeshPolygon) -> impl Iterator<Item = Vec3> + 'a {
+        (0..p.index_count() as usize).map(move |i| Vec3::from(p.vertex(i, &self.vertices, &self.indices)))
+    }
+
+    /// The polygon under a point of its surface: the one whose triangles
+    /// have the point inside (seen from above) and pass nearest it.
+    pub fn polygon_at(&self, point: Vec3) -> Option<u32> {
+        const MARGIN: f32 = 0.5;
+        let mut best: Option<(f32, u32)> = None;
+        for (i, p) in self.polygons.iter().enumerate() {
+            if p.index_count() < 3 {
+                continue;
+            }
+            let (min, max) = (Vec3::from(p.cell_aabb.min()), Vec3::from(p.cell_aabb.max()));
+            if point.x < min.x - 0.1 || point.x > max.x + 0.1 || point.y < min.y - 0.1 || point.y > max.y + 0.1 {
+                continue;
+            }
+            if point.z < min.z - MARGIN || point.z > max.z + MARGIN {
+                continue;
+            }
+            let c: Vec<Vec3> = self.corners(p).collect();
+            for t in 1..c.len() - 1 {
+                if let Some(z) = height_in_triangle(point, c[0], c[t], c[t + 1]) {
+                    let d = (z - point.z).abs();
+                    if d < MARGIN && best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, i as u32));
+                    }
+                }
+            }
+        }
+        best.map(|(_, i)| i)
+    }
+
+    /// A mesh of some polygons, a little over them.
+    fn overlay(&self, polygons: &[u32]) -> (Vec<HelperVertex>, Vec<u32>) {
+        let (mut vertices, mut indices) = (Vec::new(), Vec::new());
+        let lift = Vec3::Z * OVERLAY_LIFT;
+        for &i in polygons {
+            let Some(p) = self.polygons.get(i as usize).filter(|p| p.index_count() >= 3) else { continue };
+            let c: Vec<Vec3> = self.corners(p).collect();
+            let n = normal(p, &self.vertices, &self.indices);
+            for t in 1..c.len() - 1 {
+                for v in [c[0], c[t], c[t + 1]] {
+                    indices.push(vertices.len() as u32);
+                    vertices.push(HelperVertex::new(v + lift, n, [255; 4]));
+                }
+            }
+        }
+        (vertices, indices)
+    }
+}
+
+/// The height of the triangle `a b c` over `p` (seen from above), if `p` is in
+/// it.
+fn height_in_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let (v0, v1, v2) = ((b - a).truncate(), (c - a).truncate(), (p - a).truncate());
+    let d = v0.perp_dot(v1);
+    if d.abs() < 1e-9 {
+        return None;
+    }
+    let (u, v) = (v2.perp_dot(v1) / d, v0.perp_dot(v2) / d);
+    const E: f32 = -1e-4;
+    (u >= E && v >= E && u + v <= 1.0 - E).then_some(a.z + u * (b.z - a.z) + v * (c.z - a.z))
+}
+
+/// What a navmesh is drawn from: the editor's document (its data's address),
+/// or its file (0); and the flag "colour by flag" shows.
+type Built = (usize, Option<u64>);
+
+/// Where a navmesh to draw is.
+enum Data {
+    File(FileRef),
+    Doc(Arc<ynv::Navmesh>),
+}
+
+/// A navmesh to read and make meshes of.
 struct Job {
     version: u64,
     hash: u32,
-    file: FileRef,
+    data: Data,
+    built: Built,
+    owner: String,
 }
 
-/// A navmesh file read: its meshes, each with what Properties shows of it.
+/// A navmesh read: its meshes, each with what Properties shows of it.
 struct Loaded {
     version: u64,
     hash: u32,
+    built: Built,
     meshes: Vec<(Chunk, PartInfo)>,
+    flat: Option<Arc<Flat>>,
 }
 
-fn load(game: &Game, job: &Job) -> Vec<(Chunk, PartInfo)> {
-    let owner = game.fs.name(job.file);
-    let read = game.fs.extract_loose(job.file).map_err(rf_formats::Error::from).and_then(|d| ynv::read(&d));
-    let nm = match read {
-        Ok(nm) => nm,
-        Err(e) => {
-            log::warn!("{}: {e}", game.path(job.file));
-            return Vec::new();
+fn load(game: &Game, job: &Job) -> (Vec<(Chunk, PartInfo)>, Option<Arc<Flat>>) {
+    let nm = match &job.data {
+        Data::Doc(nm) => nm.clone(),
+        Data::File(file) => {
+            let read = game.fs.extract_loose(*file).map_err(rf_formats::Error::from).and_then(|d| ynv::read(&d));
+            match read {
+                Ok(nm) => Arc::new(nm),
+                Err(e) => {
+                    log::warn!("{}: {e}", game.path(*file));
+                    return (Vec::new(), None);
+                }
+            }
         }
     };
-    let (Some(vertices), Some(indices), Some(polygons)) = (nm.vertex_positions(), nm.indices(), nm.polygons()) else {
-        return Vec::new();
-    };
+    let Some(flat) = Flat::new(&nm) else { return (Vec::new(), None) };
     let navmesh = fields(&nm);
     let (mut triangles, mut lines) = (0, 0);
-    meshes(&vertices, &indices, &polygons)
+    let meshes = meshes(&flat.vertices, &flat.indices, &flat.polygons, job.built.1)
         .into_iter()
         .map(|chunk| {
             // The meshes after the first as `ShapeBuilder` names them, the
@@ -296,10 +447,11 @@ fn load(game: &Game, job: &Job) -> Vec<(Chunk, PartInfo)> {
             let mut fields = navmesh.clone();
             fields.push(("Polygons".into(), chunk.polygons.to_string()));
             fields.push((primitives.into(), count.to_string()));
-            let info = PartInfo { type_name: "Navmesh".into(), name, owner: owner.clone(), fields };
+            let info = PartInfo { type_name: "Navmesh".into(), name, owner: job.owner.clone(), fields };
             (chunk, info)
         })
-        .collect()
+        .collect();
+    (meshes, Some(Arc::new(flat)))
 }
 
 /// The workers reading navmesh files.
@@ -320,8 +472,9 @@ impl Loader {
                 loop {
                     // The queue goes with the loader: the workers stop.
                     let Ok(job) = queue.lock().unwrap().recv() else { return };
-                    let meshes = load(&game, &job);
-                    if done.send(Loaded { version: job.version, hash: job.hash, meshes }).is_err() {
+                    let (meshes, flat) = load(&game, &job);
+                    let loaded = Loaded { version: job.version, hash: job.hash, built: job.built, meshes, flat };
+                    if done.send(loaded).is_err() {
                         return;
                     }
                 }
@@ -341,6 +494,14 @@ enum State {
 
 struct Entry {
     state: State,
+    flat: Option<Arc<Flat>>,
+    /// The file's name, for labels.
+    owner: String,
+    /// What the meshes shown are of, and what's being made.
+    built: Option<Built>,
+    pending: Option<Built>,
+    /// The selection drawn over it: the polygons' signature, and the part.
+    selected: Option<(u64, HelperPart)>,
     last_used: Instant,
 }
 
@@ -351,6 +512,8 @@ pub struct Navmesh {
     /// The game data's version the files came from.
     version: u64,
     files: HashMap<u32, Entry>,
+    /// The hovered polygon drawn over its navmesh.
+    hovered: Option<(HelperKey, HelperPart)>,
 }
 
 impl Navmesh {
@@ -374,6 +537,12 @@ impl Navmesh {
                 continue;
             }
             let Some(entry) = self.files.get_mut(&loaded.hash) else { continue };
+            if entry.pending == Some(loaded.built) {
+                entry.pending = None;
+            }
+            entry.built = Some(loaded.built);
+            entry.flat = loaded.flat;
+            entry.selected = None;
             entry.state = if loaded.meshes.is_empty() {
                 State::Missing
             } else {
@@ -384,24 +553,124 @@ impl Navmesh {
         let now = Instant::now();
         let data = c.game.data();
         for cell in cells(c.eye) {
-            let hash = joaat(&file_name(cell));
-            let entry = self.files.entry(hash).or_insert_with(|| {
-                let state = match data.stream_entry("ynv", hash) {
-                    Some(file) => {
-                        let _ = loader.jobs.send(Job { version, hash, file });
-                        State::Loading
-                    }
-                    None => State::Missing,
-                };
-                Entry { state, last_used: now }
+            let name = file_name(cell);
+            let hash = joaat(&name);
+            let doc = c.editor.navmesh(hash).map(|d| d.root.clone());
+            let want: Built = (doc.as_ref().map_or(0, |d| Arc::as_ptr(d) as usize), c.highlight);
+            let entry = self.files.entry(hash).or_insert_with(|| Entry {
+                state: State::Loading,
+                flat: None,
+                owner: format!("{name}.ynv"),
+                built: None,
+                pending: None,
+                selected: None,
+                last_used: now,
             });
             entry.last_used = now;
+            if entry.built != Some(want) && entry.pending != Some(want) {
+                let data = match doc {
+                    Some(nm) => Some(Data::Doc(nm)),
+                    None => data.stream_entry("ynv", hash).map(Data::File),
+                };
+                match data {
+                    Some(data) => {
+                        if let Data::File(f) = &data {
+                            entry.owner = c.game.fs.name(*f);
+                        }
+                        let job = Job { version, hash, data, built: want, owner: entry.owner.clone() };
+                        let _ = loader.jobs.send(job);
+                        entry.pending = Some(want);
+                    }
+                    None => {
+                        entry.state = State::Missing;
+                        entry.built = Some(want);
+                    }
+                }
+            }
             if let State::Ready(parts) = &entry.state {
                 out.extend(parts.iter().cloned());
             }
+
+            // The selected polygons over it.
+            let Some(flat) = &entry.flat else { continue };
+            let mut selected: Vec<u32> = c
+                .selected
+                .iter()
+                .filter(|k| k.mode == Mode::Navmesh && k.group == group::POLYGON && k.source == hash)
+                .map(|k| k.index)
+                .collect();
+            if selected.is_empty() {
+                entry.selected = None;
+                continue;
+            }
+            selected.sort_unstable();
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            selected.hash(&mut h);
+            (Arc::as_ptr(flat) as usize).hash(&mut h);
+            let sig = h.finish();
+            if entry.selected.as_ref().is_none_or(|(s, _)| *s != sig) {
+                let key = HelperKey { mode: Mode::Navmesh, source: hash, group: group::SELECTED, index: 0 };
+                let info = PartInfo { type_name: "Polygons".into(), owner: entry.owner.clone(), ..Default::default() };
+                entry.selected = overlay(c, flat, &selected, key, info).map(|p| (sig, p));
+            }
+            if let Some((_, p)) = &entry.selected {
+                out.push(p.clone());
+            }
         }
-        self.files.retain(|_, e| matches!(e.state, State::Loading) || now.duration_since(e.last_used) < KEEP);
+        self.files.retain(|_, e| e.pending.is_some() || now.duration_since(e.last_used) < KEEP);
+
+        // The hovered polygon over its navmesh.
+        let hover = c.hover.filter(|k| k.mode == Mode::Navmesh && k.group == group::POLYGON);
+        match hover {
+            Some(k) if self.hovered.as_ref().is_some_and(|(h, _)| *h == k) => {}
+            Some(k) => {
+                self.hovered = self.files.get(&k.source).and_then(|e| {
+                    let key = HelperKey { group: group::HOVERED, ..k };
+                    let info = PartInfo { type_name: "Polygon".into(), owner: e.owner.clone(), ..Default::default() };
+                    overlay(c, e.flat.as_ref()?, &[k.index], key, info).map(|p| (k, p))
+                });
+            }
+            None => self.hovered = None,
+        }
+        if let Some((_, p)) = &self.hovered {
+            out.push(p.clone());
+        }
     }
+
+    /// The polygon of a navmesh under a point of its surface.
+    pub fn polygon_at(&self, navmesh: u32, point: Vec3) -> Option<HelperKey> {
+        let flat = self.files.get(&navmesh)?.flat.as_ref()?;
+        flat.polygon_at(point).map(|i| polygon_key(navmesh, i))
+    }
+
+    /// The hover label and Properties' fields of a polygon's key.
+    pub fn polygon_info(&self, key: HelperKey) -> Option<PartInfo> {
+        let e = self.files.get(&key.source)?;
+        let fields = polygon_fields(e.flat.as_ref()?, key.index);
+        Some(PartInfo { type_name: "Polygon".into(), name: key.index.to_string(), owner: e.owner.clone(), fields })
+    }
+}
+
+/// A part drawing some polygons over their navmesh.
+fn overlay(c: &Collect, flat: &Flat, polygons: &[u32], key: HelperKey, info: PartInfo) -> Option<HelperPart> {
+    let (vertices, indices) = flat.overlay(polygons);
+    if vertices.is_empty() {
+        return None;
+    }
+    let (min, max) = vertices.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), v| {
+        (lo.min(Vec3::from(v.position)), hi.max(Vec3::from(v.position)))
+    });
+    let mesh = c.gpu.renderer.create_helper_mesh(&c.gpu.ctx, &vertices, &indices, false);
+    let colour = if key.group == group::HOVERED { [255, 255, 255, 255] } else { [255, 150, 40, 255] };
+    Some(HelperPart {
+        key,
+        mesh: Arc::new(mesh),
+        transform: Mat4::IDENTITY,
+        colour,
+        centre: (min + max) * 0.5,
+        radius: (max - min).length() * 0.5,
+        info: Arc::new(info),
+    })
 }
 
 /// A navmesh's meshes on the GPU, as parts.
@@ -413,7 +682,7 @@ fn parts(c: &Collect, hash: u32, meshes: Vec<(Chunk, PartInfo)>) -> Vec<HelperPa
             let gpu = c.gpu;
             let mesh = gpu.renderer.create_helper_mesh(&gpu.ctx, &chunk.vertices, &chunk.indices, chunk.lines);
             HelperPart {
-                key: HelperKey { mode: Mode::Navmesh, source: hash, group: 0, index: i as u32 },
+                key: HelperKey { mode: Mode::Navmesh, source: hash, group: group::MESH, index: i as u32 },
                 mesh: Arc::new(mesh),
                 transform: Mat4::IDENTITY,
                 colour: [255; 4],
@@ -461,7 +730,7 @@ mod tests {
         let vertices = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
         let indices = [0, 1, 2, 3, 0, 1];
         let polys = [polygon(0, 4, 0), polygon(4, 2, 0)];
-        let m = meshes(&vertices, &indices, &polys);
+        let m = meshes(&vertices, &indices, &polys, None);
         assert_eq!(m.len(), 2);
         assert!(!m[0].lines && m[1].lines);
         assert_eq!((m[0].vertices.len(), m[0].polygons), (6, 1));
@@ -471,7 +740,43 @@ mod tests {
 
         // A new mesh before one reaches the limit.
         let polys = vec![polygon(0, 3, 0); MAX_VERTICES / 3];
-        let m = meshes(&vertices, &indices, &polys);
+        let m = meshes(&vertices, &indices, &polys, None);
         assert_eq!(m.iter().map(|c| c.polygons).collect::<Vec<_>>(), [MAX_VERTICES / 3 - 1, 1]);
+    }
+
+    #[test]
+    fn polygon_under_a_point() {
+        // Two squares side by side, the second a metre higher.
+        let vertices = vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [2.0, 0.0, 1.0],
+            [2.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ];
+        let indices = vec![0, 1, 2, 3, 4, 5, 6, 7];
+        let mut polygons = vec![polygon(0, 4, 0), polygon(4, 4, 0)];
+        polygons[0].cell_aabb = ynv::NavmeshAabb::new([0.0; 3], [1.0, 1.0, 0.0]);
+        polygons[1].cell_aabb = ynv::NavmeshAabb::new([1.0, 0.0, 1.0], [2.0, 1.0, 1.0]);
+        let flat = Flat { vertices, indices, polygons };
+        assert_eq!(flat.polygon_at(Vec3::new(0.3, 0.7, 0.0)), Some(0));
+        assert_eq!(flat.polygon_at(Vec3::new(1.5, 0.2, 1.0)), Some(1));
+        // Over the first, but far above it.
+        assert_eq!(flat.polygon_at(Vec3::new(0.5, 0.5, 3.0)), None);
+        assert_eq!(flat.polygon_at(Vec3::new(5.0, 5.0, 0.0)), None);
+        let (v, i) = flat.overlay(&[1]);
+        assert_eq!((v.len(), i.len()), (6, 6));
+        assert!((v[0].position[2] - (1.0 + OVERLAY_LIFT)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn colours_by_flag() {
+        let p = polygon(0, 3, poly_flags::PAVEMENT | poly_flags::SWITCHED_OFF_FOR_PEDS);
+        assert_eq!(colour(&p, None), SWITCHED_OFF);
+        assert_eq!(colour(&p, Some(poly_flags::PAVEMENT)), HIGHLIGHTED);
+        assert_eq!(colour(&p, Some(poly_flags::ROAD)), NOT_HIGHLIGHTED);
     }
 }

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use rf_formats::formats::meta::Meta;
 use serde::{Deserialize, Serialize};
 
-use crate::{DocKey, Editor, MapDoc};
+use crate::{DocKey, Editor, MapDoc, Root};
 
 /// Writes a file whole or not at all (a temporary file renamed over it),
 /// keeping the one it replaces as `<name>.bak`.
@@ -40,7 +40,7 @@ pub struct Autosave {
 /// A file in an autosave: which document, and the file in its folder.
 #[derive(Serialize, Deserialize)]
 pub struct Saved {
-    /// `ymap` or `ytyp`.
+    /// `ymap`, `ytyp` or `ynv`.
     pub kind: String,
     /// The ymap's file name, or the ytyp's path in the game's files.
     pub name: String,
@@ -70,6 +70,10 @@ impl Editor {
                     ("ymap", doc.file_name.clone(), self.map_bytes(n)?)
                 }
                 Some(DocKey::Types(f)) => ("ytyp", self.fs.path(f), self.types_bytes(f)?),
+                Some(DocKey::Navmesh(n)) => {
+                    let doc = self.navmesh(n).ok_or("no such navmesh")?;
+                    ("ynv", doc.file_name.clone(), self.navmesh_bytes(n)?)
+                }
                 None => continue,
             };
             let file = format!("{i}.{kind}");
@@ -89,8 +93,16 @@ impl Editor {
     pub fn restore_autosave(&mut self, dir: &Path) -> Result<usize, String> {
         let index = Autosave::read(dir).ok_or("no autosave there")?;
         let mut roots = Vec::new();
+        let mut navmeshes = Vec::new();
         for s in &index.files {
             let bytes = std::fs::read(dir.join(&s.file)).map_err(|e| format!("{}: {e}", s.name))?;
+            if s.kind == "ynv" {
+                let name = self.hashes.ensure(&s.name);
+                self.open_navmesh(name)?;
+                let nm = rf_formats::formats::ynv::read(&bytes).map_err(|e| format!("{}: {e}", s.name))?;
+                navmeshes.push((DocKey::Navmesh(name), Root::Navmesh(Arc::new(nm))));
+                continue;
+            }
             let mut header = Meta::read(&bytes).map_err(|e| format!("{}: {e}", s.name))?;
             let root = header.root.take().ok_or_else(|| format!("{}: no data", s.name))?;
             match s.kind.as_str() {
@@ -124,9 +136,12 @@ impl Editor {
                 _ => {}
             }
         }
-        let n = roots.len();
+        let n = roots.len() + navmeshes.len();
         if n > 0 {
-            self.commit("Restore unsaved changes", roots, Vec::new());
+            let mut all: Vec<(DocKey, Root)> = roots.into_iter().map(|(k, r)| (k, Root::Bag(Arc::new(r)))).collect();
+            all.extend(navmeshes);
+            self.selection.clear();
+            self.commit_roots("Restore unsaved changes", all);
         }
         Ok(n)
     }

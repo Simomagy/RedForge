@@ -84,7 +84,7 @@ fn convert_xml(hashes: &HashIndex, file: &Path) -> Result<PathBuf, String> {
 
 /// Files go in groups by what they are, as in the C#'s pane, with an icon
 /// for the group and one for its files; the last group takes everything else.
-const GROUPS: [(&str, &[&str], &str, &str); 7] = [
+const GROUPS: [(&str, &[&str], &str, &str); 8] = [
     ("Maps", &["ymap"], icon::MAP_TRIFOLD, icon::MAP_PIN),
     ("Archetypes", &["ytyp"], icon::STACK, icon::FILE_CODE),
     ("Models", &["ydr", "ydd", "yft"], icon::CUBE, icon::CUBE),
@@ -93,6 +93,7 @@ const GROUPS: [(&str, &[&str], &str, &str); 7] = [
     ("Other", &[], icon::FILES, icon::FILE),
     // Last, for the groups' numbers (kept for the folded ones) to stay.
     ("Animations", &["json"], icon::PERSON_ARMS_SPREAD, icon::PERSON_ARMS_SPREAD),
+    ("Navmeshes", &["ynv"], icon::FOOTPRINTS, icon::POLYGON),
 ];
 
 /// The group of what has none of its own.
@@ -410,7 +411,7 @@ impl ProjectPane {
             if ui.button(theme::icon_text(icon::FILE_PLUS, "Add files…")).on_hover_text(tip).clicked() {
                 let mut dialog = rfd::FileDialog::new().add_filter(
                     "Game files and their XML",
-                    &["ymap", "ytyp", "ydr", "ydd", "yft", "ytd", "ybn", "ymf", "xml", "json"],
+                    &["ymap", "ytyp", "ydr", "ydd", "yft", "ytd", "ybn", "ynv", "ymf", "xml", "json"],
                 );
                 if let Some(dir) = editor.project.as_ref().and_then(|p| p.dir()) {
                     dialog = dialog.set_directory(dir);

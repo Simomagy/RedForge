@@ -8,6 +8,25 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Added
+- The map's **Navmesh** selection mode edits the navigation meshes, the
+  game's own included: what's hovered and selected is a polygon now. A click
+  selects one, Ctrl+click adds or takes one, Shift+click adds, and Shift+drag
+  paints polygons into the selection (Shift+Ctrl+drag out); **Grow** adds the
+  polygons around it.
+- Properties has the selected polygons' flags (surface, peds, shelter),
+  audio and water depth, for all of them at once, with undo and redo. **Colour
+  by flag** shows where a flag is set, and selects every polygon with it.
+- **Block** keeps everyone out of the selected polygons: no path goes in or
+  out, for ambient peds, horses and scripted walks alike. For the ground
+  under a new building, or a street closed off. **Unblock** puts back the
+  game's edges. Blocked polygons show in magenta.
+- A changed navmesh goes in the project (as `navmesh[x][y].ynv`), and
+  exported it replaces the game's in RedM. Tested in game: a path that went
+  straight down Valentine's main street went around the blocked stretch.
+  RedM loads a changed navmesh when you connect, not when the resource is
+  restarted.
+
 ## [2.6.1] - 2026-11-26
 
 ### Added

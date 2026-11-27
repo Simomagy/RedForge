@@ -415,7 +415,18 @@ impl MapView {
         let Some(t) = &self.targets else { return false };
         let pick = gpu.renderer.pick(&gpu.ctx, t, t.width / 2, t.height / 2);
         if tools.mode != helpers::Mode::Entity {
-            let hit = pick.and_then(|p| self.drawn.helper(p.id));
+            let mut hit = pick.and_then(|p| self.drawn.helper(p.id));
+            // A navmesh's polygon there.
+            if let (Some(k), Some(p), Some((view, _))) = (hit, pick, &self.last_view)
+                && k.mode == helpers::Mode::Navmesh
+            {
+                hit = (p.depth > 0.0)
+                    .then(|| self.helpers.navmesh_polygon(k, view.unproject(glam::Vec2::ZERO, p.depth)))
+                    .flatten();
+                if let Some(k) = hit {
+                    let _ = editor.open_navmesh(k.source);
+                }
+            }
             tools.helper_selection = hit.into_iter().collect();
             return hit.is_some();
         }
@@ -701,7 +712,11 @@ impl MapView {
         if let Some(ed) = editor.as_deref_mut() {
             gizmo = tools.gizmo(ui, &response, ed, &camera, self.camera.fov_y, rect);
         }
-        self.controls(ui, &response, dt, gizmo);
+        // Shift+drag paints navmesh polygons into the selection: not a look around.
+        let painting = tools.mode == helpers::Mode::Navmesh
+            && ui.input(|i| i.modifiers.shift)
+            && response.dragged_by(egui::PointerButton::Primary);
+        self.controls(ui, &response, dt, gizmo || painting);
         let camera = self.camera.camera_view(w.max(1) as f32 / h.max(1) as f32);
         let has_keys = (response.hovered() || response.has_focus()) && !ui.ctx().text_edit_focused();
         if let Some(ed) = editor.as_deref_mut()
@@ -878,6 +893,10 @@ impl MapView {
                 gpu,
                 game: &self.game,
                 world: &ed.world,
+                editor: ed,
+                selected: &tools.helper_selection,
+                hover: tools.hover_helper,
+                highlight: tools.navmesh_highlight,
                 eye: camera.eye,
                 entities: &visible_models,
             };
@@ -897,10 +916,10 @@ impl MapView {
                     g.entry(key).or_insert_with(|| (p.mesh.clone(), Vec::new(), seen)).1.push(inst)
                 };
                 add(&mut helper_groups);
-                let selected = tools.helper_selection.contains(&p.key);
+                let selected = p.key.outline() == Some(1) || tools.helper_selection.contains(&p.key);
                 if selected {
                     add(&mut helper_outlined[1]);
-                } else if tools.hover_helper == Some(p.key) {
+                } else if p.key.outline() == Some(0) || tools.hover_helper == Some(p.key) {
                     add(&mut helper_outlined[0]);
                 }
             }
@@ -1111,6 +1130,34 @@ impl MapView {
         let targets = self.targets.as_ref().unwrap();
         let mouse = response.hover_pos().map(|p| (p, rect));
         tools.hover_pick(gpu, targets, &self.drawn, camera, mouse);
+        // A navmesh is hovered by polygon: the one under the point picked.
+        if let Some(k) = tools.hover_helper
+            && k.mode == helpers::Mode::Navmesh
+            && k.group != helpers::navmesh::group::POLYGON
+        {
+            tools.hover_helper = tools.hover_point.and_then(|p| self.helpers.navmesh_polygon(k, p));
+        }
+        // Shift+drag paints the hovered polygons in (with Ctrl, out).
+        if tools.mode == helpers::Mode::Navmesh
+            && ui.input(|i| i.modifiers.shift)
+            && response.dragged_by(egui::PointerButton::Primary)
+            && let Some(k) = tools.hover_helper
+        {
+            let remove = ui.input(|i| i.modifiers.command);
+            let selection = &mut tools.helper_selection;
+            match (selection.iter().position(|s| *s == k), remove) {
+                (None, false) => {
+                    selection.push(k);
+                    if let Err(e) = editor.open_navmesh(k.source) {
+                        tools.fail(e);
+                    }
+                }
+                (Some(i), true) => {
+                    selection.remove(i);
+                }
+                _ => {}
+            }
+        }
 
         // A click (no drag): select what's under it, or place there.
         let clicked = (response.clicked() || response.secondary_clicked()) && !tools.is_dragging();
@@ -1135,20 +1182,39 @@ impl MapView {
             } else if tools.tool == Tool::Place {
                 tools.tool = Tool::Select; // a right click leaves placing, as in the C#
             } else if tools.mode != helpers::Mode::Entity {
-                // The mode's helpers are what's selected.
-                let hit = pick.and_then(|p| self.drawn.helper(p.id));
-                let add = ui.input(|i| i.modifiers.command);
+                // The mode's helpers are what's selected; a navmesh's polygons.
+                let hit = pick.and_then(|p| {
+                    let k = self.drawn.helper(p.id)?;
+                    match k.mode {
+                        helpers::Mode::Navmesh => {
+                            (p.depth > 0.0).then(|| self.helpers.navmesh_polygon(k, camera.unproject(ndc, p.depth)))?
+                        }
+                        _ => Some(k),
+                    }
+                });
+                let (toggle, add) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+                if let Some(k) = hit
+                    && k.mode == helpers::Mode::Navmesh
+                    && let Err(e) = editor.open_navmesh(k.source)
+                {
+                    tools.fail(e);
+                }
                 let selection = &mut tools.helper_selection;
-                match (hit, add) {
-                    (Some(k), true) => match selection.iter().position(|s| *s == k) {
+                match (hit, toggle, add) {
+                    (Some(k), true, _) => match selection.iter().position(|s| *s == k) {
                         Some(i) => {
                             selection.remove(i);
                         }
                         None => selection.push(k),
                     },
-                    (Some(k), false) => *selection = vec![k],
-                    (None, false) => selection.clear(),
-                    (None, true) => {}
+                    (Some(k), false, true) => {
+                        if !selection.contains(&k) {
+                            selection.push(k);
+                        }
+                    }
+                    (Some(k), false, false) => *selection = vec![k],
+                    (None, false, false) => selection.clear(),
+                    (None, _, _) => {}
                 }
                 if hit.is_some() && !editor.selection().is_empty() {
                     editor.select(Vec::new());
@@ -1177,7 +1243,7 @@ impl MapView {
         // The hovered entity's name under the mouse (the C#'s
         // `Editor.HoverNameLabel` "Below"), with a shadow; a helper's owner and name.
         let hovered = match (tools.hover, tools.hover_helper) {
-            (_, Some(k)) => self.helpers.parts.iter().find(|p| p.key == k).map(|p| p.info.label()),
+            (_, Some(k)) => self.helpers.info(k).map(|i| i.label()),
             (Some(id), None) => editor.world.entity(id).map(|e| {
                 let name = editor.hashes().name(e.archetype);
                 match id.batch_instance() {

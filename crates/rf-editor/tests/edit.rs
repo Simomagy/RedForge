@@ -434,3 +434,76 @@ fn occluders_move_delete_undo_and_save() {
     }
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// A stretch of Valentine's main street blocked off, as the in-game test had
+/// it: undo, saving into a project, opening it again and unblocking.
+#[test]
+fn navmesh_block_save_and_unblock() {
+    use rf_editor::PolyRef;
+    use rf_editor::navmesh::neighbours;
+    let Some(mut ed) = editor() else { return };
+    let name = rf_formats::hash::joaat("navmesh[312][333]");
+    let game = ed.open_navmesh(name).unwrap().root.clone();
+    assert!(ed.navmesh(name).unwrap().can_unblock());
+
+    // The polygons whose centre is in the stretch.
+    let (verts, idx, polys) = (game.vertex_positions().unwrap(), game.indices().unwrap(), game.polygons().unwrap());
+    let set: Vec<PolyRef> = polys
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| {
+            let n = p.index_count() as usize;
+            n >= 3 && {
+                let c = (0..n).map(|i| Vec3::from(p.vertex(i, &verts, &idx))).sum::<Vec3>() / n as f32;
+                (-286.0..=-276.0).contains(&c.x) && (786.0..=800.0).contains(&c.y)
+            }
+        })
+        .map(|(i, _)| PolyRef { navmesh: name, index: i as u32 })
+        .collect();
+    assert_eq!(set.len(), 126);
+    let outside = ed.navmesh_neighbours(&set);
+    assert!(!outside.is_empty());
+
+    // Blocked: nothing inside has a neighbour outside, and the other way round.
+    assert_eq!(ed.block_polygons(&set).unwrap(), 86);
+    let joined = |ed: &Editor| {
+        let nm = &ed.navmesh(name).unwrap().root;
+        let (p, e) = (nm.polygons().unwrap(), nm.edges().unwrap());
+        let inside: std::collections::HashSet<u32> = set.iter().map(|r| r.index).collect();
+        (0..p.len() as u32)
+            .filter(|i| neighbours(nm, &p, &e, *i).iter().any(|q| inside.contains(i) != inside.contains(q)))
+            .count()
+    };
+    assert_eq!(joined(&ed), 0);
+    assert!(ed.navmesh_neighbours(&set).is_empty());
+    assert!(
+        ed.navmesh_polygon(set[0]).unwrap().flags() & rf_formats::formats::ynv::poly_flags::SWITCHED_OFF_FOR_PEDS != 0
+    );
+    assert!(ed.undo().is_some());
+    assert!(Arc::ptr_eq(&ed.navmesh(name).unwrap().root, &game));
+    assert!(ed.redo().is_some());
+    assert_eq!(joined(&ed), 0);
+
+    // Saved with the project, and opened again.
+    let dir = tempfile::tempdir().unwrap();
+    let proj = dir.path().join("nav.rfproj");
+    ed.new_project(&proj).unwrap();
+    assert!(ed.has_unsaved());
+    assert!(ed.save_all().unwrap().is_empty());
+    let file = dir.path().join("navmesh[312][333].ynv");
+    assert!(file.exists());
+    ed.close_project();
+    assert!(ed.navmesh(name).is_none());
+    let problems = ed.open_project(&proj).unwrap();
+    assert!(problems.is_empty(), "{problems:?}");
+    let entries = ed.project_entries();
+    assert_eq!((entries.len(), entries[0].name.as_str(), entries[0].dirty), (1, "navmesh[312][333].ynv", false));
+    assert_eq!(joined(&ed), 0);
+
+    // Unblocked: the game's edges and flags again.
+    assert_eq!(ed.unblock_polygons(&set).unwrap(), 86);
+    let nm = ed.navmesh(name).unwrap().root.clone();
+    assert_eq!(nm.edges(), game.edges());
+    assert_eq!(nm.polygons(), game.polygons());
+    assert!(ed.has_unsaved());
+}

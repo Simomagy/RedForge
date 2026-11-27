@@ -56,3 +56,42 @@ fn navmeshes_round_trip_through_xml() {
     }
     assert!(vehicles > 0 && with_links > 0 && flat > 0, "{vehicles} vehicles, {with_links} with links, {flat} flat");
 }
+
+/// A navmesh changed in place (polygon flags, an edge) and written reads back
+/// with those changes and nothing else.
+#[test]
+fn navmeshes_change_in_place() {
+    let Some((fs, _)) = open() else { return };
+    let f = fs.find("levels_1.rpf/levels/rdr3/navmeshes3.rpf/navmesh[312][333].ynv").expect("Valentine's navmesh");
+    let nm = ynv::read(&fs.extract_loose(f).unwrap()).unwrap();
+    let mut edited = nm.clone();
+    let polys = edited.polygons.as_mut().unwrap();
+    let p = polys.get_mut(1234).unwrap();
+    p.set_flags(p.flags() | ynv::poly_flags::SWITCHED_OFF_FOR_PEDS);
+    let mut e = *edited.edges.as_ref().unwrap().all_items().unwrap().get(77).unwrap();
+    e.set_poly_id1(0x7FFF);
+    e.set_poly_id2(0x7FFF);
+    *edited.edges.as_mut().unwrap().get_mut(77).unwrap() = e;
+
+    let again = ynv::read(&ynv::write(&edited)).unwrap();
+    let (before, after) = (nm.polygons().unwrap(), again.polygons().unwrap());
+    assert_eq!(before.len(), after.len());
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        if i == 1234 {
+            assert_eq!(a.flags(), b.flags() | ynv::poly_flags::SWITCHED_OFF_FOR_PEDS);
+            assert_eq!(a.data1 & !0x1F_FFFF, b.data1 & !0x1F_FFFF);
+        } else {
+            assert_eq!(a, b, "polygon {i}");
+        }
+    }
+    let (before, after) = (nm.edges().unwrap(), again.edges().unwrap());
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        if i == 77 {
+            assert_eq!((a.poly_id1(), a.poly_id2(), a.area_id1()), (0x7FFF, 0x7FFF, b.area_id1()));
+        } else {
+            assert_eq!(a, b, "edge {i}");
+        }
+    }
+    assert_eq!(again.vertex_positions(), nm.vertex_positions());
+    assert_eq!(again.quad_tree, nm.quad_tree);
+}

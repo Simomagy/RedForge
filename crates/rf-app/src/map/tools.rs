@@ -57,6 +57,9 @@ pub struct Tools {
     pub mode: Mode,
     pub hover_helper: Option<HelperKey>,
     pub helper_selection: Vec<HelperKey>,
+    /// "Colour by flag" in "Navmesh" mode: the polygons with these flags
+    /// stand out.
+    pub navmesh_highlight: Option<u64>,
     /// The selected helpers as last drawn, for Properties.
     pub selected_parts: Vec<HelperPart>,
     /// Helpers shown elsewhere while they're dragged: each one's change from
@@ -179,6 +182,7 @@ impl Default for Tools {
                 .unwrap_or_default(),
             hover_helper: None,
             helper_selection: Vec::new(),
+            navmesh_highlight: None,
             selected_parts: Vec::new(),
             helper_preview: Vec::new(),
             focus: false,

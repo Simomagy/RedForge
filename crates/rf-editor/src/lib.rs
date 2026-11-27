@@ -26,6 +26,7 @@ pub mod batches;
 pub mod interior;
 pub mod lod;
 pub mod lodlights;
+pub mod navmesh;
 pub mod occlusion;
 pub mod placement;
 pub mod probe;
@@ -44,6 +45,7 @@ use rf_formats::rpf8::{FileRef, Rpf8FileSystem};
 use rf_game::GameData;
 pub use rf_world::{EntityId, World};
 
+pub use crate::navmesh::{NavmeshDoc, PolyRef};
 pub use crate::occlusion::{OccluderId, OccluderKind};
 pub use crate::placement::Placement;
 pub use crate::project::Project;
@@ -127,10 +129,19 @@ pub enum DocKey {
     Map(u32),
     /// A ytyp.
     Types(FileRef),
+    /// A navmesh (ynv), by name hash.
+    Navmesh(u32),
+}
+
+/// A file's data, shared between the document and the undo steps.
+#[derive(Clone)]
+pub(crate) enum Root {
+    Bag(Arc<DataBag>),
+    Navmesh(Arc<rf_formats::formats::ynv::Navmesh>),
 }
 
 /// A file's root before and after a step; `None` when it didn't exist.
-type DocChange = (DocKey, Option<Arc<DataBag>>, Option<Arc<DataBag>>);
+type DocChange = (DocKey, Option<Root>, Option<Root>);
 
 /// A file of the project, for showing it.
 #[derive(Clone, Debug, PartialEq)]
@@ -174,6 +185,7 @@ pub struct Editor {
     data_changed: bool,
     maps: HashMap<u32, MapDoc>,
     types: HashMap<FileRef, TypesDoc>,
+    navmeshes: HashMap<u32, navmesh::NavmeshDoc>,
     selection: Vec<EntityId>,
     undo: Vec<Step>,
     redo: Vec<Step>,
@@ -206,6 +218,7 @@ impl Editor {
             data_changed: false,
             maps: HashMap::new(),
             types: HashMap::new(),
+            navmeshes: HashMap::new(),
             selection: Vec::new(),
             undo: Vec::new(),
             redo: Vec::new(),
@@ -383,11 +396,21 @@ impl Editor {
         }
     }
 
-    fn apply(&mut self, key: DocKey, root: Option<Arc<DataBag>>) {
+    fn apply(&mut self, key: DocKey, root: Option<Root>) {
         match (key, root) {
-            (DocKey::Map(name), root) => self.apply_map(name, root),
-            (DocKey::Types(file), Some(root)) => self.apply_types(file, root),
-            (DocKey::Types(_), None) => {}
+            (DocKey::Map(name), Some(Root::Bag(root))) => self.apply_map(name, Some(root)),
+            (DocKey::Map(name), None) => self.apply_map(name, None),
+            (DocKey::Types(file), Some(Root::Bag(root))) => self.apply_types(file, root),
+            (DocKey::Navmesh(name), Some(Root::Navmesh(root))) => self.apply_navmesh(name, root),
+            _ => {}
+        }
+    }
+
+    /// A file's data now, as an undo step keeps it.
+    fn doc_root(&self, key: DocKey) -> Option<Root> {
+        match key {
+            DocKey::Navmesh(name) => self.navmeshes.get(&name).map(|n| Root::Navmesh(n.root.clone())),
+            _ => self.root(key).cloned().map(Root::Bag),
         }
     }
 
@@ -395,6 +418,7 @@ impl Editor {
         match key {
             DocKey::Map(name) => self.map(name).map(|m| &m.root),
             DocKey::Types(file) => self.types.get(&file).map(|t| &t.root),
+            DocKey::Navmesh(_) => None,
         }
     }
 
@@ -429,7 +453,7 @@ impl Editor {
         self.apply_map(name, Some(root.clone()));
         self.push(Step {
             label: "New ymap".into(),
-            docs: vec![(DocKey::Map(name), None, Some(root))],
+            docs: vec![(DocKey::Map(name), None, Some(Root::Bag(root)))],
             selection: [before.clone(), before],
         });
         self.target = Some(name);
@@ -497,6 +521,11 @@ impl Editor {
                     t.in_project = true;
                 }
             }
+            DocKey::Navmesh(name) => {
+                if let Some(n) = self.navmeshes.get_mut(&name) {
+                    n.in_project = true;
+                }
+            }
         }
     }
 
@@ -527,6 +556,7 @@ impl Editor {
             self.apply_types(file, original);
             self.types.remove(&file);
         }
+        self.navmeshes.clear();
         self.project = None;
         self.assets.clear();
         self.refresh_data();
@@ -574,6 +604,7 @@ impl Editor {
             let result = match project::extension(f).as_str() {
                 "ymap" => self.load_map_file(f),
                 "ytyp" => self.load_types_file(f),
+                "ynv" => self.load_navmesh_file(f),
                 _ => Err(String::new()),
             };
             match result {
@@ -652,6 +683,14 @@ impl Editor {
                 dirty: t.is_dirty(),
             });
         }
+        for n in self.navmeshes.values().filter(|n| n.in_project) {
+            out.push(ProjectEntry {
+                name: format!("{}.ynv", n.file_name),
+                doc: Some(DocKey::Navmesh(n.name)),
+                path: n.path.clone(),
+                dirty: n.is_dirty(),
+            });
+        }
         for f in &self.assets {
             let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
             out.push(ProjectEntry { name, doc: None, path: Some(f.clone()), dirty: false });
@@ -669,6 +708,7 @@ impl Editor {
         let (path, name) = match doc {
             DocKey::Map(n) => self.maps.get(&n).map(|m| (m.path.clone(), format!("{}.ymap", m.file_name)))?,
             DocKey::Types(f) => self.types.get(&f).map(|t| (t.path.clone(), format!("{}.ytyp", t.file_name)))?,
+            DocKey::Navmesh(n) => self.navmeshes.get(&n).map(|d| (d.path.clone(), format!("{}.ynv", d.file_name)))?,
         };
         path.or_else(|| Some(self.project.as_ref()?.dir()?.join(name)))
     }
@@ -677,6 +717,7 @@ impl Editor {
         match doc {
             DocKey::Map(n) => self.save_map(n, path)?,
             DocKey::Types(f) => self.save_types(f, path)?,
+            DocKey::Navmesh(n) => self.save_navmesh(n, path)?,
         }
         self.save_project_file()
     }
@@ -699,6 +740,7 @@ impl Editor {
                 Some(path) => match doc {
                     DocKey::Map(n) => self.save_map(n, &path)?,
                     DocKey::Types(f) => self.save_types(f, &path)?,
+                    DocKey::Navmesh(n) => self.save_navmesh(n, &path)?,
                 },
                 None => homeless.push(doc),
             }
@@ -859,6 +901,9 @@ impl Editor {
                     self.apply_types(file, original);
                     self.types.remove(&file);
                 }
+            }
+            Some(DocKey::Navmesh(name)) => {
+                self.navmeshes.remove(&name);
             }
             None => self.assets.retain(|f| Some(f) != entry.path.as_ref()),
         }
@@ -1164,10 +1209,20 @@ impl Editor {
 
     /// Records a step changing files to `roots`, and applies it.
     fn commit(&mut self, label: &str, roots: Vec<(DocKey, DataBag)>, selection: Vec<EntityId>) {
+        let roots = roots.into_iter().map(|(k, r)| (k, Root::Bag(Arc::new(r)))).collect();
+        self.commit_with_selection(label, roots, selection);
+    }
+
+    /// [`Editor::commit`] for files of any kind, keeping the selection.
+    pub(crate) fn commit_roots(&mut self, label: &str, roots: Vec<(DocKey, Root)>) {
+        let selection = self.selection.clone();
+        self.commit_with_selection(label, roots, selection);
+    }
+
+    fn commit_with_selection(&mut self, label: &str, roots: Vec<(DocKey, Root)>, selection: Vec<EntityId>) {
         let mut docs = Vec::new();
-        for (key, root) in roots {
-            let before = self.root(key).cloned();
-            let after = Arc::new(root);
+        for (key, after) in roots {
+            let before = self.doc_root(key);
             self.apply(key, Some(after.clone()));
             self.adopt(key);
             docs.push((key, before, Some(after)));

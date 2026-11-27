@@ -10,7 +10,7 @@ mod amv;
 mod entities;
 mod fields;
 mod maps;
-mod navmesh;
+pub mod navmesh;
 pub(crate) mod physics;
 mod scenario;
 pub mod shapes;
@@ -81,7 +81,9 @@ impl Mode {
             Mode::Entity => "Select the map's entities",
             Mode::Light => "Select the entities' lights",
             Mode::Physics => "The collisions: the world's and the entities'",
-            Mode::Navmesh => "The navigation meshes",
+            Mode::Navmesh => {
+                "The navigation meshes: select polygons to edit their flags, or Block them so that no path goes in or out"
+            }
             Mode::Skeleton => "The skeletons of the entities that have one",
             Mode::Occlusion => {
                 "The ymaps' box occluders and occlude models: move, rotate and scale them with the gizmo, Delete removes them"
@@ -104,6 +106,19 @@ pub struct HelperKey {
     /// The kind of part in its source (each source numbers its own).
     pub group: u32,
     pub index: u32,
+}
+
+impl HelperKey {
+    /// Whether the part is outlined whatever the hover and the selection are,
+    /// as hovered (0) or selected (1): what's drawn over a navmesh to show
+    /// its hovered and selected polygons.
+    pub fn outline(&self) -> Option<usize> {
+        match (self.mode, self.group) {
+            (Mode::Navmesh, navmesh::group::HOVERED) => Some(0),
+            (Mode::Navmesh, navmesh::group::SELECTED) => Some(1),
+            _ => None,
+        }
+    }
 }
 
 /// What Properties shows of a part.
@@ -158,6 +173,13 @@ pub struct Collect<'a> {
     pub gpu: &'a Gpu,
     pub game: &'a Arc<Game>,
     pub world: &'a rf_world::World,
+    /// The documents open: navmeshes are drawn from them.
+    pub editor: &'a rf_editor::Editor,
+    /// The selected and hovered helpers, for the modes that draw them.
+    pub selected: &'a [HelperKey],
+    pub hover: Option<HelperKey>,
+    /// "Colour by flag" of the navmeshes: polygons with these flags stand out.
+    pub highlight: Option<u64>,
     /// The camera, which the streamed modes load around.
     pub eye: Vec3,
     /// With [`Mode::wants_models`]: the entities in view.
@@ -193,6 +215,21 @@ impl Helpers {
             Mode::Entity => {}
         }
         &self.parts
+    }
+
+    /// The navmesh polygon under a point of a navmesh's surface (`key` is any
+    /// of its parts).
+    pub fn navmesh_polygon(&self, key: HelperKey, point: Vec3) -> Option<HelperKey> {
+        (key.mode == Mode::Navmesh).then(|| self.navmesh.polygon_at(key.source, point))?
+    }
+
+    /// What Properties and the hover label show of a helper: its part's, or a
+    /// navmesh polygon's.
+    pub fn info(&self, key: HelperKey) -> Option<Arc<PartInfo>> {
+        if key.mode == Mode::Navmesh && key.group == navmesh::group::POLYGON {
+            return self.navmesh.polygon_info(key).map(Arc::new);
+        }
+        self.parts.iter().find(|p| p.key == key).map(|p| p.info.clone())
     }
 
     /// The parts of the last collect with these keys.
