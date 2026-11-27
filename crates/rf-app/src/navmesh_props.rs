@@ -148,6 +148,92 @@ fn highlight_ui(ui: &mut egui::Ui, tools: &mut Tools) {
     .on_hover_text("Polygons with the flag in yellow, the others dark");
 }
 
+/// "Make from collisions": the navmesh of the box around the selected
+/// polygons made again, and its settings.
+fn make_ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, polys: &[PolyRef], error: &mut Option<String>) {
+    use rf_editor::navgen::stitch::Region;
+    ui.add_space(4.0);
+    let tip = "Make the navmesh of the box around the selected polygons (2 m wider) again, from the collisions \
+               there: the ground, the buildings, the interiors and the models of the objects around (doors \
+               and gates left out). The polygons around are cut to fit and joined to it, special links follow, \
+               and the flags the collision doesn't say (pavement, road...) come from the polygons that were \
+               there. For a custom interior or a new building: select the ground around it first. The box must \
+               stay inside one navmesh cell.";
+    ui.horizontal(|ui| {
+        if ui.button("Make from collisions").on_hover_text(tip).clicked() {
+            let corners: Vec<glam::Vec3> =
+                polys.iter().filter_map(|p| editor.navmesh_polygon_corners(*p)).flatten().collect();
+            if corners.is_empty() {
+                return;
+            }
+            let (lo, hi) = corners.iter().fold((glam::Vec3::MAX, glam::Vec3::MIN), |(l, h), c| (l.min(*c), h.max(*c)));
+            let region = Region {
+                min: lo.truncate() - glam::Vec2::splat(2.0),
+                max: hi.truncate() + glam::Vec2::splat(2.0),
+                z_min: lo.z - 3.0,
+                z_max: hi.z + 12.0,
+            };
+            match editor.generate_navmesh(region, &tools.navgen) {
+                Ok(g) => {
+                    let s = &g.stitched;
+                    tools.say(format!(
+                        "{}: {} polygons made from {} collision triangles, {} cut to fit, {} special links moved",
+                        g.navmesh,
+                        s.added,
+                        g.triangles,
+                        s.pieces,
+                        s.links_moved + g.neighbour_links
+                    ));
+                    *error = (s.links_dropped + g.neighbour_links_lost > 0).then(|| {
+                        format!(
+                            "{} special links found no polygon at their end any more",
+                            s.links_dropped + g.neighbour_links_lost
+                        )
+                    });
+                    // The navmesh's polygons are numbered anew.
+                    let cell = rf_formats::hash::joaat(&g.navmesh);
+                    tools.helper_selection.retain(|k| k.source != cell);
+                }
+                Err(e) => *error = Some(e),
+            }
+        }
+    });
+    egui::CollapsingHeader::new("Making settings").id_salt("navgen-settings").show(ui, |ui| {
+        let s = &mut tools.navgen;
+        egui::Grid::new("navgen-grid").num_columns(2).show(ui, |ui| {
+            let row = |ui: &mut egui::Ui,
+                       label: &str,
+                       tip: &str,
+                       v: &mut f32,
+                       range: std::ops::RangeInclusive<f32>,
+                       unit: &str| {
+                ui.label(label).on_hover_text(tip);
+                ui.add(DragValue::new(v).range(range).speed(0.01).suffix(unit).max_decimals(2));
+                ui.end_row();
+            };
+            row(
+                ui,
+                "Distance from walls",
+                "How far from walls the navmesh stays",
+                &mut s.agent_radius,
+                0.1..=1.5,
+                " m",
+            );
+            row(ui, "Headroom", "The height a ped needs over it", &mut s.agent_height, 0.5..=4.0, " m");
+            row(ui, "Highest step", "The highest step peds walk up", &mut s.max_climb, 0.0..=2.0, " m");
+            row(ui, "Steepest slope", "The steepest ground peds walk on", &mut s.max_slope, 10.0..=80.0, "°");
+            row(ui, "Detail", "The voxels' size: smaller is finer and slower", &mut s.cell_size, 0.05..=0.5, " m");
+        });
+        if ui
+            .small_button("As the game")
+            .on_hover_text("The settings that came closest to the game's navmeshes (#6)")
+            .clicked()
+        {
+            *s = Default::default();
+        }
+    });
+}
+
 /// The selected polygons' properties. Returns false when none are selected.
 pub fn ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, error: &mut Option<String>) -> bool {
     let polys = selected(tools);
@@ -231,6 +317,7 @@ pub fn ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, error: &mut
         }
     });
     view_ui(ui, tools);
+    make_ui(ui, editor, tools, &polys, error);
 
     // The flags.
     let mut set = 0u64;

@@ -8,8 +8,11 @@ authors.workspace = true
 
 [dependencies]
 glam = "0.34.2"
+# rerecast's own glam
+glam033 = { package = "glam", version = "0.33" }
 log = "0.4.35"
 rayon = "1.12.0"
+rerecast = { version = "1.0.0", default-features = false, features = ["std"] }
 rf-formats.workspace = true
 rf-game = { path = "../rf-game" }
 rf-world = { path = "../rf-world" }

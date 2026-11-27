@@ -510,3 +510,106 @@ fn navmesh_block_save_and_unblock() {
     assert_eq!(nm.special_links_inds, game.special_links_inds);
     assert!(ed.has_unsaved());
 }
+
+/// A box of Valentine's main street made again from its collision: still
+/// walkable across, joined both ways, about as much ground, and undone.
+#[test]
+fn navmesh_generated_in_a_box() {
+    use rf_editor::navgen::{Settings, stitch::Region};
+    use rf_formats::formats::ynv;
+    let Some(mut ed) = editor() else { return };
+    let at = [-275.0, 790.0, 118.0];
+    settle(&mut ed, at);
+    let name = rf_formats::hash::joaat("navmesh[312][333]");
+    let old = ed.open_navmesh(name).unwrap().root.clone();
+    let region =
+        Region { min: glam::Vec2::new(-285.0, 780.0), max: glam::Vec2::new(-265.0, 800.0), z_min: 110.0, z_max: 135.0 };
+    let started = Instant::now();
+    let report = ed.generate_navmesh(region, &Settings::default()).unwrap();
+    let s = &report.stitched;
+    eprintln!(
+        "{} triangles, {} removed, {} pieces, {} added, links {} moved {} dropped, next cells' links {} moved {} lost, in {:?}",
+        report.triangles,
+        s.removed,
+        s.pieces,
+        s.added,
+        s.links_moved,
+        s.links_dropped,
+        report.neighbour_links,
+        report.neighbour_links_lost,
+        started.elapsed()
+    );
+    assert!(report.triangles > 1000);
+    assert!(report.stitched.added > 20 && report.stitched.removed > 10);
+    let nm = ed.navmesh(name).unwrap().root.clone();
+
+    // Joined both ways, every index in range.
+    let (p, e) = (nm.polygons().unwrap(), nm.edges().unwrap());
+    for (i, poly) in p.iter().enumerate() {
+        for k in 0..poly.index_count() as usize {
+            let q = e[poly.index_id as usize + k].poly_id1();
+            if q != 0x7FFF {
+                let back = &p[q as usize];
+                assert!(
+                    (0..back.index_count() as usize).any(|j| e[back.index_id as usize + j].poly_id1() == i as u32),
+                    "{i} -> {q} not back"
+                );
+            }
+        }
+    }
+    // Across the box: from the street west of it to the street east of it.
+    let (v, idx) = (nm.vertex_positions().unwrap(), nm.indices().unwrap());
+    let centre = |i: usize| {
+        let q = &p[i];
+        (0..q.index_count() as usize).map(|k| Vec3::from(q.vertex(k, &v, &idx))).sum::<Vec3>() / q.index_count() as f32
+    };
+    let nearest = |at: Vec3| {
+        (0..p.len())
+            .filter(|&i| p[i].index_count() >= 3)
+            .min_by(|&a, &b| centre(a).distance(at).total_cmp(&centre(b).distance(at)))
+            .unwrap()
+    };
+    let (from, to) = (nearest(Vec3::new(-292.0, 793.0, 117.4)), nearest(Vec3::new(-258.0, 793.0, 117.4)));
+    let mut seen = vec![false; p.len()];
+    let mut stack = vec![from];
+    while let Some(i) = stack.pop() {
+        if std::mem::replace(&mut seen[i], true) {
+            continue;
+        }
+        for k in 0..p[i].index_count() as usize {
+            let q = e[p[i].index_id as usize + k].poly_id1();
+            if q != 0x7FFF {
+                stack.push(q as usize);
+            }
+        }
+    }
+    assert!(seen[to], "no way across the box");
+    // About as much walkable ground in the box as the game's.
+    let area_in = |nm: &ynv::Navmesh| {
+        let (v, i, p) = (nm.vertex_positions().unwrap(), nm.indices().unwrap(), nm.polygons().unwrap());
+        p.iter()
+            .filter(|q| q.index_count() >= 3)
+            .map(|q| (0..q.index_count() as usize).map(|k| Vec3::from(q.vertex(k, &v, &i))).collect::<Vec<_>>())
+            .map(|c| rf_editor::navgen::stitch::inside_part(&c, &region))
+            .filter(|c| c.len() >= 3)
+            .map(|c| rf_editor::navgen::signed_area(&c))
+            .sum::<f32>()
+    };
+    let (before, after) = (area_in(&old), area_in(&nm));
+    eprintln!("walkable in the box: {before:.0} m² before, {after:.0} m² after");
+    assert!(after > before * 0.75 && after < before * 1.3);
+    // Written and read back.
+    let again = ynv::read(&ynv::write(&nm)).unwrap();
+    assert_eq!(again.polygons(), nm.polygons());
+    // The next cell's links into this one point at polygons there.
+    let west = rf_formats::hash::joaat("navmesh[309][333]");
+    if let Some(w) = ed.navmesh(west) {
+        for l in w.root.special_links.iter().flatten() {
+            if l.area_id2 as u32 == nm.area_id {
+                assert!((l.poly_id2 as usize) < p.len());
+            }
+        }
+    }
+    assert!(ed.undo().is_some());
+    assert!(Arc::ptr_eq(&ed.navmesh(name).unwrap().root, &old));
+}

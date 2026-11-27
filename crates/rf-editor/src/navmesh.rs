@@ -520,6 +520,19 @@ impl Editor {
         polys.all_items()?.get(r.index as usize).copied()
     }
 
+    /// A polygon's corners now, in the world.
+    pub fn navmesh_polygon_corners(&self, r: PolyRef) -> Option<Vec<glam::Vec3>> {
+        let nm = &self.navmeshes.get(&r.navmesh)?.root;
+        let (v, i) = (nm.vertex_positions()?, nm.indices()?);
+        let p = nm.polygons.as_ref()?.all_items()?.get(r.index as usize).copied()?;
+        Some((0..p.index_count() as usize).map(|k| glam::Vec3::from(p.vertex(k, &v, &i))).collect())
+    }
+
+    /// How many polygons an open navmesh has.
+    pub fn navmesh_polygon_count(&self, name: u32) -> usize {
+        self.navmeshes.get(&name).and_then(|d| d.root.polygons.as_ref()).map_or(0, |p| p.item_count as usize)
+    }
+
     /// The polygons of the same navmesh next to `polys` (not in them).
     pub fn navmesh_neighbours(&self, polys: &[PolyRef]) -> Vec<PolyRef> {
         let mut out = Vec::new();

@@ -5,11 +5,13 @@ use std::time::Instant;
 
 mod amv;
 mod compare;
+mod navmake;
 mod probe;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
+use rf_editor::navgen::Settings;
 use rf_formats::hash::{HashIndex, joaat};
 use rf_formats::rpf8::{FileRef, Rpf8FileSystem, Rpf8Keys};
 
@@ -191,6 +193,34 @@ enum Command {
         #[arg(long, value_parser = |s: &str| u64::from_str_radix(s.trim_start_matches("0x"), 16))]
         guid: Option<u64>,
     },
+    /// Make a box of a navmesh cell again from the collision there (the game's,
+    /// with a project's or a resource's on top): the navmeshes that changed (the
+    /// cell's, and the next cells' whose special links lead into it) go to the
+    /// output folder, for a resource's stream.
+    NavmeshMake {
+        /// The box seen from above: min x, min y, max x, max y (inside one 150 m cell).
+        #[arg(long = "box", value_parser = navmake::four, allow_hyphen_values = true)]
+        area: [f32; 4],
+        /// The heights to look for ground in: lowest, highest (default: around the
+        /// navmesh in the box).
+        #[arg(long, value_parser = navmake::two, allow_hyphen_values = true)]
+        heights: Option<[f32; 2]>,
+        /// An .rfproj, or a folder of game files (a resource's stream), on top of the game.
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Output folder.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// How far from walls the navmesh stays, in metres.
+        #[arg(long, default_value_t = Settings::default().agent_radius)]
+        radius: f32,
+        /// The highest step peds walk up, in metres.
+        #[arg(long, default_value_t = Settings::default().max_climb)]
+        climb: f32,
+        /// The steepest ground peds walk on, in degrees.
+        #[arg(long, default_value_t = Settings::default().max_slope)]
+        slope: f32,
+    },
     /// Convert game files with both this port and the C# RedForge (rf-oracle) and
     /// report every difference.
     Compare {
@@ -245,6 +275,20 @@ fn main() -> Result<()> {
             convert_files(files, out.as_deref(), &strings, false)
         }
         Command::AnimBake { files, out } => bake_animations(files, out.as_deref()),
+        Command::NavmeshMake { area, heights, project, out, radius, climb, slope } => {
+            let strings = load_strings(&cli)?;
+            let fs = open_fs_with(&cli, &strings)?;
+            let settings =
+                Settings { agent_radius: *radius, max_climb: *climb, max_slope: *slope, ..Default::default() };
+            let options = navmake::Options {
+                project: project.clone(),
+                area: *area,
+                heights: *heights,
+                out: out.clone(),
+                settings,
+            };
+            navmake::run(fs, strings, &options)
+        }
         Command::ProbeBake { ytyp, ymap, models, out, from, guid } => {
             let strings = load_strings(&cli)?;
             let options = probe::Options {

@@ -148,6 +148,56 @@ navmeshes, occlude models (but through its mesh editor) or scenario points.
   4. Special links.
   5. Making navmeshes from the collisions: a navmesh builder. Out of reach.
 
+## Navmesh generation (2.8)
+
+The study (issue #6, `cargo run --release -p rf-editor --example
+navgen_study [grid|fine|sizes|edges|flags]`) generated navmesh with Recast
+(`rerecast` 1.0, MIT OR Apache-2.0) from the static collision of 8 places,
+towns and country (Valentine, Rhodes, Strawberry, Blackwater, Saint Denis,
+fields and slopes around), 80 m each, and compared it with the game's on a
+0.5 m grid. Verified:
+
+- **Collision**: the game's triangles face up for floors (as stored);
+  composite children with `CF_MAP_TYPE_MOVER` or `CF_MAP_TYPE_HORSE` are the
+  ones walked on (`hi@` and the horse avoidance ybns have none);
+  `FLAG_NO_NAVMESH` materials are left out. A custom interior isn't in the
+  game data's interiors: its collision is the ybn of its archetype's name.
+- **Settings** (`navgen::Settings::default`): agent radius 0.25-0.3 m fits
+  best (91% of the walkable ground the same, recall 0.96-0.99); the step
+  (0.35-0.55 m) and the slope (50-60°) hardly matter. Strawberry (wooden
+  walkways, stairs) is the worst at 0.75.
+- **Polygons**: the game's are 1-3.5 m² on average, with up to 10 corners,
+  counter-clockwise. In the open they're a grid of 3.97 m squares; with an
+  outline error of 0.3 Recast's match the game's sizes in towns, and a cut on
+  a 4 m grid from the cell's corner gives the open ground's.
+- **Edges**: "space around vertex" is the distance to the nearest edge with
+  nothing across, in steps of about 0.24 m (4 ≈ 0.95 m, 8 ≈ 1.9 m, up to 31).
+  "Space beyond edge" and the adjacency type are 0 everywhere looked at.
+- **Centroids**: `centroid_x/y` are the corners' middle in the polygon's box
+  (in half metres, rounded outwards), in 256ths.
+- **Flags**: `Small` is every polygon under 2 m²; `Large` isn't used in
+  Valentine. `SteepSlope` has a median slope of 47° (95% over 42°), but many
+  steeper polygons (steps) lack it. `Stairs` is on a `FLAG_STAIRS` material
+  56% of the time. Pavement, Road, Boardwalk, Vegetation, Water,
+  NetworkSpawnCandidate and the shelters are the game's choice by place, not
+  by material (Valentine's deep mud is Pavement and Road): generated polygons
+  take them from the game's polygon under them.
+- **Done** (`rf-editor/src/navgen/`): `collision` (the static ybns, the
+  interiors' and the models' of the entities around, doors and gates left
+  out), `generate` (Recast, Y-up: x, z, y), `stitch` (the region's polygons
+  replaced, the ones crossing it cut into convex pieces, the sides' vertices
+  shared, joins by position and two-way only, links put on the polygon under
+  their end or the nearest within 1 m), and `Editor::generate_navmesh` (the
+  4 m grid, the ground's height under each corner, the flags, the next cells'
+  links into the cell, one undo step). `rf navmesh-make` does it from the
+  command line. Areas and slopes are computed from the first corner in f64:
+  at Tumbleweed (x -5600) f32 products were 2 m² off.
+- **Tested offline**: Valentine's main street (20 m box: 258 polygons out, 512
+  in, still walkable across, 2 links of 316 lost, the next cell's 61 links
+  moved); the Tumbleweed school, a custom interior (28 m box: its 436 floor
+  polygons, `Interior`, all reachable from outside through the door). **Not
+  tested in game yet** (issue #11).
+
 ## Scenario points
 
 - **Where** (verified): `sp_manifest.ymt` (RBF) lists 621 regions with their

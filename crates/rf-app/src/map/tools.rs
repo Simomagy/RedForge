@@ -64,6 +64,8 @@ pub struct Tools {
     pub navmesh_overlays: u8,
     /// Where a box selection of navmesh polygons started (Ctrl+drag).
     pub navmesh_box: Option<egui::Pos2>,
+    /// What navmesh is made from collisions for.
+    pub navgen: rf_editor::navgen::Settings,
     /// The selected helpers as last drawn, for Properties.
     pub selected_parts: Vec<HelperPart>,
     /// Helpers shown elsewhere while they're dragged: each one's change from
@@ -190,6 +192,7 @@ impl Default for Tools {
             // REDFORGE_NAVMESH_OVERLAYS=<bits> starts with those shown (for testing).
             navmesh_overlays: std::env::var("REDFORGE_NAVMESH_OVERLAYS").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             navmesh_box: None,
+            navgen: Default::default(),
             selected_parts: Vec::new(),
             helper_preview: Vec::new(),
             focus: false,
@@ -285,10 +288,16 @@ impl Tools {
         }
     }
 
-    /// How many occluders each selected one's list has: undo and redo may
-    /// change it, and the selection's indices then mean other occluders.
+    /// How many occluders each selected one's list has, and polygons each
+    /// selected polygon's navmesh: undo and redo may change them, and the
+    /// selection's indices then mean others.
     fn occluder_counts(&self, editor: &Editor) -> Vec<usize> {
-        self.selected_occluders().iter().map(|id| editor.occluder_count(id.map, id.kind)).collect()
+        let mut counts: Vec<usize> =
+            self.selected_occluders().iter().map(|id| editor.occluder_count(id.map, id.kind)).collect();
+        if self.mode == Mode::Navmesh {
+            counts.extend(self.helper_selection.iter().map(|k| editor.navmesh_polygon_count(k.source)));
+        }
+        counts
     }
 
     /// Drops the occluder selection when undo or redo changed what it's of.

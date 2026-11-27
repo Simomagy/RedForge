@@ -26,6 +26,7 @@ pub mod batches;
 pub mod interior;
 pub mod lod;
 pub mod lodlights;
+pub mod navgen;
 pub mod navmesh;
 pub mod occlusion;
 pub mod placement;

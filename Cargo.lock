@@ -1849,6 +1849,12 @@ dependencies = [
 
 [[package]]
 name = "glam"
+version = "0.33.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37bfe73dc8ec21f54d181e5a60554327ec3f1c600c455a75ccbfc65d2106a6c4"
+
+[[package]]
+name = "glam"
 version = "0.34.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54af5066834d6c2d404eb26ea036a15b15d9ff80db510b9a73ff95ab07f30831"
@@ -3762,6 +3768,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
+name = "rerecast"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71fb021f09acc9f578681db0a54ba16e952565fdc07ab963278d0f93a6b07b14"
+dependencies = [
+ "bitflags 2.13.2",
+ "glam 0.33.12",
+ "slotmap",
+ "thiserror 2.0.21",
+ "tracing",
+]
+
+[[package]]
 name = "rf-app"
 version = "2.7.0"
 dependencies = [
@@ -3818,6 +3837,7 @@ dependencies = [
  "rayon",
  "rf-editor",
  "rf-formats",
+ "rf-game",
  "serde_json",
 ]
 
@@ -3825,9 +3845,11 @@ dependencies = [
 name = "rf-editor"
 version = "2.7.0"
 dependencies = [
+ "glam 0.33.12",
  "glam 0.34.2",
  "log",
  "rayon",
+ "rerecast",
  "rf-formats",
  "rf-game",
  "rf-world",

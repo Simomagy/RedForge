@@ -8,6 +8,22 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Added
+- The Navmesh selection mode **makes navmesh from collisions**: **Make from
+  collisions** in Properties makes the navmesh of the box around the
+  selected polygons again, from the collisions there: the ground, the
+  buildings, the interiors (custom ones too) and the objects around (doors
+  and gates left out). The polygons around are cut to fit and joined to it,
+  special links (ladders, climbs, drops) follow, and the flags the collision
+  doesn't say (pavement, road, boardwalk...) come from the polygons that were
+  there; interiors' floors are flagged as such. One undo step. For a custom
+  interior or a new building: select the ground around it, then Make. The
+  settings (distance from walls, headroom, step, slope, detail) are under
+  Making settings, with the ones closest to the game's navmeshes by default.
+- `rf navmesh-make --box=minx,miny,maxx,maxy [--project folder] -o out` does
+  the same from the command line, and writes the navmeshes that changed (the
+  cell's, and the next cells' whose links lead into it).
+
 ## [2.7.0] - 2026-11-27
 
 ### Added
