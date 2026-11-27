@@ -19,6 +19,8 @@ pub struct Gpu {
     pub renderer: Arc<Renderer>,
     pub preview: Arc<TexturePreview>,
     pub egui: Arc<eframe::egui::mutex::RwLock<eframe::egui_wgpu::Renderer>>,
+    /// What egui draws into, for pipelines drawing in its pass.
+    pub format: eframe::wgpu::TextureFormat,
 }
 
 impl Gpu {

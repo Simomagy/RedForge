@@ -38,6 +38,11 @@ fn read_map(path: &Path, assets: &Assets) -> Result<PauseMapData> {
 
 pub fn run(fs: &Rpf8FileSystem, strings: &HashIndex, o: &Options) -> Result<()> {
     let mut assets = Assets::default();
+    // The game's own fonts, as the editor has them.
+    if let Some(f) = rf_editor::pausemap::gfxfont::LIBRARIES.iter().find_map(|p| fs.find(p)) {
+        let data = fs.extract(f).context("the game's font library")?;
+        assets.fonts.add_game_fonts(&data).map_err(anyhow::Error::msg)?;
+    }
     for f in &o.fonts {
         let data = std::fs::read(f).with_context(|| f.display().to_string())?;
         let font = Font::from_file(&file_font_name(f), &f.display().to_string(), data).map_err(anyhow::Error::msg)?;

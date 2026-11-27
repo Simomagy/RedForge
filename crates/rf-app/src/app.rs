@@ -81,6 +81,10 @@ pub enum Tab {
     GameFiles,
     /// The game's archetypes, to choose the one to place.
     Objects,
+    /// The pause map and minimap, and what's drawn on them.
+    PauseMap,
+    /// The pause map's layers.
+    MapLayers,
 }
 
 impl Tab {
@@ -176,6 +180,9 @@ pub struct RedForgeApp {
     properties: Properties,
     project_pane: ProjectPane,
     hierarchy: Hierarchy,
+    /// The pause map's selection, tools and view, and its layers pane.
+    pause: crate::pausemap::PauseMap,
+    map_layers: crate::pausemap::layers::Layers,
     /// The Blender add-on's link, from when the game is loaded.
     blender: Option<BlenderLink>,
     /// Game files or the selection's models being exported.
@@ -229,6 +236,7 @@ impl RedForgeApp {
             renderer: Arc::new(Renderer::new(&ctx)),
             preview: Arc::new(TexturePreview::new(&ctx)),
             egui: rs.renderer.clone(),
+            format: rs.target_format,
             ctx,
         };
         let mut settings = Settings::load();
@@ -283,6 +291,8 @@ impl RedForgeApp {
             properties: Properties::default(),
             project_pane: ProjectPane::default(),
             hierarchy: Hierarchy::default(),
+            pause: crate::pausemap::PauseMap::default(),
+            map_layers: Default::default(),
             blender: None,
             export: None,
             objects: Objects::new(tile_size.unwrap_or(crate::objects::DEFAULT_TILE)),
@@ -473,6 +483,17 @@ impl RedForgeApp {
                 self.dock.main_surface_mut().split_left(NodeIndex::root(), 0.22, vec![tab]);
             }
         }
+    }
+
+    /// View > Pause map: its tab (with the documents), and its layers pane.
+    fn show_pause_map(&mut self) {
+        if !self.focus_tab(|t| matches!(t, Tab::PauseMap)) {
+            self.show_tab(Tab::PauseMap);
+        }
+        if self.dock.find_tab_from(|t| matches!(t, Tab::MapLayers)).is_none() {
+            self.show_pane(Tab::MapLayers);
+        }
+        self.pause.active = true;
     }
 
     /// View > Reset layout: the panes where they start, with the documents.
@@ -930,6 +951,35 @@ impl RedForgeApp {
                     }
                     return;
                 }
+                // `pausemap`: the pause map's tab; `pausemap:<file>` with a
+                // Map Editor or Aether project imported. REDFORGE_PAUSEMAP_VIEW
+                // =x0,y0,x1,y1 frames a box of the map; REDFORGE_PAUSEMAP_SELECT
+                // selects the layer with that text or name.
+                if let Some(rest) = a.open.strip_prefix("pausemap") {
+                    if let (Some(file), Some(ed)) = (rest.strip_prefix(':'), self.editor.as_mut()) {
+                        match ed.import_map_project(Path::new(file)) {
+                            Ok(notes) => notes.iter().for_each(|n| log::info!("{n}")),
+                            Err(e) => log::error!("{file}: {e}"),
+                        }
+                    }
+                    self.show_pause_map();
+                    self.show_side_tab(Tab::Properties, true);
+                    if let Ok(v) = std::env::var("REDFORGE_PAUSEMAP_VIEW") {
+                        let n: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                        if let [x0, y0, x1, y1] = n[..] {
+                            self.pause.frame_on = Some([x0, y0, x1, y1]);
+                        }
+                    }
+                    if let (Ok(want), Some(ed)) = (std::env::var("REDFORGE_PAUSEMAP_SELECT"), self.editor.as_ref()) {
+                        let found = ed.pause_map().objects.iter().find(|o| {
+                            rf_editor::pausemap::project::object_name(o).eq_ignore_ascii_case(&want)
+                        });
+                        if let Some(o) = found {
+                            self.pause.select(vec![o.id().to_owned()]);
+                        }
+                    }
+                    return;
+                }
                 // `welcome`: the app as it starts.
                 if a.open == "welcome" {
                     return;
@@ -1052,6 +1102,8 @@ struct Tabs<'a> {
     properties: &'a mut Properties,
     project: &'a mut ProjectPane,
     hierarchy: &'a mut Hierarchy,
+    pause: &'a mut crate::pausemap::PauseMap,
+    map_layers: &'a mut crate::pausemap::layers::Layers,
     browser: &'a mut Browser,
     settings: &'a mut Settings,
     /// What the Game Files browser asked to open.
@@ -1176,6 +1228,11 @@ impl TabViewer for Tabs<'_> {
             Tab::Hierarchy => icon_text(icon::TREE_STRUCTURE, "Hierarchy"),
             Tab::GameFiles => icon_text(icon::PACKAGE, "Game Files"),
             Tab::Objects => icon_text(icon::SHAPES, "Objects"),
+            Tab::PauseMap if self.editor.as_deref().is_some_and(Editor::pause_map_dirty) => {
+                icon_text(icon::MAP_PIN_AREA, "Pause map •")
+            }
+            Tab::PauseMap => icon_text(icon::MAP_PIN_AREA, "Pause map"),
+            Tab::MapLayers => icon_text(icon::STACK, "Map layers"),
         }
         .into()
     }
@@ -1195,6 +1252,8 @@ impl TabViewer for Tabs<'_> {
             Tab::Hierarchy => egui::Id::new("hierarchy"),
             Tab::GameFiles => egui::Id::new("game-files"),
             Tab::Objects => egui::Id::new("objects"),
+            Tab::PauseMap => egui::Id::new("pause-map"),
+            Tab::MapLayers => egui::Id::new("map-layers"),
         }
     }
 
@@ -1240,7 +1299,44 @@ impl TabViewer for Tabs<'_> {
             Tab::Texture(v) => v.ui(ui, self.gpu),
             Tab::Text(v) => v.ui(ui),
             Tab::Hex(v) => v.ui(ui),
-            Tab::Map(v) => v.ui(ui, self.gpu, self.editor.as_deref_mut(), self.tools),
+            Tab::Map(v) => {
+                // Using the world map: Properties and the editing keys are its.
+                if ui.input(|i| i.pointer.any_pressed()) && ui.rect_contains_pointer(ui.max_rect()) {
+                    self.pause.active = false;
+                }
+                if v.is_world() {
+                    let s = v.state();
+                    self.pause.world_camera = Some(([s.position.x as f64, s.position.y as f64], s.yaw));
+                    if let Some(p) = self.pause.jump_world.take() {
+                        let [x, y] = rf_editor::pausemap::families::map_to_world(p);
+                        // At the camera's height (the ground's isn't known there yet).
+                        v.view_place(glam::Vec3::new(x as f32, y as f32, s.position.z - 30.0));
+                    }
+                }
+                v.ui(ui, self.gpu, self.editor.as_deref_mut(), self.tools)
+            }
+            Tab::PauseMap => match self.editor.as_deref_mut() {
+                Some(ed) => crate::pausemap::pane::ui(ui, self.pause, ed, self.gpu, self.tools),
+                None => {
+                    ui.label("The game isn't loaded.");
+                }
+            },
+            Tab::MapLayers => match self.editor.as_deref_mut() {
+                Some(ed) => self.map_layers.ui(ui, self.pause, ed),
+                None => {
+                    ui.label("The game isn't loaded.");
+                }
+            },
+            Tab::Properties if self.pause.active => match self.editor.as_deref_mut() {
+                Some(ed) => {
+                    egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                        crate::pausemap::inspector::ui(ui, self.pause, ed, self.settings);
+                    });
+                }
+                None => {
+                    ui.label("The game isn't loaded.");
+                }
+            },
             Tab::Properties => match self.editor.as_deref_mut() {
                 Some(ed) => self.properties.ui(ui, ed, Some(self.tools)),
                 None => {
@@ -1429,7 +1525,9 @@ impl eframe::App for RedForgeApp {
                                 self.incoming = open;
                             }
                             let g = Arc::new(g);
-                            self.editor = Some(Editor::new(g.fs.clone(), g.hashes.clone(), g.data()));
+                            let mut ed = Editor::new(g.fs.clone(), g.hashes.clone(), g.data());
+                            crate::pausemap::inspector::load_user_fonts(&mut ed, &self.settings);
+                            self.editor = Some(ed);
                             self.blender.get_or_insert_with(|| BlenderLink::start(ctx, &self.settings));
                             self.game = GameState::Ready(g);
                             self.objects.reset(&self.gpu);
@@ -1585,6 +1683,15 @@ impl eframe::App for RedForgeApp {
                             ui.close();
                         }
                         ui.separator();
+                        if ui.button("Pause map").on_hover_text("The game's pause map and minimap, to draw on").clicked() {
+                            self.show_pause_map();
+                            ui.close();
+                        }
+                        if ui.button("Map layers").clicked() {
+                            self.show_pane(Tab::MapLayers);
+                            ui.close();
+                        }
+                        ui.separator();
                         if ui.button("Reset layout").on_hover_text("The panes where they are at first").clicked() {
                             self.reset_layout();
                             ui.close();
@@ -1680,7 +1787,11 @@ impl eframe::App for RedForgeApp {
                 pane.export_now(ed, settings);
             }
             if !ctx.text_edit_focused() && !pane.asking() && !self.tour.is_open() {
-                self.tools.edit_keys(ctx, ed);
+                if self.pause.active {
+                    crate::pausemap::pane::edit_keys(ctx, &mut self.pause, ed, &mut self.tools);
+                } else {
+                    self.tools.edit_keys(ctx, ed);
+                }
             }
         }
         // Edit in Blender, from the menu, the map's toolbar, Hierarchy or Ctrl+B.
@@ -1719,6 +1830,9 @@ impl eframe::App for RedForgeApp {
                 Some(Ask::GameFolder) => self.ask_game_folder(),
                 None => {}
             }
+        }
+        if std::mem::take(&mut self.project_pane.open_pause_map) {
+            self.show_pause_map();
         }
         if let Some(file) = self.project_pane.open_animation.take() {
             self.open_animation(ctx, Some(file));
@@ -1772,6 +1886,8 @@ impl eframe::App for RedForgeApp {
                 properties: &mut self.properties,
                 project: &mut self.project_pane,
                 hierarchy: &mut self.hierarchy,
+                pause: &mut self.pause,
+                map_layers: &mut self.map_layers,
                 browser: &mut self.browser,
                 settings: &mut self.settings,
                 action: &mut action,
@@ -1856,7 +1972,9 @@ impl eframe::App for RedForgeApp {
             | Tab::Project
             | Tab::Hierarchy
             | Tab::GameFiles
-            | Tab::Objects => false,
+            | Tab::Objects
+            | Tab::PauseMap
+            | Tab::MapLayers => false,
         });
         if waiting {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));

@@ -15,6 +15,7 @@ mod loading;
 mod map;
 mod navmesh_props;
 mod objects;
+mod pausemap;
 mod project_pane;
 mod properties;
 mod session;
@@ -77,7 +78,11 @@ fn main() -> eframe::Result {
         device_descriptor: Arc::new(|adapter| wgpu::DeviceDescriptor {
             label: Some("RedForge"),
             required_features: rf_render::wanted_features(adapter),
-            required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+            // The pause map's families are texture arrays of up to 957 tiles.
+            required_limits: wgpu::Limits {
+                max_texture_array_layers: adapter.limits().max_texture_array_layers,
+                ..wgpu::Limits::default().using_resolution(adapter.limits())
+            },
             ..Default::default()
         }),
         ..WgpuSetupCreateNew::without_display_handle()

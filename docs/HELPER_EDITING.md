@@ -239,6 +239,52 @@ fields and slopes around), 80 m each, and compared it with the game's on a
   the box and walked into the classroom. The preview's Apply and Cancel were
   tried in the app.
 
+## Pause map (2.9)
+
+The pause map and the minimap share their tiles: `minimap_tiles.rpf` in
+`data_0.rpf/data/cdimages` (update_4's `x64/patch/textures/ui/minimap_tiles.rpf`
+has 59 of the line and relief tiles again, and wins). Ported from the Map
+Editor web app (`rf_editor::pausemap`, the app's `pausemap`). Verified:
+
+- **Families**: `minimap_sdf_text` (10 x 8 of 512), `textlod3`,
+  `discovered3` (lines, 33 x 29 of 256), `discoveredlod3`, `undiscovered3`
+  (relief and buildings' fills), `undiscoveredlod`, `waterline`; Guarma's
+  families are left out. Each tile is a ytd with one square L8 texture named
+  as the file; where a family has nothing the game ships a 4 x 4 stub of one
+  value (the sea). Tiles share two pixels with each neighbour. Map space is
+  the text atlas stitched (5102 x 4082).
+- **In the world** (`map_data.ymt`'s `MapConstructionData`): the map is
+  12288 x 9728 m from (-7168, 4096), y going down the map; the families'
+  tiles in metres (`TileSetConstructionData`) agree, discovered3's 33 x 340 m
+  being the rectangle the web app matched on coastlines.
+- **Drawn as the game's distance fields**: lines (about 64 on the edge, ~7 a
+  detail pixel), buildings (their outline in lines, a fill in relief: ~54 at
+  the edge), labels (the ink on 68, ~10 a pixel inside, steepening to ~19
+  out), picture stamps (text or lines), erasers (the game's own marks only).
+  Marks merge with `min`, so what's drawn is never erased. 2065 tiles read the
+  same as the hand extraction the web app used; tiles packed again are the
+  same dictionaries as those of a resource Aether Cartography exported (the
+  block map has room for more pages: 48 bytes, as the C# writes it).
+- **Fonts**: Zilla Slab Bold and SemiBold Italic (OFL) are bundled; the
+  game's 18 fonts (RDR Lino, Hapna Slab Serif DemiBold, Redemption...) are
+  read from `scaleform_frontend.rpf/font_lib_efigs.gfx`, in Scaleform's
+  compacted font format, worked out from the file (see `pausemap::gfxfont`);
+  TrueType and OpenType files can be added (Properties, nothing selected).
+- **The document**: the objects as the web app's `map-project.json`
+  (version 3) has them, in the `.rfproj` as `pauseMap` (the C# RedForge
+  ignores it), with undo steps like the files'; the web app's and Aether's
+  projects import, and the drawing saves as a `map-project.json`.
+- **Export**: the tiles the marks touch, detail and zoomed-out, go in the
+  resource's `stream` with the project's files (`rf pausemap-export` does it
+  from the command line); marks over a stub of a line or relief family are
+  reported, as they don't show.
+- **The app**: the Pause map tab (the tiles on the GPU in texture arrays with
+  mipmaps, the web app's shader in WGSL, the tools and gestures of its
+  canvas), Map layers (the tree, eye, lock, drag to reorder) and Properties
+  (the selected layer's fields, or the tool's and the fonts).
+- **Not tested in game yet**: `rf_pausemap_test` (the sample project's 121
+  tiles).
+
 ## Scenario points
 
 - **Where** (verified): `sp_manifest.ymt` (RBF) lists 621 regions with their

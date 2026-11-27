@@ -7,6 +7,7 @@
 
 pub mod aether;
 pub mod buildings;
+pub mod commands;
 pub mod compose;
 pub mod doc;
 mod editing;
@@ -14,6 +15,7 @@ pub mod edt;
 pub mod export;
 pub mod families;
 pub mod fonts;
+pub mod geometry;
 pub mod gfxfont;
 pub mod labels;
 pub mod library;

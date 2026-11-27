@@ -171,6 +171,8 @@ pub struct ProjectPane {
     /// An animation of the project asked for (double click, or Open): the
     /// app opens it in the animation editor and takes this.
     pub open_animation: Option<PathBuf>,
+    /// The Pause map entry was opened: its tab.
+    pub open_pause_map: bool,
     /// The animations open in the editor with changes not saved (the app
     /// says each frame): an export bakes them as last saved, and says so.
     pub unsaved_animations: Vec<PathBuf>,
@@ -236,6 +238,11 @@ impl ProjectPane {
     /// [`ProjectPane::restore_ui`] finds them if RedForge closes first.
     fn autosave(&mut self, editor: &Editor) {
         if !editor.has_unsaved() || self.restore.is_some() {
+            return;
+        }
+        // A screenshot for testing leaves the user's autosaves alone (as it
+        // does the session), unless it's testing them.
+        if std::env::var_os("REDFORGE_SCREENSHOT").is_some() && std::env::var_os("REDFORGE_SESSION").is_none() {
             return;
         }
         if self.autosaved.is_some_and(|t| t.elapsed() < AUTOSAVE_EVERY) {
@@ -557,6 +564,10 @@ impl ProjectPane {
                     self.picked_map = Some(name);
                 }
             }
+            let pause_map = e.doc == Some(DocKey::PauseMap);
+            if pause_map && row.double_clicked() {
+                self.open_pause_map = true;
+            }
             let animation = e.path.as_ref().filter(|p| rf_editor::project::is_animation(p) && !missing);
             if let Some(file) = animation
                 && row.double_clicked()
@@ -570,6 +581,10 @@ impl ProjectPane {
                     self.open_animation = Some(file.clone());
                     ui.close();
                 }
+                if pause_map && ui.button("Open").on_hover_text("The Pause map tab (or double click)").clicked() {
+                    self.open_pause_map = true;
+                    ui.close();
+                }
                 if let Some(doc) = e.doc {
                     if ui.button("Save").clicked() {
                         match editor.save_path(doc) {
@@ -578,7 +593,8 @@ impl ProjectPane {
                         }
                         ui.close();
                     }
-                    if ui.button("Save as…").clicked() {
+                    // The pause map is saved in the .rfproj.
+                    if !pause_map && ui.button("Save as…").clicked() {
                         self.save_as(editor, doc, &e.name);
                         ui.close();
                     }
@@ -780,6 +796,8 @@ impl ProjectPane {
     }
 
     fn save_as(&mut self, editor: &mut Editor, doc: DocKey, name: &str) {
+        // The pause map goes in the project's .rfproj, which isn't saved yet.
+        let name = if doc == DocKey::PauseMap { "project.rfproj" } else { name };
         let ext = Path::new(name).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
         let mut dialog = rfd::FileDialog::new().set_file_name(name).add_filter(&ext, &[&ext]);
         if let Some(dir) = editor.project.as_ref().and_then(|p| p.dir()) {

@@ -82,6 +82,24 @@ pub const WORLD_W: f64 = ((TEXT.cols - 1) * (TEXT.tile - OVERLAP) + TEXT.tile) a
 /// Map space's height (4082).
 pub const WORLD_H: f64 = ((TEXT.rows - 1) * (TEXT.tile - OVERLAP) + TEXT.tile) as f64;
 
+/// Where the map is in the world, in metres (`map_data.ymt`'s
+/// `MapConstructionData`: 12288 x 9728 from `vWorldStart`, the world's y
+/// going up as the map's goes down). The families' tiles in metres agree:
+/// the waterline's 8 x 1536 m and the LODs' span it, and discovered3's
+/// 33 x 340 m is the rectangle the web app matched on coastlines.
+pub const MAP_WORLD_START: [f64; 2] = [-7168.0, 4096.0];
+pub const MAP_WORLD_SIZE: [f64; 2] = [12288.0, 9728.0];
+
+/// A world point (x, y in metres) in map units.
+pub fn world_to_map(x: f64, y: f64) -> [f64; 2] {
+    [(x - MAP_WORLD_START[0]) / MAP_WORLD_SIZE[0] * WORLD_W, (MAP_WORLD_START[1] - y) / MAP_WORLD_SIZE[1] * WORLD_H]
+}
+
+/// A map point in the world (x, y in metres).
+pub fn map_to_world([x, y]: [f64; 2]) -> [f64; 2] {
+    [MAP_WORLD_START[0] + x / WORLD_W * MAP_WORLD_SIZE[0], MAP_WORLD_START[1] - y / WORLD_H * MAP_WORLD_SIZE[1]]
+}
+
 /// Map space to a family's atlas pixels: `atlas = (map + o) * s`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Fit {
@@ -154,5 +172,10 @@ mod tests {
         assert_eq!(tile_at(&FAMILIES[0], 509.0, 0.0), Some((0, 0)));
         assert_eq!(tile_at(&FAMILIES[0], 510.0, 1021.0), Some((2, 1)));
         assert_eq!(tile_at(&FAMILIES[0], -1.0, 0.0), None);
+        // Valentine's main street is about (2860, 1387) on the map.
+        let [x, y] = world_to_map(-280.0, 790.0);
+        assert!((x - 2860.0).abs() < 1.0 && (y - 1387.0).abs() < 1.0, "{x} {y}");
+        let [wx, wy] = map_to_world([x, y]);
+        assert!((wx + 280.0).abs() < 1e-9 && (wy - 790.0).abs() < 1e-9);
     }
 }

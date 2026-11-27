@@ -28,6 +28,8 @@ pub enum SavedTab {
     Hierarchy,
     GameFiles,
     Objects,
+    PauseMap,
+    MapLayers,
 }
 
 pub fn saved_dock(dock: &DockState<Tab>) -> DockState<SavedTab> {
@@ -38,6 +40,8 @@ pub fn saved_dock(dock: &DockState<Tab>) -> DockState<SavedTab> {
         Tab::Hierarchy => SavedTab::Hierarchy,
         Tab::GameFiles => SavedTab::GameFiles,
         Tab::Objects => SavedTab::Objects,
+        Tab::PauseMap => SavedTab::PauseMap,
+        Tab::MapLayers => SavedTab::MapLayers,
         _ => SavedTab::Welcome,
     })
 }
@@ -54,6 +58,8 @@ pub fn restore_dock(saved: &DockState<SavedTab>) -> Option<(DockState<Tab>, bool
         SavedTab::Hierarchy => Tab::Hierarchy,
         SavedTab::GameFiles => Tab::GameFiles,
         SavedTab::Objects => Tab::Objects,
+        SavedTab::PauseMap => Tab::PauseMap,
+        SavedTab::MapLayers => Tab::MapLayers,
     });
     let mut first = true;
     dock.retain_tabs(|t| !matches!(t, Tab::Welcome) || std::mem::take(&mut first));

@@ -8,6 +8,22 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 
 ## [Unreleased]
 
+### Added
+- The **Pause map** tab (View > Pause map) edits the game's pause map and
+  minimap, the Map Editor web app brought into RedForge: roads, trails,
+  railroads and lines with curves, building footprints, labels, picture
+  stamps, and an eraser for the game's own marks, drawn into the game's tiles
+  the way the game draws its own, with undo. Labels can use the game's own
+  fonts (RDR Lino, Hapna Slab Serif and the others, read from the game), the
+  bundled Zilla Slab, or font files added. **Map layers** lists the layers
+  (groups, showing, locking, dragging into order), Properties edits the one
+  selected, and the map shows where the world map's camera is.
+- The drawing is kept in the project, and the RedM export writes the tiles it
+  changed. Map Editor (`map-project.json`) and Aether Cartography projects
+  import, and the drawing saves as a `map-project.json` too.
+- `rf pausemap-export <project> -o <resource>` writes the tiles of a project's
+  drawing (or a Map Editor or Aether project's) as a RedM resource.
+
 ## [2.8.0] - 2026-11-27
 
 ### Added
