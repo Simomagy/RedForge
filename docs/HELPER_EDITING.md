@@ -204,11 +204,36 @@ fields and slopes around), 80 m each, and compared it with the game's on a
   in, still walkable across, 2 links of 316 lost, the next cell's 61 links
   moved); the Tumbleweed school, a custom interior (28 m box: its 436 floor
   polygons, `Interior`, all reachable from outside through the door).
+- **Cells' borders** (verified in Valentine's and Tumbleweed's cells): no
+  edge of the game's navmeshes points into another cell (every edge's area is
+  its own or none). Cells are joined when the game loads them, by their
+  border polygons: ~150 per cell, flagged `ZeroAreaStitchPolyDLC` and
+  `LiesAlongEdgeOfMesh`, flat along a side of the cell (the cells' boxes are
+  the 150 m grid exactly); 2 corners for most, up to 11. Each has exactly
+  one edge facing out of the cell (left of it is outside; none, flag 8
+  `EXTERNAL_EDGE`), a stretch of the ~3.97 m grid the next cell's border
+  polygon has too, end for end. Its other edges come back along the stretch
+  through the corners of its cell's polygons there, each joined to the
+  polygon whose edge goes **the same way round** (not reversed, as between
+  two polygons); a gap is none with flag 8. A box that reaches a side makes
+  the border polygons it reaches again along the same stretches, with the
+  corners of the polygons there now (`stitch::replace_region`); one that
+  crosses a border is made with one Recast run and cut per cell
+  (`Editor::make_navmesh`, sides within 1.5 m of a cell's side go to it).
+  Offline (`navmesh_made_across_cells`): Valentine's x = -300 border, 10
+  border polygons made again, stretches the same in both cells, the street
+  walkable from one cell into the other through them.
+- **Preview**: `Editor::make_navmesh` makes without putting in
+  (`MadeNavmesh`), the map draws it in place of the navmeshes it changes,
+  and `apply_made_navmesh` puts it in as one undo step, unless one of them
+  changed since.
 - **Tested in game** (RedM, `rf_navtest_school`): a ped walks from outside
   into the school's classroom through its south-east door, on the path the
   game finds (24 m, 22 s, no stop). The first try walked into the stairs'
   railing: the building's own collision (`pry_schoolhouse.ydr`, children
-  without type flags) had been left out.
+  without type flags) had been left out. Then a ped from outside the box
+  (`/navborder`) and a horse around the school, crossing the box twice
+  (`/navhorse`), with `Door` flags in the doorways: no stop.
 
 ## Scenario points
 

@@ -157,8 +157,8 @@ fn make_ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, polys: &[P
                there: the ground, the buildings, the interiors and the models of the objects around (doors \
                and gates left out). The polygons around are cut to fit and joined to it, special links follow, \
                and the flags the collision doesn't say (pavement, road...) come from the polygons that were \
-               there. For a custom interior or a new building: select the ground around it first. The box must \
-               stay inside one navmesh cell.";
+               there. The box may cross navmesh cells: each gets its part. It's shown first, to apply or drop. \
+               For a custom interior or a new building: select the ground around it first.";
     ui.horizontal(|ui| {
         if ui.button("Make from collisions").on_hover_text(tip).clicked() {
             let corners: Vec<glam::Vec3> =
@@ -173,26 +173,13 @@ fn make_ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, polys: &[P
                 z_min: lo.z - 3.0,
                 z_max: hi.z + 12.0,
             };
-            match editor.generate_navmesh(region, &tools.navgen) {
-                Ok(g) => {
-                    let s = &g.stitched;
-                    tools.say(format!(
-                        "{}: {} polygons made from {} collision triangles, {} cut to fit, {} special links moved",
-                        g.navmesh,
-                        s.added,
-                        g.triangles,
-                        s.pieces,
-                        s.links_moved + g.neighbour_links
-                    ));
-                    *error = (s.links_dropped + g.neighbour_links_lost > 0).then(|| {
-                        format!(
-                            "{} special links found no polygon at their end any more",
-                            s.links_dropped + g.neighbour_links_lost
-                        )
-                    });
-                    // The navmesh's polygons are numbered anew.
-                    let cell = rf_formats::hash::joaat(&g.navmesh);
-                    tools.helper_selection.retain(|k| k.source != cell);
+            match editor.make_navmesh(region, &tools.navgen) {
+                Ok(made) => {
+                    *error = None;
+                    // The polygons shown are the preview's, numbered anew.
+                    let names: Vec<u32> = made.names().collect();
+                    tools.helper_selection.retain(|k| !names.contains(&k.source));
+                    tools.navmesh_preview = Some(made);
                 }
                 Err(e) => *error = Some(e),
             }
@@ -232,6 +219,90 @@ fn make_ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, polys: &[P
             *s = Default::default();
         }
     });
+}
+
+/// Navmesh made from collisions and shown, not applied yet: what it does, and
+/// Apply or Cancel.
+pub fn preview_ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, error: &mut Option<String>) {
+    let Some(made) = &tools.navmesh_preview else { return };
+    let g = &made.generated;
+    let s = &g.stitched;
+    ui.label(RichText::new("Navmesh made from collisions").strong());
+    ui.label(RichText::new("Shown in place of the navmesh there: apply it or drop it.").weak());
+    egui::Grid::new("navgen-preview").num_columns(2).show(ui, |ui| {
+        let mut row = |k: &str, v: String| {
+            ui.label(k);
+            ui.label(v);
+            ui.end_row();
+        };
+        row("Navmeshes", g.navmeshes.join(", "));
+        row(
+            "Box",
+            format!(
+                "{:.1}, {:.1} to {:.1}, {:.1}",
+                made.region.min.x, made.region.min.y, made.region.max.x, made.region.max.y
+            ),
+        );
+        row("Collision", format!("{} triangles", g.triangles));
+        row("Polygons", format!("{} made, {} removed, {} cut to fit", s.added, s.removed, s.pieces));
+        if s.borders > 0 {
+            row("Cell borders", format!("{} border polygons made again", s.borders));
+        }
+        row("Special links", format!("{} moved", s.links_moved + g.neighbour_links));
+    });
+    let lost = s.links_dropped + g.neighbour_links_lost;
+    if lost > 0 {
+        ui.label(
+            RichText::new(format!("{lost} special links found no polygon at their end any more"))
+                .color(egui::Color32::from_rgb(255, 160, 40)),
+        );
+    }
+    if !g.cells_without_navmesh.is_empty() {
+        ui.label(
+            RichText::new(format!("No navmesh in {}: nothing made there", g.cells_without_navmesh.join(", ")))
+                .color(egui::Color32::from_rgb(255, 160, 40)),
+        );
+    }
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if ui.button("Apply").on_hover_text("Put it in the navmeshes (one undo step)").clicked() {
+            let made = tools.navmesh_preview.take().expect("shown");
+            let region = made.region;
+            match editor.apply_made_navmesh(made) {
+                Ok(g) => {
+                    *error = None;
+                    tools.say(format!("{}: {} polygons made", g.navmeshes.join(", "), g.stitched.added));
+                    // The polygons made, selected, to make again or edit.
+                    let mut found = Vec::new();
+                    for name in &g.navmeshes {
+                        let n = rf_formats::hash::joaat(name);
+                        for index in 0..editor.navmesh_polygon_count(n) {
+                            let r = PolyRef { navmesh: n, index: index as u32 };
+                            let Some(c) = editor.navmesh_polygon_corners(r) else { continue };
+                            if c.len() < 3 {
+                                continue;
+                            }
+                            let m = c.iter().sum::<glam::Vec3>() / c.len() as f32;
+                            if m.x > region.min.x && m.x < region.max.x && m.y > region.min.y && m.y < region.max.y {
+                                found.push(r);
+                            }
+                        }
+                    }
+                    tools.helper_selection = keys(&found);
+                }
+                Err(e) => *error = Some(e),
+            }
+        }
+        if ui.button("Cancel").on_hover_text("Drop it: the navmesh stays as it was").clicked() {
+            let made = tools.navmesh_preview.take().expect("shown");
+            let names: Vec<u32> = made.names().collect();
+            tools.helper_selection.retain(|k| !names.contains(&k.source));
+            *error = None;
+        }
+    });
+    if let Some(e) = error {
+        ui.colored_label(egui::Color32::from_rgb(255, 120, 100), e.as_str());
+    }
 }
 
 /// The selected polygons' properties. Returns false when none are selected.

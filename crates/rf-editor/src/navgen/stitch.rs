@@ -9,6 +9,14 @@
 //!   position seen from above, a step's height apart at most). A piece of a
 //!   blocked-off polygon (switched off for peds) is joined only to blocked
 //!   ones, so a blocked area stays closed.
+//! - The cell's border polygons (flat, along a side of the cell:
+//!   `ZeroAreaStitchPolyDLC`, `LiesAlongEdgeOfMesh`) are how the game joins
+//!   the cells when it loads them: each has one edge facing out, a stretch of
+//!   about 4 m that the next cell's border polygon has too, and edges facing
+//!   in, one per polygon of its own cell along that stretch, the same way
+//!   round as theirs. Those the region reaches are made again along the same
+//!   stretches, with the corners of the polygons there now; the others are
+//!   joined again to the polygons along them that changed.
 //! - Special links keep their polygons; an end on a polygon that went is put
 //!   on the polygon now under it, or the link goes.
 //! - Then the lists, the quadtree, the polygons' boxes and centroids and the
@@ -58,6 +66,8 @@ pub struct Stitched {
     /// Special links put on another polygon, and those that went.
     pub links_moved: usize,
     pub links_dropped: usize,
+    /// Border polygons made again (along the cell's sides the region reaches).
+    pub borders: usize,
 }
 
 const NO_POLYGON: u32 = 0x7FFF;
@@ -68,6 +78,12 @@ const MAX_CORNERS: usize = 10;
 const JOIN_HEIGHT: f32 = 0.75;
 /// The edges' free space is in these steps (see the study in #6).
 const SPACE_STEP: f32 = 0.24;
+/// How near a cell's side a corner counts as on it (the game's are within
+/// 3 mm, quantised).
+const BORDER_NEAR: f32 = 0.01;
+/// `EXTERNAL_EDGE` in an edge's flags: a border polygon's edge with nothing
+/// of its own cell across.
+const EXTERNAL_EDGE: u32 = 8;
 
 #[derive(Clone, Debug)]
 enum Origin {
@@ -85,6 +101,8 @@ struct Poly {
     origin: Origin,
     /// A kept polygon's edges as they were.
     old_edges: Vec<NavmeshEdge>,
+    /// A border polygon's side of the cell: the way out of it.
+    border: Option<Vec2>,
 }
 
 impl Poly {
@@ -197,6 +215,83 @@ fn on_side(p: Vec3, r: &Region) -> bool {
         || ((p.y - r.min.y).abs() < E || (p.y - r.max.y).abs() < E) && within_x
 }
 
+/// The side of the cell (`lo` to `hi`) a border polygon lies along: the way
+/// out of the cell there.
+fn border_side(p: &NavmeshPolygon, c: &[Vec3], lo: Vec2, hi: Vec2) -> Option<Vec2> {
+    if p.flags() & (poly_flags::ZERO_AREA_STITCH_POLY_DLC | poly_flags::LIES_ALONG_EDGE_OF_MESH) == 0 || c.len() < 2 {
+        return None;
+    }
+    let all = |f: &dyn Fn(Vec3) -> f32, v: f32| c.iter().all(|p| (f(*p) - v).abs() < BORDER_NEAR);
+    [(lo.x, Vec2::NEG_X), (hi.x, Vec2::X)]
+        .into_iter()
+        .find(|(v, _)| all(&|p| p.x, *v))
+        .or_else(|| [(lo.y, Vec2::NEG_Y), (hi.y, Vec2::Y)].into_iter().find(|(v, _)| all(&|p| p.y, *v)))
+        .map(|(_, out)| out)
+}
+
+/// Whether the edge a-b of a border polygon faces out of the cell (`out`):
+/// polygons are counter-clockwise, so what's left of an edge is its side.
+fn faces_out(a: Vec3, b: Vec3, out: Vec2) -> bool {
+    (b - a).truncate().perp().dot(out) > 0.0
+}
+
+/// Whether the region reaches the cell's side that way out, along the
+/// stretch from `a` to `b`.
+fn reaches(r: &Region, out: Vec2, lo: Vec2, hi: Vec2, a: Vec2, b: Vec2) -> bool {
+    let (side, along) = if out.x != 0.0 {
+        (if out.x > 0.0 { (r.max.x - hi.x).abs() } else { (r.min.x - lo.x).abs() }, (r.min.y, r.max.y, a.y, b.y))
+    } else {
+        (if out.y > 0.0 { (r.max.y - hi.y).abs() } else { (r.min.y - lo.y).abs() }, (r.min.x, r.max.x, a.x, b.x))
+    };
+    let (rlo, rhi, s0, s1) = along;
+    side < BORDER_NEAR && s0.min(s1).max(rlo) < s0.max(s1).min(rhi) - 1e-3
+}
+
+/// A stretch of a border to make a border polygon along again: its edge
+/// facing out, from `a` to `b`, and the old polygon's attributes.
+#[derive(Clone, Copy, Debug)]
+struct Stretch {
+    out: Vec2,
+    a: Vec3,
+    b: Vec3,
+    attributes: NavmeshPolygon,
+}
+
+/// The border polygon along a stretch: its edge facing out, then back along
+/// the corners the cell's polygons have on it, at its height.
+fn border_polygon(s: &Stretch, polys: &[Poly]) -> Vec<Vec3> {
+    let ab = (s.b - s.a).truncate();
+    let len2 = ab.length_squared().max(1e-9);
+    let height = |t: f32| s.a.z + (s.b.z - s.a.z) * t;
+    let mut on: HashMap<(i64, i64), (f32, Vec3)> = HashMap::new();
+    for c in polys.iter().filter(|p| p.border.is_none()).flat_map(|p| p.corners.iter()) {
+        let t = (c.truncate() - s.a.truncate()).dot(ab) / len2;
+        let off = (s.a.truncate() + ab * t - c.truncate()).length();
+        if off > BORDER_NEAR || !(-1e-4..=1.0 + 1e-4).contains(&t) || (c.z - height(t)).abs() > JOIN_HEIGHT {
+            continue;
+        }
+        let e = on.entry(key(*c)).or_insert((t, *c));
+        if (c.z - height(t)).abs() < (e.1.z - height(t)).abs() {
+            *e = (t, *c);
+        }
+    }
+    let (mut a, mut b) = (s.a, s.b);
+    if let Some(&(_, c)) = on.get(&key(a)) {
+        a.z = c.z;
+    }
+    if let Some(&(_, c)) = on.get(&key(b)) {
+        b.z = c.z;
+    }
+    let mut inner: Vec<(f32, Vec3)> = on
+        .into_values()
+        .filter(|(t, c)| *t > 1e-4 && *t < 1.0 - 1e-4 && key(*c) != key(a) && key(*c) != key(b))
+        .collect();
+    inner.sort_by(|x, y| y.0.total_cmp(&x.0));
+    let mut corners = vec![a, b];
+    corners.extend(inner.into_iter().map(|(_, c)| c));
+    corners
+}
+
 /// The point-in-polygon test seen from above.
 fn holds(c: &[Vec3], p: Vec2) -> bool {
     let n = c.len();
@@ -253,7 +348,8 @@ pub fn nearest_polygon<'a>(polys: impl Iterator<Item = &'a [Vec3]>, p: Vec3) -> 
 
 /// The polygon of `polys` under a point (see [`nearest_polygon`]).
 fn polygon_under(polys: &[Poly], p: Vec3) -> Option<usize> {
-    nearest_polygon(polys.iter().map(|q| q.corners.as_slice()), p)
+    // Not on a border polygon: it has no area to stand on.
+    nearest_polygon(polys.iter().map(|q| if q.border.is_some() { &[][..] } else { q.corners.as_slice() }), p)
 }
 
 /// `centroid_x` and `centroid_y` as the game has them: where the corners'
@@ -265,8 +361,8 @@ fn centroid(p: &NavmeshPolygon, corners: &[Vec3]) -> (u8, u8) {
     (f(c.x, min[0], max[0]), f(c.y, min[1], max[1]))
 }
 
-/// Puts `added` in `nm` in place of what's in `r`. The region must keep
-/// clear of the navmesh's sides (its polygons there join the next cell).
+/// Puts `added` in `nm` in place of what's in `r`, which may reach the
+/// navmesh's sides (it must not go past them).
 pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Result<(Navmesh, Stitched), String> {
     let (Some(verts), Some(inds), Some(polys), Some(edges)) =
         (nm.vertex_positions(), nm.indices(), nm.polygons(), nm.edges())
@@ -276,10 +372,12 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
     let n_areas = (nm.adj_area_ids_count as usize).min(32);
     let own = nm.adj_area_ids[..n_areas].iter().position(|&a| a == nm.area_id).map(|i| i as u32);
     let mut report = Stitched::default();
+    let (lo, hi) = (Vec2::new(nm.aabb_min[0], nm.aabb_min[1]), Vec2::new(nm.aabb_max[0], nm.aabb_max[1]));
 
     // The old polygons: kept whole, cut, or gone.
     let mut out: Vec<Poly> = Vec::new();
     let mut gone: HashSet<u32> = HashSet::new();
+    let mut stretches: Vec<Stretch> = Vec::new();
     for (i, p) in polys.iter().enumerate() {
         let i = i as u32;
         let n = p.index_count() as usize;
@@ -288,6 +386,19 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
             (0..n).map(|k| edges.get(p.index_id as usize + k).copied().unwrap_or_default()).collect();
         let (zlo, zhi) = corners.iter().fold((f32::MAX, f32::MIN), |(l, h), c| (l.min(c.z), h.max(c.z)));
         let in_heights = zhi >= r.z_min && zlo <= r.z_max;
+        if let Some(way_out) = border_side(p, &corners, lo, hi) {
+            let outward: Vec<(Vec3, Vec3)> =
+                (0..n).map(|k| (corners[k], corners[(k + 1) % n])).filter(|&(a, b)| faces_out(a, b, way_out)).collect();
+            let reached =
+                in_heights && outward.iter().any(|&(a, b)| reaches(r, way_out, lo, hi, a.truncate(), b.truncate()));
+            if reached {
+                gone.insert(i);
+                stretches.extend(outward.into_iter().map(|(a, b)| Stretch { out: way_out, a, b, attributes: *p }));
+            } else {
+                out.push(Poly { corners, attributes: *p, origin: Origin::Kept(i), old_edges, border: Some(way_out) });
+            }
+            continue;
+        }
         let inside = corners.iter().filter(|c| r.holds(c.truncate())).count();
         let touches = n >= 3
             && in_heights
@@ -296,7 +407,7 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
             if n < 3 && in_heights && inside > 0 {
                 return Err("the box reaches the navmesh's side: keep it inside the cell".into());
             }
-            out.push(Poly { corners, attributes: *p, origin: Origin::Kept(i), old_edges });
+            out.push(Poly { corners, attributes: *p, origin: Origin::Kept(i), old_edges, border: None });
             continue;
         }
         gone.insert(i);
@@ -306,12 +417,24 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
         }
         for piece in outside_pieces(&corners, r) {
             report.pieces += 1;
-            out.push(Poly { corners: piece, attributes: *p, origin: Origin::Piece, old_edges: Vec::new() });
+            out.push(Poly {
+                corners: piece,
+                attributes: *p,
+                origin: Origin::Piece,
+                old_edges: Vec::new(),
+                border: None,
+            });
         }
     }
     for a in added {
         report.added += 1;
-        out.push(Poly { corners: a.corners, attributes: a.attributes, origin: Origin::New, old_edges: Vec::new() });
+        out.push(Poly {
+            corners: a.corners,
+            attributes: a.attributes,
+            origin: Origin::New,
+            old_edges: Vec::new(),
+            border: None,
+        });
     }
 
     // Along the region's sides, every polygon gets every corner there. The
@@ -329,6 +452,15 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
                         }
                     })
                     .or_insert(*c);
+            }
+        }
+    }
+    // The border stretches' ends too, so that the polygons along them have
+    // them as corners.
+    for s in &stretches {
+        for c in [s.a, s.b] {
+            if on_side(c, r) {
+                side_points.entry(key(c)).or_insert(c);
             }
         }
     }
@@ -379,6 +511,20 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
         i += 1;
     }
 
+    // The border polygons along the stretches the region reached, made again.
+    let made: Vec<Poly> = stretches
+        .iter()
+        .map(|s| Poly {
+            corners: border_polygon(s, &out),
+            attributes: s.attributes,
+            origin: Origin::New,
+            old_edges: Vec::new(),
+            border: Some(s.out),
+        })
+        .collect();
+    report.borders = made.len();
+    out.extend(made);
+
     // The new indices of the old polygons kept whole.
     for (n, p) in out.iter().enumerate() {
         if let Origin::Kept(o) = p.origin {
@@ -391,14 +537,14 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
     // By each edge's corners seen from above: the polygons and corners.
     type EdgeKey = ((i64, i64), (i64, i64));
     let mut by_edge: HashMap<EdgeKey, Vec<(usize, usize)>> = HashMap::new();
-    for (pi, p) in out.iter().enumerate() {
+    for (pi, p) in out.iter().enumerate().filter(|(_, p)| p.border.is_none()) {
         let n = p.corners.len();
         for k in 0..n {
             by_edge.entry((key(p.corners[k]), key(p.corners[(k + 1) % n]))).or_default().push((pi, k));
         }
     }
     let mut neighbours: Vec<Vec<Option<usize>>> = out.iter().map(|p| vec![None; p.corners.len()]).collect();
-    for (pi, p) in out.iter().enumerate() {
+    for (pi, p) in out.iter().enumerate().filter(|(_, p)| p.border.is_none()) {
         let n = p.corners.len();
         #[allow(clippy::needless_range_loop)]
         for k in 0..n {
@@ -427,6 +573,47 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
                 })
             });
             neighbours[pi][k] = found.map(|(qi, _)| qi);
+        }
+    }
+
+    // Border polygons: their edges facing in join the polygons along them
+    // the same way round (those kept with them stay).
+    for si in 0..out.len() {
+        let Some(way_out) = out[si].border else { continue };
+        let n = out[si].corners.len();
+        for k in 0..n {
+            let (a, b) = (out[si].corners[k], out[si].corners[(k + 1) % n]);
+            if faces_out(a, b, way_out) {
+                continue;
+            }
+            // A kept one's edge stays as it was, unless what it joined went.
+            if let Origin::Kept(_) = out[si].origin {
+                let e = out[si].old_edges[k];
+                let across = (Some(e.area_id1()) == own && e.poly_id1() != NO_POLYGON).then(|| e.poly_id1());
+                match across {
+                    Some(q) if !gone.contains(&q) => {
+                        neighbours[si][k] = report.kept.get(&q).map(|&x| x as usize);
+                        continue;
+                    }
+                    None => continue,
+                    Some(_) => {}
+                }
+            }
+            // A polygon's edge already joined (to another border polygon at
+            // another height) isn't taken.
+            let found = by_edge.get(&(key(a), key(b))).and_then(|list| {
+                list.iter().copied().find(|&(qi, qk)| {
+                    let q = &out[qi];
+                    let (qa, qb) = (q.corners[qk], q.corners[(qk + 1) % q.corners.len()]);
+                    neighbours[qi][qk].is_none()
+                        && (qa.z - a.z).abs() <= JOIN_HEIGHT
+                        && (qb.z - b.z).abs() <= JOIN_HEIGHT
+                })
+            });
+            if let Some((qi, qk)) = found {
+                neighbours[si][k] = Some(qi);
+                neighbours[qi][qk] = Some(si);
+            }
         }
     }
 
@@ -541,6 +728,7 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
     let open: Vec<(Vec2, Vec2)> = out
         .iter()
         .enumerate()
+        .filter(|(_, p)| p.border.is_none())
         .flat_map(|(pi, p)| {
             let n = p.corners.len();
             let nb = &neighbours[pi];
@@ -585,6 +773,9 @@ pub fn replace_region(nm: &Navmesh, r: &Region, added: Vec<NewPolygon>) -> Resul
                         e.set_area_id2(none);
                         e.set_poly_id1(NO_POLYGON);
                         e.set_poly_id2(NO_POLYGON);
+                        if p.border.is_some() {
+                            e.set_flags(e.flags() | EXTERNAL_EDGE);
+                        }
                     }
                 }
                 let changed = !matches!(p.origin, Origin::Kept(_)) || near(p.corners[k].truncate());
@@ -749,6 +940,163 @@ mod tests {
             })
             .sum();
         assert!((area - 144.0).abs() < 0.1, "{area}");
+    }
+
+    /// The grid navmesh with a border polygon along its right side (x = 12)
+    /// for each row, as the game's: two corners, the edge facing out first
+    /// (going down), then back up along the square's edge.
+    fn grid_navmesh_with_border() -> Navmesh {
+        let mut nm = grid_navmesh();
+        let (v, i, mut p, mut e) =
+            (nm.vertex_positions().unwrap(), nm.indices().unwrap(), nm.polygons().unwrap(), nm.edges().unwrap());
+        let mut b = NavmeshBuilder::new();
+        let mut built = Vec::new();
+        for (pi, poly) in p.iter_mut().enumerate() {
+            let n = poly.index_count() as usize;
+            let c: Vec<[f32; 3]> = (0..n).map(|k| poly.vertex(k, &v, &i)).collect();
+            let mut edges: Vec<NavmeshEdge> = (0..n).map(|k| e[poly.index_id as usize + k]).collect();
+            if pi % 3 == 2 {
+                // The right edge joins the border polygon of its row.
+                edges[1].set_area_id1(0);
+                edges[1].set_area_id2(0);
+                edges[1].set_poly_id1(9 + pi as u32 / 3);
+                edges[1].set_poly_id2(9 + pi as u32 / 3);
+            }
+            let mut q = *poly;
+            b.build_polygon(&mut q, Some(&c), &edges, None);
+            built.push(q);
+        }
+        for j in 0..3 {
+            let (y0, y1) = (j as f32 * 4.0, j as f32 * 4.0 + 4.0);
+            let c = [[12.0, y1, 0.0], [12.0, y0, 0.0]];
+            let mut out = NavmeshEdge::default();
+            out.set_area_id1(1);
+            out.set_area_id2(1);
+            out.set_poly_id1(NO_POLYGON);
+            out.set_poly_id2(NO_POLYGON);
+            out.set_flags(EXTERNAL_EDGE);
+            let mut inner = NavmeshEdge::default();
+            inner.set_poly_id1(j * 3 + 2);
+            inner.set_poly_id2(j * 3 + 2);
+            let mut q = NavmeshPolygon::default();
+            q.set_flags(poly_flags::ZERO_AREA_STITCH_POLY_DLC | poly_flags::LIES_ALONG_EDGE_OF_MESH);
+            b.build_polygon(&mut q, Some(&c), &[out, inner], None);
+            built.push(q);
+        }
+        e.clear();
+        nm.rebuild_lists(&b.vertices, &b.indices, &b.edges, Some(&built));
+        nm.rebuild_quad_tree(&built, &b.vertices, &b.indices);
+        nm
+    }
+
+    /// Each border polygon of the result: its corners, and each edge's
+    /// polygon across (`None` for nothing) and flags.
+    /// A border polygon's corners, and each edge's polygon across and flags.
+    type Border = (Vec<Vec3>, Vec<(Option<u32>, u32)>);
+
+    fn borders(nm: &Navmesh) -> Vec<Border> {
+        let (v, i, p, e) =
+            (nm.vertex_positions().unwrap(), nm.indices().unwrap(), nm.polygons().unwrap(), nm.edges().unwrap());
+        p.iter()
+            .filter(|q| q.flags() & poly_flags::ZERO_AREA_STITCH_POLY_DLC != 0)
+            .map(|q| {
+                let n = q.index_count() as usize;
+                let c = (0..n).map(|k| Vec3::from(q.vertex(k, &v, &i))).collect();
+                let edges = (0..n)
+                    .map(|k| {
+                        let x = e[q.index_id as usize + k];
+                        ((x.poly_id1() != NO_POLYGON).then(|| x.poly_id1()), x.flags())
+                    })
+                    .collect();
+                (c, edges)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn border_polygons_are_made_again_along_the_same_stretches() {
+        let nm = grid_navmesh_with_border();
+        assert_eq!(borders(&nm).len(), 3);
+        // A region reaching the right side: the border polygons it reaches go
+        // and come back along the same stretches.
+        let r = Region { min: Vec2::new(5.0, 1.0), max: Vec2::new(12.0, 11.0), z_min: -1.0, z_max: 1.0 };
+        let rect = [
+            Vec3::new(5.0, 1.0, 0.0),
+            Vec3::new(12.0, 1.0, 0.0),
+            Vec3::new(12.0, 11.0, 0.0),
+            Vec3::new(5.0, 11.0, 0.0),
+        ];
+        let added: Vec<NewPolygon> = split_by_grid(&rect, Vec2::ZERO, 4.0)
+            .into_iter()
+            .map(|corners| NewPolygon { corners, attributes: NavmeshPolygon::default() })
+            .collect();
+        let (out, report) = replace_region(&nm, &r, added).unwrap();
+        assert_eq!(report.borders, 3);
+        let after = borders(&out);
+        assert_eq!(after.len(), 3);
+        let (p, e) = (out.polygons().unwrap(), out.edges().unwrap());
+        let (v, i) = (out.vertex_positions().unwrap(), out.indices().unwrap());
+        let mut stretches: Vec<(i64, i64)> = Vec::new();
+        for (c, edges) in &after {
+            // The edge facing out first, going down x = 12, with nothing across.
+            assert!(c.iter().all(|p| (p.x - 12.0).abs() < 1e-3), "{c:?}");
+            assert!(c[1].y < c[0].y);
+            assert_eq!(edges[0], (None, EXTERNAL_EDGE));
+            stretches.push(((c[1].y * 10.0).round() as i64, (c[0].y * 10.0).round() as i64));
+            // Every edge back up joins a polygon whose edge goes the same way.
+            for k in 1..c.len() {
+                let (a, b) = (c[k], c[(k + 1) % c.len()]);
+                assert!(b.y > a.y);
+                let q = edges[k].0.unwrap_or_else(|| panic!("{a} to {b} joins nothing"));
+                let qp = &p[q as usize];
+                let n = qp.index_count() as usize;
+                let back = (0..n).find(|&j| {
+                    let (qa, qb) = (Vec3::from(qp.vertex(j, &v, &i)), Vec3::from(qp.vertex((j + 1) % n, &v, &i)));
+                    qa.distance(a) < 1e-3 && qb.distance(b) < 1e-3
+                });
+                let j = back.unwrap_or_else(|| panic!("{a} to {b}: polygon {q} has no such edge"));
+                let across = e[qp.index_id as usize + j].poly_id1();
+                assert!(p[across as usize].flags() & poly_flags::ZERO_AREA_STITCH_POLY_DLC != 0, "not joined back");
+            }
+        }
+        stretches.sort_unstable();
+        assert_eq!(stretches, vec![(0, 40), (40, 80), (80, 120)]);
+        // The squares' right edges as they were: none joins nothing.
+        let joined_right: usize = p
+            .iter()
+            .filter(|q| q.flags() & poly_flags::ZERO_AREA_STITCH_POLY_DLC == 0)
+            .map(|q| {
+                let n = q.index_count() as usize;
+                (0..n)
+                    .filter(|&k| {
+                        let (a, b) = (q.vertex(k, &v, &i), q.vertex((k + 1) % n, &v, &i));
+                        (a[0] - 12.0).abs() < 1e-3 && (b[0] - 12.0).abs() < 1e-3
+                    })
+                    .filter(|&k| e[q.index_id as usize + k].poly_id1() == NO_POLYGON)
+                    .count()
+            })
+            .sum();
+        assert_eq!(joined_right, 0, "an edge along the side joins no border polygon");
+    }
+
+    #[test]
+    fn a_region_short_of_the_side_keeps_the_border() {
+        let nm = grid_navmesh_with_border();
+        let r = Region { min: Vec2::new(5.0, 5.0), max: Vec2::new(10.0, 7.0), z_min: -1.0, z_max: 1.0 };
+        let corners = vec![
+            Vec3::new(5.0, 5.0, 0.0),
+            Vec3::new(10.0, 5.0, 0.0),
+            Vec3::new(10.0, 7.0, 0.0),
+            Vec3::new(5.0, 7.0, 0.0),
+        ];
+        let added = vec![NewPolygon { corners, attributes: NavmeshPolygon::default() }];
+        let (out, report) = replace_region(&nm, &r, added).unwrap();
+        assert_eq!(report.borders, 0);
+        // The middle row's square was cut: its piece along the side is joined
+        // to the border polygon, both ways.
+        for (_, edges) in borders(&out) {
+            assert!(edges[1].0.is_some());
+        }
     }
 
     #[test]

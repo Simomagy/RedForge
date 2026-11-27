@@ -19,7 +19,8 @@ const GRID_MIN: f32 = -15900.0;
 /// The game's navmeshes cut open ground into squares this big (3.97 m in
 /// Valentine's).
 const GRID_SPLIT: f32 = 4.0;
-/// How far a region keeps from its cell's sides.
+/// A box's side this near a cell's side goes to it (no slivers of the old
+/// navmesh between them).
 const CELL_MARGIN: f32 = 1.5;
 /// Polygons smaller than this are `Small` (as every one of the game's is).
 const SMALL_AREA: f32 = 2.0;
@@ -55,15 +56,64 @@ const INHERITED: u64 = poly_flags::PAVEMENT
 /// What making navmesh in a box did.
 #[derive(Clone, Debug, Default)]
 pub struct Generated {
-    /// The navmesh's file name.
-    pub navmesh: String,
+    /// The file names of the navmeshes the box is in (one per cell it
+    /// crosses).
+    pub navmeshes: Vec<String>,
     /// Collision triangles under the box, and polygons made from them.
     pub triangles: usize,
+    /// The cells' sums (their `kept` maps left out).
     pub stitched: Stitched,
-    /// Special links of the next cells into this one, put on its new
-    /// polygons; and those that found none there (left as they were).
+    /// Special links of the next cells into the changed ones, put on their
+    /// new polygons; and those that found none there (left as they were).
     pub neighbour_links: usize,
     pub neighbour_links_lost: usize,
+    /// Cells the box crosses that have no navmesh.
+    pub cells_without_navmesh: Vec<String>,
+}
+
+/// Navmesh made in a box, not in the documents yet: to look at, then
+/// [`Editor::apply_made_navmesh`].
+#[derive(Clone, Debug)]
+pub struct MadeNavmesh {
+    pub region: Region,
+    pub generated: Generated,
+    /// The navmeshes as they'd be (the box's cells, and the next cells whose
+    /// links changed), and as they were when made.
+    navmeshes: Vec<(u32, Arc<Navmesh>)>,
+    from: Vec<(u32, Arc<Navmesh>)>,
+}
+
+impl MadeNavmesh {
+    /// A navmesh as it would be, if this changes it.
+    pub fn navmesh(&self, name: u32) -> Option<&Arc<Navmesh>> {
+        self.navmeshes.iter().find(|(n, _)| *n == name).map(|(_, nm)| nm)
+    }
+
+    /// The navmeshes it changes.
+    pub fn names(&self) -> impl Iterator<Item = u32> + '_ {
+        self.navmeshes.iter().map(|(n, _)| *n)
+    }
+}
+
+impl Stitched {
+    fn add(&mut self, o: &Stitched) {
+        self.removed += o.removed;
+        self.pieces += o.pieces;
+        self.added += o.added;
+        self.links_moved += o.links_moved;
+        self.links_dropped += o.links_dropped;
+        self.borders += o.borders;
+    }
+}
+
+/// A box with its sides near a cell's side moved to it.
+fn snapped(mut r: Region) -> Region {
+    let snap = |v: f32| {
+        let line = GRID_MIN + ((v - GRID_MIN) / GRID_CELL).round() * GRID_CELL;
+        if (v - line).abs() < CELL_MARGIN { line } else { v }
+    };
+    (r.min.x, r.min.y, r.max.x, r.max.y) = (snap(r.min.x), snap(r.min.y), snap(r.max.x), snap(r.max.y));
+    r
 }
 
 /// The navmesh cell a point is in, and its file name.
@@ -308,24 +358,24 @@ impl Editor {
         out
     }
 
-    /// Makes a region of a navmesh cell again from the collision under it
-    /// (see [`stitch`]): one undo step, with the next cells' links into it.
+    /// Makes the navmesh in a box again from the collision under it (see
+    /// [`stitch`]), in every cell the box crosses, and puts it in at once:
+    /// one undo step, with the next cells' links into them.
     pub fn generate_navmesh(&mut self, region: Region, s: &Settings) -> Result<Generated, String> {
-        let centre = (region.min + region.max) * 0.5;
-        let (cell, file_name) = cell_of(centre);
-        let name = joaat(&file_name);
-        self.open_navmesh(name).map_err(|e| format!("{file_name}: {e}"))?;
-        let old = self.navmeshes[&name].root.clone();
-        let (cmin, cmax) = (Vec2::new(old.aabb_min[0], old.aabb_min[1]), Vec2::new(old.aabb_max[0], old.aabb_max[1]));
-        if region.min.x < cmin.x + CELL_MARGIN
-            || region.min.y < cmin.y + CELL_MARGIN
-            || region.max.x > cmax.x - CELL_MARGIN
-            || region.max.y > cmax.y - CELL_MARGIN
-        {
-            return Err(format!(
-                "keep the box inside one navmesh cell, {CELL_MARGIN} m from its sides: {file_name} is {:.0}, {:.0} to {:.0}, {:.0}",
-                cmin.x, cmin.y, cmax.x, cmax.y
-            ));
+        let made = self.make_navmesh(region, s)?;
+        self.apply_made_navmesh(made)
+    }
+
+    /// Makes the navmesh in a box again from the collision under it, without
+    /// putting it in: in every cell the box crosses (its sides within
+    /// 1.5 m of a cell's side go to it), each cut to its cell and joined to
+    /// the rest there, the cells' border polygons made again where the box
+    /// reaches them; and the special links of the cells around that lead
+    /// into them.
+    pub fn make_navmesh(&mut self, region: Region, s: &Settings) -> Result<MadeNavmesh, String> {
+        let region = snapped(region);
+        if region.max.x - region.min.x < 1.0 || region.max.y - region.min.y < 1.0 {
+            return Err("the box is too small".into());
         }
 
         // The collision around the box, wide enough for the edges inside it.
@@ -338,96 +388,158 @@ impl Editor {
         let made = super::generate(&triangles, area, s, &|t| {
             if t.material.data2.flags() & FLAG_STAIRS != 0 { STAIRS_AREA } else { 1 }
         })?;
-
-        // Inside the box, cut by the game's 4 m grid, on the ground.
         let slope_cos = s.max_slope.to_radians().cos();
         let ground = Ground::new(&triangles, area.0.truncate(), area.1.truncate(), slope_cos);
         let reach = s.max_climb + 2.0 * s.cell_height;
-        let before = Flat::new(&old);
         let (rooms, doorways) = self.interior_parts();
-        let mut added = Vec::new();
-        for p in &made {
-            let part = stitch::inside_part(&p.corners, &region);
-            if part.len() < 3 {
-                continue;
-            }
-            for mut corners in stitch::split_by_grid(&part, cmin, GRID_SPLIT) {
-                for c in &mut corners {
-                    if let Some((z, _)) = ground.at(*c, reach) {
-                        c.z = z;
-                    }
-                }
-                let attributes = attributes(&corners, p.area, &before, &ground, &rooms, &doorways);
-                added.push(NewPolygon { corners, attributes });
-            }
-        }
-        let (mut nm, stitched) = stitch::replace_region(&old, &region, added)?;
-        nm.build_id = old.build_id;
 
-        // The next cells' links into this one.
-        let mut roots = vec![(DocKey::Navmesh(name), Root::Navmesh(Arc::new(nm.clone())))];
-        let (mut moved, mut lost) = (0, 0);
-        let after = Flat::new(&nm);
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                if (dx, dy) == (0, 0) {
+        // Each cell the box crosses: its part, cut by the game's 4 m grid, on
+        // the ground.
+        let mut generated = Generated { triangles: triangles.len(), ..Default::default() };
+        let mut from: Vec<(u32, Arc<Navmesh>)> = Vec::new();
+        let mut current: Vec<(u32, Navmesh)> = Vec::new();
+        // Each changed navmesh, its cell, as it was, and what happened to it.
+        type Changed = (u32, (i32, i32), Arc<Navmesh>, Stitched);
+        let mut changed: Vec<Changed> = Vec::new();
+        let ((x0, y0), _) = cell_of(region.min + Vec2::splat(0.01));
+        let ((x1, y1), _) = cell_of(region.max - Vec2::splat(0.01));
+        for cx in x0..=x1 {
+            for cy in y0..=y1 {
+                let file_name = format!("navmesh[{}][{}]", cx * 3, cy * 3);
+                let name = joaat(&file_name);
+                if self.data.stream_entry("ynv", name).is_none() && !self.navmeshes.contains_key(&name) {
+                    generated.cells_without_navmesh.push(file_name);
                     continue;
                 }
-                let other_name = format!("navmesh[{}][{}]", (cell.0 + dx) * 3, (cell.1 + dy) * 3);
-                let other = joaat(&other_name);
-                if self.data.stream_entry("ynv", other).is_none() && !self.navmeshes.contains_key(&other) {
+                self.open_navmesh(name).map_err(|e| format!("{file_name}: {e}"))?;
+                let old = self.navmeshes[&name].root.clone();
+                let (cmin, cmax) =
+                    (Vec2::new(old.aabb_min[0], old.aabb_min[1]), Vec2::new(old.aabb_max[0], old.aabb_max[1]));
+                let part = Region { min: region.min.max(cmin), max: region.max.min(cmax), ..region };
+                if part.max.x - part.min.x < 0.01 || part.max.y - part.min.y < 0.01 {
                     continue;
                 }
-                if self.open_navmesh(other).is_err() {
-                    continue;
-                }
-                let mut o = (*self.navmeshes[&other].root).clone();
-                let Some(links) = o.special_links.as_mut() else { continue };
-                let mut changed = false;
-                for l in links.iter_mut() {
-                    for end in [0, 1] {
-                        let (area_id, poly, pos) = if end == 0 {
-                            (l.area_id1, &mut l.poly_id1, &mut l.position1)
-                        } else {
-                            (l.area_id2, &mut l.poly_id2, &mut l.position2)
-                        };
-                        if area_id as u32 != old.area_id {
-                            continue;
-                        }
-                        let world = Vec3::from(pos.to_vec3(old.aabb_min, old.extents3()));
-                        let now = match stitched.kept.get(&(*poly as u32)) {
-                            Some(&k) => Some(k as u16),
-                            None => after.nearest(world).map(|i| i as u16),
-                        };
-                        match now {
-                            Some(p) => {
-                                if p != *poly {
-                                    moved += 1;
-                                }
-                                *poly = p;
+                let before = Flat::new(&old);
+                let mut added = Vec::new();
+                for p in &made {
+                    let inside = stitch::inside_part(&p.corners, &part);
+                    if inside.len() < 3 {
+                        continue;
+                    }
+                    for mut corners in stitch::split_by_grid(&inside, cmin, GRID_SPLIT) {
+                        for c in &mut corners {
+                            if let Some((z, _)) = ground.at(*c, reach) {
+                                c.z = z;
                             }
-                            None => lost += 1,
                         }
-                        *pos = NavmeshVertex::new(world.to_array(), nm.aabb_min, nm.extents3());
-                        changed = true;
+                        let attributes = attributes(&corners, p.area, &before, &ground, &rooms, &doorways);
+                        added.push(NewPolygon { corners, attributes });
                     }
                 }
-                for l in links.iter_mut() {
-                    (l.poly_id1a, l.poly_id2a) = (l.poly_id1, l.poly_id2);
-                }
-                if changed {
-                    roots.push((DocKey::Navmesh(other), Root::Navmesh(Arc::new(o))));
+                let (mut nm, stitched) =
+                    stitch::replace_region(&old, &part, added).map_err(|e| format!("{file_name}: {e}"))?;
+                nm.build_id = old.build_id;
+                generated.stitched.add(&stitched);
+                generated.navmeshes.push(file_name);
+                from.push((name, old.clone()));
+                current.push((name, nm));
+                changed.push((name, (cx, cy), old, stitched));
+            }
+        }
+        if changed.is_empty() {
+            return Err("no navmesh where the box is".into());
+        }
+
+        // The special links of the cells around (and of each other) into the
+        // changed ones.
+        for (name, cell, old, stitched) in &changed {
+            let new_box = {
+                let nm = &current.iter().find(|(n, _)| n == name).expect("changed").1;
+                (nm.aabb_min, nm.extents3())
+            };
+            let after = Flat::new(&current.iter().find(|(n, _)| n == name).expect("changed").1);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    if (dx, dy) == (0, 0) {
+                        continue;
+                    }
+                    let other = joaat(&format!("navmesh[{}][{}]", (cell.0 + dx) * 3, (cell.1 + dy) * 3));
+                    let mut o = match current.iter().position(|(n, _)| *n == other) {
+                        Some(i) => current[i].1.clone(),
+                        None => {
+                            if self.data.stream_entry("ynv", other).is_none() && !self.navmeshes.contains_key(&other)
+                                || self.open_navmesh(other).is_err()
+                            {
+                                continue;
+                            }
+                            (*self.navmeshes[&other].root).clone()
+                        }
+                    };
+                    let Some(links) = o.special_links.as_mut() else { continue };
+                    let mut touched = false;
+                    for l in links.iter_mut() {
+                        for end in [0, 1] {
+                            let (area_id, poly, pos) = if end == 0 {
+                                (l.area_id1, &mut l.poly_id1, &mut l.position1)
+                            } else {
+                                (l.area_id2, &mut l.poly_id2, &mut l.position2)
+                            };
+                            if area_id as u32 != old.area_id {
+                                continue;
+                            }
+                            let world = Vec3::from(pos.to_vec3(old.aabb_min, old.extents3()));
+                            let now = match stitched.kept.get(&(*poly as u32)) {
+                                Some(&k) => Some(k as u16),
+                                None => after.nearest(world).map(|i| i as u16),
+                            };
+                            match now {
+                                Some(p) => {
+                                    if p != *poly {
+                                        generated.neighbour_links += 1;
+                                    }
+                                    *poly = p;
+                                }
+                                None => generated.neighbour_links_lost += 1,
+                            }
+                            *pos = NavmeshVertex::new(world.to_array(), new_box.0, new_box.1);
+                            touched = true;
+                        }
+                    }
+                    for l in links.iter_mut() {
+                        (l.poly_id1a, l.poly_id2a) = (l.poly_id1, l.poly_id2);
+                    }
+                    if touched {
+                        match current.iter().position(|(n, _)| *n == other) {
+                            Some(i) => current[i].1 = o,
+                            None => {
+                                from.push((other, self.navmeshes[&other].root.clone()));
+                                current.push((other, o));
+                            }
+                        }
+                    }
                 }
             }
         }
-        self.commit_roots("Make navmesh", roots);
-        Ok(Generated {
-            navmesh: file_name,
-            triangles: triangles.len(),
-            stitched,
-            neighbour_links: moved,
-            neighbour_links_lost: lost,
+        Ok(MadeNavmesh {
+            region,
+            generated,
+            navmeshes: current.into_iter().map(|(n, nm)| (n, Arc::new(nm))).collect(),
+            from,
         })
+    }
+
+    /// Puts navmesh made by [`Editor::make_navmesh`] in: one undo step. Not
+    /// if one of its navmeshes changed since.
+    pub fn apply_made_navmesh(&mut self, made: MadeNavmesh) -> Result<Generated, String> {
+        for (name, was) in &made.from {
+            if self.navmeshes.get(name).is_none_or(|d| !Arc::ptr_eq(&d.root, was)) {
+                return Err("the navmesh changed since it was made: make it again".into());
+            }
+        }
+        let roots =
+            made.navmeshes.into_iter().map(|(n, nm)| (DocKey::Navmesh(n), Root::Navmesh(nm))).collect::<Vec<_>>();
+        self.commit_roots("Make navmesh", roots);
+        Ok(made.generated)
     }
 
     /// The rooms of the interiors placed around (their boxes in the world)

@@ -13,7 +13,7 @@ pub mod collision;
 mod editor;
 pub mod stitch;
 
-pub use editor::{Generated, cell_of};
+pub use editor::{Generated, MadeNavmesh, cell_of};
 
 use glam::Vec3;
 use glam033 as g;

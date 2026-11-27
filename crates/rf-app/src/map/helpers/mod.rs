@@ -175,6 +175,9 @@ pub struct Collect<'a> {
     pub world: &'a rf_world::World,
     /// The documents open: navmeshes are drawn from them.
     pub editor: &'a rf_editor::Editor,
+    /// Navmesh made but not applied: drawn in place of the navmeshes it
+    /// changes.
+    pub navmesh_preview: Option<&'a rf_editor::navgen::MadeNavmesh>,
     /// The selected and hovered helpers, for the modes that draw them.
     pub selected: &'a [HelperKey],
     pub hover: Option<HelperKey>,

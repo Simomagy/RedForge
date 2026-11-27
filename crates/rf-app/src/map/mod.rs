@@ -568,9 +568,7 @@ impl MapView {
                         let tip = match (tools.blender_connected, any) {
                             (true, true) => "Edit the selection in Blender (Ctrl+B)",
                             (true, false) => "Edit in Blender (Ctrl+B): select objects first",
-                            (false, _) => {
-                                "Edit in Blender (Ctrl+B): open Blender with the RedForge for Blender add-on"
-                            }
+                            (false, _) => "Edit in Blender (Ctrl+B): open Blender with the RedForge for Blender add-on",
                         };
                         let button = ui
                             .add_enabled(any, egui::Button::new(icon_text(icon::ARROW_SQUARE_OUT, "Blender")))
@@ -895,6 +893,7 @@ impl MapView {
                 game: &self.game,
                 world: &ed.world,
                 editor: ed,
+                navmesh_preview: tools.navmesh_preview.as_ref(),
                 selected: &tools.helper_selection,
                 hover: tools.hover_helper,
                 highlight: tools.navmesh_highlight,

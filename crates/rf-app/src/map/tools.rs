@@ -66,6 +66,9 @@ pub struct Tools {
     pub navmesh_box: Option<egui::Pos2>,
     /// What navmesh is made from collisions for.
     pub navgen: rf_editor::navgen::Settings,
+    /// Navmesh made from collisions, shown in place of the navmeshes it
+    /// changes until it's applied or dropped.
+    pub navmesh_preview: Option<rf_editor::navgen::MadeNavmesh>,
     /// The selected helpers as last drawn, for Properties.
     pub selected_parts: Vec<HelperPart>,
     /// Helpers shown elsewhere while they're dragged: each one's change from
@@ -193,6 +196,7 @@ impl Default for Tools {
             navmesh_overlays: std::env::var("REDFORGE_NAVMESH_OVERLAYS").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             navmesh_box: None,
             navgen: Default::default(),
+            navmesh_preview: None,
             selected_parts: Vec::new(),
             helper_preview: Vec::new(),
             focus: false,

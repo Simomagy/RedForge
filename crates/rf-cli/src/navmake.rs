@@ -85,19 +85,23 @@ pub fn run(fs: Rpf8FileSystem, strings: HashIndex, o: &Options) -> Result<()> {
     let g = ed.generate_navmesh(region, &o.settings).map_err(anyhow::Error::msg)?;
     let s = &g.stitched;
     println!(
-        "{}: {} polygons made from {} collision triangles in {:.2?}; {} removed, {} cut to fit; special links: {} moved, {} lost; the next cells': {} moved, {} lost",
-        g.navmesh,
+        "{}: {} polygons made from {} collision triangles in {:.2?}; {} removed, {} cut to fit, {} border polygons made again; special links: {} moved, {} lost; the next cells': {} moved, {} lost",
+        g.navmeshes.join(", "),
         s.added,
         g.triangles,
         t.elapsed(),
         s.removed,
         s.pieces,
+        s.borders,
         s.links_moved,
         s.links_dropped,
         g.neighbour_links,
         g.neighbour_links_lost
     );
 
+    if !g.cells_without_navmesh.is_empty() {
+        println!("no navmesh in {}: nothing made there", g.cells_without_navmesh.join(", "));
+    }
     std::fs::create_dir_all(&o.out).with_context(|| o.out.display().to_string())?;
     let changed: Vec<(u32, String)> =
         ed.navmeshes().filter(|d| d.is_dirty()).map(|d| (d.name, d.file_name.clone())).collect();

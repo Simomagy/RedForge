@@ -98,6 +98,9 @@ impl Properties {
         egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
             let mut tools = tools;
             match tools.as_deref_mut() {
+                Some(t) if t.navmesh_preview.is_some() => {
+                    crate::navmesh_props::preview_ui(ui, editor, t, &mut self.error);
+                }
                 Some(t) if !crate::navmesh_props::selected(t).is_empty() => {
                     crate::navmesh_props::ui(ui, editor, t, &mut self.error);
                 }

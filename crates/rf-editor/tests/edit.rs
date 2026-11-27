@@ -613,3 +613,188 @@ fn navmesh_generated_in_a_box() {
     assert!(ed.undo().is_some());
     assert!(Arc::ptr_eq(&ed.navmesh(name).unwrap().root, &old));
 }
+
+/// A box across the border of Valentine's two cells (x = -300), shown first
+/// and then applied: both cells change, their border polygons keep the
+/// stretches the other cell's meet, and the street is still walkable from
+/// one cell to the other through them.
+#[test]
+fn navmesh_made_across_cells() {
+    use rf_editor::navgen::{Settings, stitch::Region};
+    use rf_formats::formats::ynv::{self, poly_flags};
+    use std::collections::{HashMap, HashSet};
+    let Some(mut ed) = editor() else { return };
+    let at = [-300.0, 790.0, 118.0];
+    settle(&mut ed, at);
+    let (west, east) = (rf_formats::hash::joaat("navmesh[309][333]"), rf_formats::hash::joaat("navmesh[312][333]"));
+    let old_west = ed.open_navmesh(west).unwrap().root.clone();
+    let old_east = ed.open_navmesh(east).unwrap().root.clone();
+    let region =
+        Region { min: glam::Vec2::new(-312.0, 780.0), max: glam::Vec2::new(-290.0, 800.0), z_min: 108.0, z_max: 135.0 };
+
+    // Made, not applied: the documents are as they were.
+    let made = ed.make_navmesh(region, &Settings::default()).unwrap();
+    let g = &made.generated;
+    eprintln!(
+        "{:?}: {} triangles, {} added, {} removed, {} pieces, {} border polygons, links {} moved {} dropped, next cells' {} moved {} lost",
+        g.navmeshes,
+        g.triangles,
+        g.stitched.added,
+        g.stitched.removed,
+        g.stitched.pieces,
+        g.stitched.borders,
+        g.stitched.links_moved,
+        g.stitched.links_dropped,
+        g.neighbour_links,
+        g.neighbour_links_lost
+    );
+    assert_eq!(g.navmeshes.len(), 2);
+    assert!(g.stitched.borders > 2);
+    assert!(Arc::ptr_eq(&ed.navmesh(west).unwrap().root, &old_west));
+    assert!(made.navmesh(west).is_some() && made.navmesh(east).is_some());
+    ed.apply_made_navmesh(made).unwrap();
+    let (new_west, new_east) = (ed.navmesh(west).unwrap().root.clone(), ed.navmesh(east).unwrap().root.clone());
+
+    // A navmesh's polygons: corners and the polygon across each edge.
+    struct Mesh {
+        corners: Vec<Vec<Vec3>>,
+        across: Vec<Vec<Option<usize>>>,
+        border: Vec<bool>,
+    }
+    let mesh = |nm: &ynv::Navmesh| {
+        let (v, i, p, e) =
+            (nm.vertex_positions().unwrap(), nm.indices().unwrap(), nm.polygons().unwrap(), nm.edges().unwrap());
+        let corners: Vec<Vec<Vec3>> = p
+            .iter()
+            .map(|q| (0..q.index_count() as usize).map(|k| Vec3::from(q.vertex(k, &v, &i))).collect())
+            .collect();
+        let across = p
+            .iter()
+            .map(|q| {
+                (0..q.index_count() as usize)
+                    .map(|k| {
+                        let x = e[q.index_id as usize + k];
+                        let own = nm.adj_area_ids.get(x.area_id1() as usize) == Some(&nm.area_id);
+                        (own && x.poly_id1() != 0x7FFF).then(|| x.poly_id1() as usize)
+                    })
+                    .collect()
+            })
+            .collect();
+        let border = p.iter().map(|q| q.flags() & poly_flags::ZERO_AREA_STITCH_POLY_DLC != 0).collect();
+        Mesh { corners, across, border }
+    };
+    let key = |p: Vec3| ((p.x * 20.0).round() as i64, (p.y * 20.0).round() as i64);
+    // The stretches the border polygons on x = -300 face out along, near the
+    // box (from y0 to y1).
+    type Stretch = ((i64, i64), (i64, i64));
+    let stretches = |m: &Mesh, out: f32, y0: f32, y1: f32| -> HashSet<Stretch> {
+        let mut s = HashSet::new();
+        for (c, b) in m.corners.iter().zip(&m.border) {
+            if !b || !c.iter().all(|p| (p.x + 300.0).abs() < 0.01) || c.iter().all(|p| p.y < y0 || p.y > y1) {
+                continue;
+            }
+            for k in 0..c.len() {
+                let (a, b) = (c[k], c[(k + 1) % c.len()]);
+                // Left of the edge is out of the cell.
+                if (b - a).truncate().perp().x * out > 0.0 {
+                    let (ka, kb) = (key(a), key(b));
+                    s.insert(if ka < kb { (ka, kb) } else { (kb, ka) });
+                }
+            }
+        }
+        s
+    };
+    let (mw0, me0, mw, me) = (mesh(&old_west), mesh(&old_east), mesh(&new_west), mesh(&new_east));
+    assert_eq!(
+        stretches(&mw, 1.0, 770.0, 810.0),
+        stretches(&mw0, 1.0, 770.0, 810.0),
+        "the west cell's stretches changed"
+    );
+    assert_eq!(
+        stretches(&me, -1.0, 770.0, 810.0),
+        stretches(&me0, -1.0, 770.0, 810.0),
+        "the east cell's stretches changed"
+    );
+    // Where the box is, they meet (further on, the game's own don't always:
+    // another level?).
+    assert_eq!(
+        stretches(&mw, 1.0, 781.0, 799.0),
+        stretches(&me, -1.0, 781.0, 799.0),
+        "the cells' stretches don't meet"
+    );
+
+    // Joined both ways in each cell.
+    for m in [&mw, &me] {
+        for (pi, a) in m.across.iter().enumerate() {
+            for q in a.iter().flatten() {
+                assert!(m.across[*q].contains(&Some(pi)), "{pi} -> {q} not back");
+            }
+        }
+    }
+
+    // From the street west of the box (in the west cell) to the street east
+    // of it (in the east cell), crossing between the cells' border polygons
+    // by the stretch they share, as the game does when it loads them.
+    let nearest = |m: &Mesh, at: Vec3| {
+        (0..m.corners.len())
+            .filter(|&i| !m.border[i] && m.corners[i].len() >= 3)
+            .min_by(|&a, &b| {
+                let c = |i: usize| m.corners[i].iter().sum::<Vec3>() / m.corners[i].len() as f32;
+                c(a).distance(at).total_cmp(&c(b).distance(at))
+            })
+            .unwrap()
+    };
+    let meshes = [&mw, &me];
+    let mut by_stretch: HashMap<Stretch, Vec<(usize, usize)>> = HashMap::new();
+    for (mi, (m, out)) in meshes.iter().zip([1.0f32, -1.0]).enumerate() {
+        for (pi, (c, b)) in m.corners.iter().zip(&m.border).enumerate() {
+            if !b || !c.iter().all(|p| (p.x + 300.0).abs() < 0.01) {
+                continue;
+            }
+            for k in 0..c.len() {
+                let (a, b) = (c[k], c[(k + 1) % c.len()]);
+                if (b - a).truncate().perp().x * out > 0.0 {
+                    let (ka, kb) = (key(a), key(b));
+                    by_stretch.entry(if ka < kb { (ka, kb) } else { (kb, ka) }).or_default().push((mi, pi));
+                }
+            }
+        }
+    }
+    let from = (0, nearest(&mw, Vec3::new(-318.0, 793.0, 117.0)));
+    let to = (1, nearest(&me, Vec3::new(-284.0, 793.0, 117.4)));
+    let mut seen: HashSet<(usize, usize)> = HashSet::new();
+    let mut stack = vec![from];
+    while let Some((mi, pi)) = stack.pop() {
+        if !seen.insert((mi, pi)) {
+            continue;
+        }
+        let m = meshes[mi];
+        stack.extend(m.across[pi].iter().flatten().map(|q| (mi, *q)));
+        if m.border[pi] {
+            let c = &m.corners[pi];
+            for k in 0..c.len() {
+                let (ka, kb) = (key(c[k]), key(c[(k + 1) % c.len()]));
+                if let Some(list) = by_stretch.get(&if ka < kb { (ka, kb) } else { (kb, ka) }) {
+                    stack.extend(list.iter().filter(|(o, _)| *o != mi).copied());
+                }
+            }
+        }
+    }
+    assert!(seen.contains(&to), "no way from the west cell to the east one through the box");
+
+    // Written and read back; one undo brings both back.
+    for nm in [&new_west, &new_east] {
+        assert_eq!(ynv::read(&ynv::write(nm)).unwrap().polygons(), nm.polygons());
+    }
+    assert!(ed.undo().is_some());
+    assert!(Arc::ptr_eq(&ed.navmesh(west).unwrap().root, &old_west));
+    assert!(Arc::ptr_eq(&ed.navmesh(east).unwrap().root, &old_east));
+
+    // Made, then the navmesh changed: not applied.
+    let made = ed.make_navmesh(region, &Settings::default()).unwrap();
+    let any = rf_editor::navmesh::PolyRef { navmesh: east, index: 0 };
+    let had = ed.navmesh_polygon(any).unwrap().flags() & poly_flags::ISOLATED;
+    ed.set_polygon_flags(&[any], poly_flags::ISOLATED ^ had, had).unwrap();
+    assert!(!Arc::ptr_eq(&ed.navmesh(east).unwrap().root, &old_east));
+    assert!(ed.apply_made_navmesh(made).is_err());
+}

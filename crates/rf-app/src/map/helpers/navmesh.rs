@@ -712,7 +712,10 @@ impl Navmesh {
         for cell in cells(c.eye) {
             let name = file_name(cell);
             let hash = joaat(&name);
-            let doc = c.editor.navmesh(hash).map(|d| d.root.clone());
+            let doc = c
+                .navmesh_preview
+                .and_then(|m| m.navmesh(hash).cloned())
+                .or_else(|| c.editor.navmesh(hash).map(|d| d.root.clone()));
             let doc_at = doc.as_ref().map_or(0, |d| Arc::as_ptr(d) as usize);
             let want: Built = (doc_at, c.highlight, c.overlays & overlay::WITH_MESHES);
             let entry = self.files.entry(hash).or_insert_with(|| Entry {
