@@ -233,7 +233,11 @@ fields and slopes around), 80 m each, and compared it with the game's on a
   railing: the building's own collision (`pry_schoolhouse.ydr`, children
   without type flags) had been left out. Then a ped from outside the box
   (`/navborder`) and a horse around the school, crossing the box twice
-  (`/navhorse`), with `Door` flags in the doorways: no stop.
+  (`/navhorse`), with `Door` flags in the doorways: no stop. Then a box
+  across the border of cells 204/255 and 204/258 (y = -3000, 8 navmeshes
+  written): a ped from the other cell (`/navnorth`) crossed the border inside
+  the box and walked into the classroom. The preview's Apply and Cancel were
+  tried in the app.
 
 ## Scenario points
 
