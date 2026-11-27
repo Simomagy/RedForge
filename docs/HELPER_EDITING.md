@@ -282,8 +282,9 @@ Editor web app (`rf_editor::pausemap`, the app's `pausemap`). Verified:
   mipmaps, the web app's shader in WGSL, the tools and gestures of its
   canvas), Map layers (the tree, eye, lock, drag to reorder) and Properties
   (the selected layer's fields, or the tool's and the fonts).
-- **Not tested in game yet**: `rf_pausemap_test` (the sample project's 121
-  tiles).
+- **Tested in game** (RedM, `rf_pausemap_test`): the sample project's 125
+  tiles written by `rf pausemap-export`, labels in RDR Lino and Hapna among
+  them, show in the pause map.
 
 ## Scenario points
 
