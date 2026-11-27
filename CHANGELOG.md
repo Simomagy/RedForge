@@ -15,9 +15,13 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
   stamps, and an eraser for the game's own marks, drawn into the game's tiles
   the way the game draws its own, with undo. Labels can use the game's own
   fonts (RDR Lino, Hapna Slab Serif and the others, read from the game), the
-  bundled Zilla Slab, or font files added. **Map layers** lists the layers
-  (groups, showing, locking, dragging into order), Properties edits the one
-  selected, and the map shows where the world map's camera is.
+  bundled Zilla Slab, or font files added, each shown lettered in itself to
+  choose it. **Map layers** lists the layers (groups, showing, locking,
+  dragging into order), Properties edits the one selected with sliders, and
+  the map shows where the world map's camera is.
+- The middle of the menu bar switches between RedForge's editors: the
+  **Map editor** (the world map), the **Pause map** and the **Animation**
+  editor.
 - The drawing is kept in the project, and the RedM export writes the tiles it
   changed. Map Editor (`map-project.json`) and Aether Cartography projects
   import, and the drawing saves as a `map-project.json` too.

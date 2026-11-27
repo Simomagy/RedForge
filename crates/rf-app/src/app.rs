@@ -153,6 +153,14 @@ fn aim(v: &mut MapView, editor: &Editor, target: &str) -> bool {
     true
 }
 
+/// RedForge's editors, switched between in the menu bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    World,
+    PauseMap,
+    Animation,
+}
+
 /// A tab's kind and file, to find it open already.
 fn tab_key(t: &Tab) -> Option<(&'static str, &str)> {
     Some(match t {
@@ -209,6 +217,9 @@ pub struct RedForgeApp {
     wayland_drops: Option<Receiver<crate::wayland_drop::WaylandDrop>>,
     /// The window closes: the unsaved changes were saved or let go.
     quitting: bool,
+    /// The editor worked in last: the world map, the pause map or an
+    /// animation (the menu bar's switch shows it).
+    mode: Mode,
     /// Help's windows.
     shortcuts_open: bool,
     about_open: bool,
@@ -317,6 +328,7 @@ impl RedForgeApp {
             #[cfg(target_os = "linux")]
             wayland_drops: crate::wayland_drop::start(cc),
             quitting: false,
+            mode: Mode::World,
             shortcuts_open: false,
             about_open: false,
             title: "RedForge".into(),
@@ -434,6 +446,7 @@ impl RedForgeApp {
     /// One world map only: open already, it's brought to the front and
     /// looks at the place.
     fn open_world(&mut self, game: &Arc<Game>, place: Option<&str>) -> bool {
+        self.mode = Mode::World;
         self.editor.get_or_insert_with(|| Editor::new(game.fs.clone(), game.hashes.clone(), game.data()));
         let place = place.unwrap_or_default();
         let is_world = |t: &Tab| matches!(t, Tab::Map(v) if v.is_world());
@@ -485,8 +498,65 @@ impl RedForgeApp {
         }
     }
 
+    /// The editor in front: the focused document's (or the last one's).
+    fn current_mode(&mut self) -> Mode {
+        let mode = match self.dock.find_active_focused() {
+            Some((_, Tab::Map(v))) if v.is_world() => Some(Mode::World),
+            Some((_, Tab::PauseMap)) => Some(Mode::PauseMap),
+            Some((_, Tab::AnimEdit(_))) => Some(Mode::Animation),
+            _ => None,
+        };
+        if let Some(m) = mode {
+            self.mode = m;
+        }
+        self.mode
+    }
+
+    /// The menu bar's switch between the editors, in its middle: the map
+    /// editor (the world map), the pause map editor and the animation editor.
+    fn mode_switch(&mut self, ctx: &egui::Context) {
+        use crate::theme::{self, icon};
+        let mode = self.current_mode();
+        let mut chosen = None;
+        egui::Area::new(egui::Id::new("mode-switch")).anchor(egui::Align2::CENTER_TOP, [0.0, 2.0]).show(ctx, |ui| {
+            theme::group(ui, |ui| {
+                for (m, glyph, label, tip) in [
+                    (Mode::World, icon::MAP_TRIFOLD, "Map editor", "The world map: entities, interiors, navmeshes"),
+                    (Mode::PauseMap, icon::MAP_PIN_AREA, "Pause map", "The pause map and minimap, to draw on"),
+                    (Mode::Animation, icon::PERSON_ARMS_SPREAD, "Animation", "Pose a ped's bones at frames, and export the ycd"),
+                ] {
+                    if theme::segment(ui, mode == m, glyph, label, tip).clicked() {
+                        chosen = Some(m);
+                    }
+                }
+            });
+        });
+        match chosen {
+            Some(Mode::World) => {
+                if let GameState::Ready(g) = &self.game {
+                    let g = g.clone();
+                    self.open_world(&g, None);
+                }
+                self.pause.active = false;
+                self.mode = Mode::World;
+            }
+            Some(Mode::PauseMap) => {
+                self.show_pause_map();
+                self.mode = Mode::PauseMap;
+            }
+            Some(Mode::Animation) => {
+                if !self.focus_tab(|t| matches!(t, Tab::AnimEdit(_))) {
+                    self.new_animation(ctx);
+                }
+                self.mode = Mode::Animation;
+            }
+            None => {}
+        }
+    }
+
     /// View > Pause map: its tab (with the documents), and its layers pane.
     fn show_pause_map(&mut self) {
+        self.mode = Mode::PauseMap;
         if !self.focus_tab(|t| matches!(t, Tab::PauseMap)) {
             self.show_tab(Tab::PauseMap);
         }
@@ -556,6 +626,9 @@ impl RedForgeApp {
     }
 
     fn show_tab(&mut self, tab: Tab) {
+        if matches!(tab, Tab::AnimEdit(_)) {
+            self.mode = Mode::Animation;
+        }
         let document = |t: &Tab| {
             matches!(
                 t,
@@ -1715,6 +1788,10 @@ impl eframe::App for RedForgeApp {
                 });
             });
         });
+
+        if game_ready {
+            self.mode_switch(ctx);
+        }
 
         let game = match &self.game {
             GameState::Ready(g) => Some(g.clone()),

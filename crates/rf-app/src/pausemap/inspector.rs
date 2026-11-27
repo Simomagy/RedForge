@@ -13,9 +13,26 @@ use super::{PauseMap, Tool};
 use crate::settings::Settings;
 use crate::theme;
 
-/// A number field of an object: its name, value, drag speed, range, unit
-/// and where it goes.
-type Field<T> = (&'static str, f64, f64, std::ops::RangeInclusive<f64>, &'static str, fn(&mut T) -> &mut f64);
+/// A number of an object: its name, value, ranges, step, unit and where it
+/// goes.
+struct Field<T> {
+    name: &'static str,
+    value: f64,
+    /// The slider's range, and the value's.
+    soft: std::ops::RangeInclusive<f64>,
+    hard: std::ops::RangeInclusive<f64>,
+    step: f64,
+    unit: &'static str,
+    field: fn(&mut T) -> &mut f64,
+}
+
+/// A [`Field`]: name, value, the slider's range, the value's, step, unit,
+/// where it goes.
+macro_rules! field {
+    ($name:expr, $value:expr, $soft:expr, $hard:expr, $step:expr, $unit:expr, $f:expr) => {
+        Field { name: $name, value: $value, soft: $soft, hard: $hard, step: $step, unit: $unit, field: $f }
+    };
+}
 
 /// The font files added, one path a line.
 const FONTS: &str = "PauseMap.Fonts";
@@ -59,18 +76,48 @@ fn change(
     }
 }
 
+/// A number's slider and its value (typed or dragged): the slider goes over
+/// `soft`, the value may go anywhere in `hard`.
 fn number(
     ui: &mut egui::Ui,
     label: &str,
     v: &mut f64,
-    speed: f64,
-    range: std::ops::RangeInclusive<f64>,
+    soft: std::ops::RangeInclusive<f64>,
+    hard: std::ops::RangeInclusive<f64>,
+    step: f64,
     unit: &str,
-) -> egui::Response {
+) -> [egui::Response; 2] {
     ui.label(label);
-    let r = ui.add(DragValue::new(v).speed(speed).range(range).suffix(unit));
+    let rs = ui
+        .horizontal(|ui| {
+            let s = theme::slider(ui, v, soft, step, 132.0);
+            let decimals = if step >= 1.0 {
+                0
+            } else if step >= 0.1 {
+                1
+            } else {
+                2
+            };
+            let d = ui.add(DragValue::new(v).speed(step).range(hard).suffix(unit).fixed_decimals(decimals));
+            [s, d]
+        })
+        .inner;
     ui.end_row();
-    r
+    rs
+}
+
+/// [`change`] for a number's slider and value.
+fn change_number(
+    pm: &mut PauseMap,
+    ed: &mut Editor,
+    id: &str,
+    label: &str,
+    rs: &[egui::Response; 2],
+    f: impl Fn(&mut MapObject),
+) {
+    for r in rs {
+        change(pm, ed, id, label, r, &f);
+    }
 }
 
 pub fn ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, settings: &mut Settings) {
@@ -178,16 +225,16 @@ fn line_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, l: &LineObject
             }
         });
         let mut width = l.width;
-        let r = number(ui, "Width", &mut width, 0.05, 0.1..=40.0, "");
-        change(pm, ed, &id, "Line width", &r, |x| {
+        let r = number(ui, "Width", &mut width, 0.1..=6.0, 0.1..=40.0, 0.05, "");
+        change_number(pm, ed, &id, "Line width", &r, |x| {
             if let MapObject::Line(x) = x {
                 x.width = width;
             }
         });
         if matches!(l.style, LineStyle::Trail | LineStyle::Boundary | LineStyle::Railroad) {
             let mut spacing = l.spacing;
-            let r = number(ui, "Spacing", &mut spacing, 0.1, 0.5..=200.0, "");
-            change(pm, ed, &id, "Line spacing", &r, |x| {
+            let r = number(ui, "Spacing", &mut spacing, 1.0..=40.0, 0.5..=200.0, 0.5, "");
+            change_number(pm, ed, &id, "Line spacing", &r, |x| {
                 if let MapObject::Line(x) = x {
                     x.spacing = spacing;
                 }
@@ -226,30 +273,117 @@ fn line_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, l: &LineObject
     ui.label(RichText::new("Double-click the line for its anchors; Alt+click on it adds one, on an anchor makes it a corner or smooth.").color(theme::WEAK).small());
 }
 
-fn font_combo(ui: &mut egui::Ui, salt: &str, font: &mut String, ed: &Editor) -> egui::Response {
+/// The fonts' previews made so far.
+#[derive(Default)]
+pub struct Previews {
+    textures: std::collections::HashMap<String, egui::TextureHandle>,
+    named: std::collections::HashSet<String>,
+}
+
+impl Previews {
+    /// Forgets a font's (it was added again or removed).
+    pub fn forget(&mut self, name: &str) {
+        self.textures.remove(name);
+        self.named.remove(name);
+    }
+}
+
+/// How tall a font's preview is, in points.
+const PREVIEW: f32 = 26.0;
+
+/// A font's name lettered in it (made once); `named` gets the fonts whose
+/// preview isn't their name, to show it next to it.
+fn preview(
+    ui: &egui::Ui,
+    previews: &mut std::collections::HashMap<String, egui::TextureHandle>,
+    named: &mut std::collections::HashSet<String>,
+    ed: &Editor,
+    name: &str,
+) -> Option<egui::TextureHandle> {
+    if let Some(t) = previews.get(name) {
+        return Some(t.clone());
+    }
+    let fonts = &ed.pause_assets.fonts;
+    let font = fonts.get(name)?;
+    let ppp = ui.ctx().pixels_per_point();
+    let height = (PREVIEW * ppp).round() as usize;
+    let mut lettered = font.preview(&fonts.all()[0], name, height, (360.0 * ppp) as usize);
+    // A font of figures only (RDR Lino Numbers) has blank letters: its figures.
+    if lettered.0.iter().all(|&a| a == 0) {
+        lettered = font.preview(&fonts.all()[0], "0123456789", height, (360.0 * ppp) as usize);
+        named.insert(name.to_owned());
+    }
+    let (alpha, w, h) = lettered;
+    let rgba: Vec<u8> = alpha.iter().flat_map(|&a| [255, 255, 255, a]).collect();
+    let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+    let t = ui.ctx().load_texture(format!("font preview {name}"), image, egui::TextureOptions::LINEAR);
+    previews.insert(name.to_owned(), t.clone());
+    Some(t)
+}
+
+/// The fonts to choose from, each shown in itself.
+fn font_combo(
+    ui: &mut egui::Ui,
+    salt: &str,
+    font: &mut String,
+    ed: &Editor,
+    previews: &mut Previews,
+) -> egui::Response {
+    let Previews { textures, named } = previews;
     let fonts = ed.pause_assets.fonts.all();
-    let mut r = egui::ComboBox::from_id_salt(salt).selected_text(font.as_str()).width(190.0).show_ui(ui, |ui| {
-        let mut changed = false;
-        for (origin, title) in [("bundled", "Bundled"), ("game", "The game's"), ("", "Added")] {
-            let these: Vec<&String> = fonts
-                .iter()
-                .filter(|f| {
-                    if origin.is_empty() { f.origin != "bundled" && f.origin != "game" } else { f.origin == origin }
-                })
-                .map(|f| &f.name)
-                .collect();
-            if these.is_empty() {
-                continue;
+    let ppp = ui.ctx().pixels_per_point();
+    let shown = |t: &egui::TextureHandle, tint: egui::Color32, scale: f32| {
+        let [w, h] = t.size();
+        egui::Image::new(t).fit_to_exact_size(egui::vec2(w as f32 / ppp * scale, h as f32 / ppp * scale)).tint(tint)
+    };
+    let current = preview(ui, textures, named, ed, font);
+    let mut r =
+        egui::ComboBox::from_id_salt(salt).selected_text(font.as_str()).width(220.0).height(420.0).show_ui(ui, |ui| {
+            let mut changed = false;
+            for (origin, title) in [("bundled", "Bundled"), ("game", "The game's"), ("", "Added")] {
+                let these: Vec<String> = fonts
+                    .iter()
+                    .filter(|f| {
+                        if origin.is_empty() { f.origin != "bundled" && f.origin != "game" } else { f.origin == origin }
+                    })
+                    .map(|f| f.name.clone())
+                    .collect();
+                if these.is_empty() {
+                    continue;
+                }
+                ui.label(RichText::new(title).small().color(theme::WEAK));
+                for name in these {
+                    let on = *font == name;
+                    let r = match preview(ui, textures, named, ed, &name) {
+                        Some(t) if named.contains(&name) => ui.add(
+                            egui::Button::selectable(
+                                on,
+                                (shown(&t, theme::TEXT, 0.8), RichText::new(&name).small().color(theme::WEAK)),
+                            )
+                            .frame_when_inactive(false),
+                        ),
+                        Some(t) => {
+                            ui.add(egui::Button::selectable(on, shown(&t, theme::TEXT, 1.0)).frame_when_inactive(false))
+                        }
+                        None => ui.add(egui::Button::selectable(on, name.as_str())),
+                    }
+                    .on_hover_text(&name);
+                    if r.clicked() && !on {
+                        *font = name;
+                        changed = true;
+                    }
+                }
             }
-            ui.label(RichText::new(title).small().color(theme::WEAK));
-            for name in these {
-                changed |= ui.selectable_value(font, name.clone(), name).changed();
-            }
-        }
-        changed
-    });
+            changed
+        });
     if r.inner == Some(true) {
         r.response.mark_changed();
+    }
+    // The chosen one, as it looks.
+    if let Some(t) = current {
+        ui.end_row();
+        ui.label("");
+        ui.add(shown(&t, theme::WEAK, 0.8));
     }
     r.response
 }
@@ -281,7 +415,7 @@ fn label_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, l: &LabelObje
     egui::Grid::new(("pause-label", &id)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
         ui.label("Font");
         let mut font = l.font.clone();
-        let r = font_combo(ui, "label-font", &mut font, ed);
+        let r = font_combo(ui, "label-font", &mut font, ed, &mut pm.font_previews);
         ui.end_row();
         change(pm, ed, &id, "Label font", &r, |x| {
             if let MapObject::Label(x) = x {
@@ -289,17 +423,18 @@ fn label_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, l: &LabelObje
             }
         });
         let fields: [Field<LabelObject>; 5] = [
-            ("Size", l.size, 0.2, 4.0..=400.0, "", |x| &mut x.size),
-            ("Letter spacing", l.tracking, 0.01, 0.0..=3.0, "", |x| &mut x.tracking),
-            ("Curve", l.curve, 0.01, -2.0..=2.0, "", |x| &mut x.curve),
-            ("Weight", l.weight, 0.05, -1.0..=6.0, "", |x| &mut x.weight),
-            ("Rotation", l.rotation, 0.5, -180.0..=180.0, "°", |x| &mut x.rotation),
+            field!("Size", l.size, 6.0..=100.0, 4.0..=400.0, 0.5, "", |x| &mut x.size),
+            field!("Letter spacing", l.tracking, 0.0..=2.0, 0.0..=3.0, 0.01, "", |x| &mut x.tracking),
+            field!("Curve", l.curve, -1.0..=1.0, -2.0..=2.0, 0.01, "", |x| &mut x.curve),
+            field!("Weight", l.weight, -1.0..=4.0, -1.0..=6.0, 0.05, "", |x| &mut x.weight),
+            field!("Rotation", l.rotation, -180.0..=180.0, -180.0..=180.0, 0.5, "°", |x| &mut x.rotation),
         ];
-        for (name, mut value, speed, range, unit, field) in fields {
-            let r = number(ui, name, &mut value, speed, range, unit);
-            change(pm, ed, &id, &format!("Label {}", name.to_lowercase()), &r, |x| {
+        for f in fields {
+            let mut value = f.value;
+            let r = number(ui, f.name, &mut value, f.soft, f.hard, f.step, f.unit);
+            change_number(pm, ed, &id, &format!("Label {}", f.name.to_lowercase()), &r, |x| {
                 if let MapObject::Label(x) = x {
-                    *field(x) = value;
+                    *(f.field)(x) = value;
                 }
             });
         }
@@ -346,15 +481,19 @@ fn building_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, b: &Buildi
         });
         let station = b.shape == BuildingShape::Station;
         let fields: Vec<Field<BuildingObject>> = if station {
-            vec![("Ring", b.w, 0.1, 1.0..=400.0, "", |x| &mut x.w)]
+            vec![field!("Ring", b.w, 2.0..=60.0, 1.0..=400.0, 0.5, "", |x| &mut x.w)]
         } else {
-            vec![("Width", b.w, 0.1, 1.0..=400.0, "", |x| &mut x.w), ("Depth", b.h, 0.1, 1.0..=400.0, "", |x| &mut x.h)]
+            vec![
+                field!("Width", b.w, 2.0..=120.0, 1.0..=400.0, 0.5, "", |x| &mut x.w),
+                field!("Depth", b.h, 2.0..=120.0, 1.0..=400.0, 0.5, "", |x| &mut x.h),
+            ]
         };
-        for (name, mut value, speed, range, unit, field) in fields {
-            let r = number(ui, name, &mut value, speed, range, unit);
-            change(pm, ed, &id, "Resize", &r, |x| {
+        for f in fields {
+            let mut value = f.value;
+            let r = number(ui, f.name, &mut value, f.soft, f.hard, f.step, f.unit);
+            change_number(pm, ed, &id, "Resize", &r, |x| {
                 if let MapObject::Building(x) = x {
-                    *field(x) = value;
+                    *(f.field)(x) = value;
                     if station {
                         x.h = value;
                     }
@@ -362,23 +501,23 @@ fn building_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, b: &Buildi
             });
         }
         let mut rot = b.rotation;
-        let r = number(ui, "Rotation", &mut rot, 0.5, -180.0..=180.0, "°");
-        change(pm, ed, &id, "Rotate", &r, |x| {
+        let r = number(ui, "Rotation", &mut rot, -180.0..=180.0, -180.0..=180.0, 0.5, "°");
+        change_number(pm, ed, &id, "Rotate", &r, |x| {
             if let MapObject::Building(x) = x {
                 x.rotation = rot;
             }
         });
         let mut outline = b.outline;
-        let r = number(ui, "Outline", &mut outline, 0.05, 0.1..=10.0, "");
-        change(pm, ed, &id, "Building outline", &r, |x| {
+        let r = number(ui, "Outline", &mut outline, 0.2..=3.0, 0.1..=10.0, 0.05, "");
+        change_number(pm, ed, &id, "Building outline", &r, |x| {
             if let MapObject::Building(x) = x {
                 x.outline = outline;
             }
         });
         if station {
             let mut dot = b.dot.unwrap_or(b.w.min(b.h) * 0.3);
-            let r = number(ui, "Dot", &mut dot, 0.05, 0.0..=100.0, "");
-            change(pm, ed, &id, "Station dot", &r, |x| {
+            let r = number(ui, "Dot", &mut dot, 0.0..=20.0, 0.0..=100.0, 0.1, "");
+            change_number(pm, ed, &id, "Station dot", &r, |x| {
                 if let MapObject::Building(x) = x {
                     x.dot = Some(dot);
                 }
@@ -434,15 +573,16 @@ fn stamp_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, s: &StampObje
             }
         });
         let fields: [Field<StampObject>; 3] = [
-            ("Width", s.width, 0.2, 2.0..=4000.0, "", |x| &mut x.width),
-            ("Rotation", s.rotation, 0.5, -180.0..=180.0, "°", |x| &mut x.rotation),
-            ("Ink below", s.threshold, 0.005, 0.0..=1.0, "", |x| &mut x.threshold),
+            field!("Width", s.width, 8.0..=800.0, 2.0..=4000.0, 1.0, "", |x| &mut x.width),
+            field!("Rotation", s.rotation, -180.0..=180.0, -180.0..=180.0, 0.5, "°", |x| &mut x.rotation),
+            field!("Ink below", s.threshold, 0.0..=1.0, 0.0..=1.0, 0.01, "", |x| &mut x.threshold),
         ];
-        for (name, mut value, speed, range, unit, field) in fields {
-            let r = number(ui, name, &mut value, speed, range, unit);
-            change(pm, ed, &id, "Stamp", &r, |x| {
+        for f in fields {
+            let mut value = f.value;
+            let r = number(ui, f.name, &mut value, f.soft, f.hard, f.step, f.unit);
+            change_number(pm, ed, &id, "Stamp", &r, |x| {
                 if let MapObject::Stamp(x) = x {
-                    *field(x) = value;
+                    *(f.field)(x) = value;
                 }
             });
         }
@@ -471,8 +611,8 @@ fn erase_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, e: &EraseObje
             }
         });
         let mut radius = e.radius;
-        let r = number(ui, "Radius", &mut radius, 0.1, 1.0..=120.0, "");
-        change(pm, ed, &id, "Eraser size", &r, |x| {
+        let r = number(ui, "Radius", &mut radius, 2.0..=80.0, 1.0..=120.0, 0.5, "");
+        change_number(pm, ed, &id, "Eraser size", &r, |x| {
             if let MapObject::Erase(x) = x {
                 x.radius = radius;
             }
@@ -508,9 +648,7 @@ fn tool_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, settings: &mut
             ui.label("Takes away");
             target_combo(ui, "tool-erase", &mut pm.erase_target, true);
             ui.end_row();
-            ui.label("Radius");
-            ui.add(DragValue::new(&mut pm.erase_radius).speed(0.1).range(2.0..=80.0));
-            ui.end_row();
+            number(ui, "Radius", &mut pm.erase_radius, 2.0..=80.0, 2.0..=80.0, 0.5, "");
         }
         Tool::Building => {
             ui.label("Shape");
@@ -536,7 +674,7 @@ fn tool_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, settings: &mut
             ui.end_row();
             ui.label("Font");
             let mut font = pm.label_font.clone();
-            font_combo(ui, "tool-font", &mut font, ed);
+            font_combo(ui, "tool-font", &mut font, ed, &mut pm.font_previews);
             pm.label_font = font;
             ui.end_row();
         }
@@ -562,6 +700,7 @@ fn tool_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, settings: &mut
             if ui.small_button("Remove").clicked() {
                 ed.pause_assets.fonts.remove(name);
                 ed.pause_assets.lettering.clear();
+                pm.font_previews.forget(name);
                 let list: Vec<String> =
                     settings.get(FONTS).unwrap_or_default().lines().filter(|l| l != path).map(str::to_owned).collect();
                 settings.set(FONTS, list.join("\n"));
@@ -579,6 +718,7 @@ fn tool_ui(ui: &mut egui::Ui, pm: &mut PauseMap, ed: &mut Editor, settings: &mut
                 .and_then(|d| Font::from_file(&file_font_name(&f), &path, d))
             {
                 Ok(font) => {
+                    pm.font_previews.forget(&font.name);
                     ed.pause_assets.fonts.add(font);
                     if !list.contains(&path) {
                         list.push(path);

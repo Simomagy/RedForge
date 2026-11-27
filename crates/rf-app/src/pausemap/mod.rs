@@ -79,6 +79,8 @@ pub struct PauseMap {
     copied: Option<String>,
     sync: sync::TileSync,
     pub(crate) view: pane::ViewState,
+    /// Each font's name lettered in it, for the font picker.
+    pub(crate) font_previews: inspector::Previews,
 }
 
 impl Default for PauseMap {
@@ -107,6 +109,7 @@ impl Default for PauseMap {
             copied: None,
             sync: sync::TileSync::default(),
             view: pane::ViewState::default(),
+            font_previews: Default::default(),
         }
     }
 }

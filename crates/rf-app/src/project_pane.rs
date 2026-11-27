@@ -35,6 +35,13 @@ const AMV_ZONE: &str = "amvZone";
 const AUTOSAVE_EVERY: Duration = Duration::from_secs(120);
 
 /// Where a project's autosave goes (a project not saved yet has one too).
+/// A screenshot for testing: it leaves the user's autosaves alone (neither
+/// writing one nor asking about one, where a stray key could restore or
+/// discard it), as it does the session, unless it's testing them.
+fn testing() -> bool {
+    std::env::var_os("REDFORGE_SCREENSHOT").is_some() && std::env::var_os("REDFORGE_SESSION").is_none()
+}
+
 fn autosave_dir(editor: &Editor) -> Option<PathBuf> {
     let key = match editor.project.as_ref().and_then(|p| p.file.as_ref()) {
         Some(f) => format!("{:08x}", rf_formats::hash::joaat(&f.display().to_string().to_lowercase())),
@@ -237,12 +244,7 @@ impl ProjectPane {
     /// Every couple of minutes while files have unsaved changes: them, where
     /// [`ProjectPane::restore_ui`] finds them if RedForge closes first.
     fn autosave(&mut self, editor: &Editor) {
-        if !editor.has_unsaved() || self.restore.is_some() {
-            return;
-        }
-        // A screenshot for testing leaves the user's autosaves alone (as it
-        // does the session), unless it's testing them.
-        if std::env::var_os("REDFORGE_SCREENSHOT").is_some() && std::env::var_os("REDFORGE_SESSION").is_none() {
+        if !editor.has_unsaved() || self.restore.is_some() || testing() {
             return;
         }
         if self.autosaved.is_some_and(|t| t.elapsed() < AUTOSAVE_EVERY) {
@@ -267,6 +269,9 @@ impl ProjectPane {
     /// Just opened (or started without a project): an autosave left from
     /// last time is asked about.
     fn find_autosave(&mut self, editor: &Editor) {
+        if testing() {
+            return;
+        }
         let Some(dir) = autosave_dir(editor) else { return };
         if let Some(a) = rf_editor::autosave::Autosave::read(&dir).filter(|a| !a.files.is_empty()) {
             self.restore = Some((dir, a));

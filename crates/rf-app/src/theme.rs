@@ -223,6 +223,71 @@ pub fn tool(ui: &mut egui::Ui, on: bool, glyph: &str, tip: &str) -> Response {
     ui.add(b).on_hover_text(tip)
 }
 
+/// One of a row of choices that go together (the editor's modes): its icon
+/// and name, on the accent when it's the one.
+pub fn segment(ui: &mut egui::Ui, on: bool, glyph: &str, label: &str, tip: &str) -> Response {
+    let colour = if on { ON_ACCENT } else { TEXT };
+    let mut job = egui::text::LayoutJob::default();
+    let font = FontId::proportional(SIZE);
+    job.append(
+        glyph,
+        0.0,
+        egui::TextFormat { font_id: font.clone(), color: if on { ON_ACCENT } else { WEAK }, ..Default::default() },
+    );
+    job.append(label, 6.0, egui::TextFormat { font_id: strong(SIZE), color: colour, ..Default::default() });
+    let b = egui::Button::new(job)
+        .fill(if on { ACCENT } else { Color32::TRANSPARENT })
+        .corner_radius(CornerRadius::same(RADIUS))
+        .min_size(Vec2::new(0.0, 24.0));
+    ui.add(b).on_hover_text(tip)
+}
+
+/// A slider: a thin track, the part up to the value a thicker bar in the
+/// text's colour with a dot at its end. Dragged or clicked, the value moves
+/// in `step`s within `range`; a value outside it shows at the end.
+pub fn slider(
+    ui: &mut egui::Ui,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    step: f64,
+    width: f32,
+) -> Response {
+    let (rect, mut resp) = ui.allocate_exact_size(Vec2::new(width, 20.0), Sense::click_and_drag());
+    let (lo, hi) = (*range.start(), *range.end());
+    let bar = 10.0;
+    let (left, right) = (rect.left() + bar / 2.0, rect.right() - bar / 2.0);
+    if let Some(p) = resp.interact_pointer_pos()
+        && (resp.dragged() || resp.clicked())
+    {
+        let t = ((p.x - left) / (right - left)).clamp(0.0, 1.0) as f64;
+        let mut v = lo + t * (hi - lo);
+        if step > 0.0 {
+            v = (v / step).round() * step;
+        }
+        v = v.clamp(lo, hi);
+        if v != *value {
+            *value = v;
+            resp.mark_changed();
+        }
+    }
+    let t = if hi > lo { ((*value - lo) / (hi - lo)).clamp(0.0, 1.0) as f32 } else { 0.0 };
+    let x = left + t * (right - left);
+    let y = rect.center().y;
+    let painter = ui.painter();
+    let active = resp.dragged() || resp.hovered();
+    // The track, then the bar up to the value, then the dot.
+    let track = egui::Rect::from_min_max(egui::pos2(left - 2.0, y - 2.0), egui::pos2(right + 2.0, y + 2.0));
+    painter.rect_filled(track, CornerRadius::same(2), if active { PRESSED } else { WIDGET });
+    let fill =
+        egui::Rect::from_min_max(egui::pos2(rect.left(), y - bar / 2.0), egui::pos2(x + bar / 2.0, y + bar / 2.0));
+    painter.rect_filled(fill, CornerRadius::same(5), if active { Color32::WHITE } else { TEXT });
+    painter.circle_filled(egui::pos2(x, y), 2.5, BG);
+    if active {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    resp
+}
+
 /// A group of toolbar controls, on a pill of its own.
 pub fn group<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     egui::Frame::new()

@@ -74,6 +74,53 @@ impl Font {
     }
 }
 
+impl Font {
+    /// `text` lettered in the font (characters it hasn't got in
+    /// `fallback`), `height` pixels tall: its coverage (0 to 255), width and
+    /// height. For showing what a font looks like.
+    pub fn preview(&self, fallback: &Font, text: &str, height: usize, max_width: usize) -> (Vec<u8>, usize, usize) {
+        const SS: usize = 4;
+        let em = height as f64 * 0.72;
+        let baseline = height as f64 * 0.8;
+        let glyphs: Vec<Arc<Glyph>> =
+            text.chars().filter_map(|c| self.glyph(c).or_else(|| fallback.glyph(c))).collect();
+        let pad = 2.0;
+        let width =
+            (glyphs.iter().map(|g| g.advance * em).sum::<f64>() + pad * 2.0).ceil().min(max_width as f64).max(1.0)
+                as usize;
+        let (w, h) = (width * SS, height * SS);
+        let mut mask = vec![0u8; w * h];
+        let mut pen = pad;
+        for g in &glyphs {
+            let polys: Vec<Vec<Point>> = g
+                .contours
+                .iter()
+                .map(|c| {
+                    c.iter().map(|p| [(pen + p[0] * em) * SS as f64, (baseline + p[1] * em) * SS as f64]).collect()
+                })
+                .collect();
+            super::labels::fill_polygons(&mut mask, w, h, &polys, g.even_odd);
+            pen += g.advance * em;
+            if pen > width as f64 {
+                break;
+            }
+        }
+        let mut out = vec![0u8; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                let mut sum = 0u32;
+                for sy in 0..SS {
+                    for sx in 0..SS {
+                        sum += mask[(y * SS + sy) * w + x * SS + sx] as u32;
+                    }
+                }
+                out[y * width + x] = (sum * 255 / (SS * SS) as u32) as u8;
+            }
+        }
+        (out, width, height)
+    }
+}
+
 /// Curves are cut into this many chords.
 const CURVE_STEPS: usize = 12;
 
@@ -206,5 +253,9 @@ mod tests {
         assert!(top < -0.5, "{top}");
         assert!(fonts.or_default("nope").name == DEFAULT_FONT);
         assert!(fonts.get(DEFAULT_FONT).unwrap().glyph('\u{4e00}').is_none());
+        let f = fonts.get(DEFAULT_FONT).unwrap();
+        let (px, w, h) = f.preview(f, "Valentine", 24, 400);
+        assert_eq!((h, px.len()), (24, w * 24));
+        assert!(w > 60 && px.contains(&255) && px.contains(&0));
     }
 }
