@@ -11,11 +11,21 @@ use rf_editor::pausemap::project::{MapObject, object_name};
 use super::PauseMap;
 use crate::theme::{self, icon};
 
+/// A layer being renamed.
+struct Renaming {
+    id: String,
+    /// The name so far.
+    text: String,
+    /// The field took the keyboard (it's asked for once: asked for every
+    /// frame, it never lets go).
+    focused: bool,
+}
+
 /// The pane's own state.
 #[derive(Default)]
 pub struct Layers {
     /// The layer being renamed, and its name so far.
-    renaming: Option<(String, String)>,
+    renaming: Option<Renaming>,
     /// The layers being dragged.
     dragging: Option<Vec<String>>,
     /// Where they'd go.
@@ -186,21 +196,30 @@ impl Layers {
             pm.keep_selection(ed);
         }
         // The name, or its field while renaming.
-        let renaming = self.renaming.as_ref().is_some_and(|(r, _)| *r == id);
+        let renaming = self.renaming.as_ref().is_some_and(|r| r.id == id);
         if renaming {
             let field =
                 egui::Rect::from_min_max(egui::pos2(x, rect.min.y + 2.0), egui::pos2(right - 44.0, rect.max.y - 2.0));
-            let (_, text) = self.renaming.as_mut().unwrap();
-            let r = ui.put(field, egui::TextEdit::singleline(text));
-            r.request_focus();
-            if r.lost_focus() {
-                let (_, name) = self.renaming.take().unwrap();
-                let mut d = objects.to_vec();
-                if let Some(x) = d.iter_mut().find(|x| x.id() == id) {
-                    let name = name.trim();
-                    x.common_mut().name = (!name.is_empty()).then(|| name.to_owned());
+            let edit = self.renaming.as_mut().unwrap();
+            let r = ui.put(field, egui::TextEdit::singleline(&mut edit.text));
+            if !edit.focused {
+                r.request_focus();
+                edit.focused = true;
+            }
+            // Enter, Tab or a click elsewhere keeps the name; Esc doesn't.
+            let clicked_away = ui.input(|i| i.pointer.any_pressed()) && !r.hovered();
+            if r.lost_focus() || (clicked_away && !r.has_focus()) {
+                let edit = self.renaming.take().unwrap();
+                // Unchanged, it makes no step (and keeps an automatic name).
+                let same = edit.text.trim() == object_name(o).as_str();
+                if !same && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    let mut d = objects.to_vec();
+                    if let Some(x) = d.iter_mut().find(|x| x.id() == id) {
+                        let name = edit.text.trim();
+                        x.common_mut().name = (!name.is_empty()).then(|| name.to_owned());
+                    }
+                    pm.edit(ed, "Rename", d);
                 }
-                pm.edit(ed, "Rename", d);
             }
         } else {
             let galley = painter.layout_no_wrap(object_name(o), font.clone(), colour);
@@ -209,7 +228,7 @@ impl Layers {
         }
 
         if resp.double_clicked() {
-            self.renaming = Some((id.clone(), object_name(o)));
+            self.renaming = Some(Renaming { id: id.clone(), text: object_name(o), focused: false });
         } else if resp.clicked() {
             let mods = ui.input(|i| i.modifiers);
             if mods.command || mods.shift {
