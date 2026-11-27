@@ -60,6 +60,10 @@ pub struct Tools {
     /// "Colour by flag" in "Navmesh" mode: the polygons with these flags
     /// stand out.
     pub navmesh_highlight: Option<u64>,
+    /// What's drawn over the navmeshes (`helpers::navmesh::overlay` bits).
+    pub navmesh_overlays: u8,
+    /// Where a box selection of navmesh polygons started (Ctrl+drag).
+    pub navmesh_box: Option<egui::Pos2>,
     /// The selected helpers as last drawn, for Properties.
     pub selected_parts: Vec<HelperPart>,
     /// Helpers shown elsewhere while they're dragged: each one's change from
@@ -183,6 +187,9 @@ impl Default for Tools {
             hover_helper: None,
             helper_selection: Vec::new(),
             navmesh_highlight: None,
+            // REDFORGE_NAVMESH_OVERLAYS=<bits> starts with those shown (for testing).
+            navmesh_overlays: std::env::var("REDFORGE_NAVMESH_OVERLAYS").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            navmesh_box: None,
             selected_parts: Vec::new(),
             helper_preview: Vec::new(),
             focus: false,

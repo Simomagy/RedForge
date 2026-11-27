@@ -11,16 +11,22 @@ patch for fixes. Each version's section pastes as is into its GitHub release.
 ### Added
 - The map's **Navmesh** selection mode edits the navigation meshes, the
   game's own included: what's hovered and selected is a polygon now. A click
-  selects one, Ctrl+click adds or takes one, Shift+click adds, and Shift+drag
-  paints polygons into the selection (Shift+Ctrl+drag out); **Grow** adds the
-  polygons around it.
+  selects one, Ctrl+click adds or takes one, Shift+click adds, Ctrl+drag adds
+  the polygons in a box, and Shift+drag paints polygons into the selection
+  (Shift+Ctrl+drag out); **Grow** adds the polygons around it.
+- **Show** draws over the navmeshes every polygon's edges, the open edges
+  (walls, the navmesh's edge, blocked areas, in red; the polygons that join
+  the next cell in cyan), lines from the selected polygons to their
+  neighbours, and the special links (ladders, jumps, climbs and drops, in
+  yellow).
 - Properties has the selected polygons' flags (surface, peds, shelter),
   audio and water depth, for all of them at once, with undo and redo. **Colour
   by flag** shows where a flag is set, and selects every polygon with it.
 - **Block** keeps everyone out of the selected polygons: no path goes in or
-  out, for ambient peds, horses and scripted walks alike. For the ground
+  out, for ambient peds, horses and scripted walks alike, over their edges or
+  their special links. For the ground
   under a new building, or a street closed off. **Unblock** puts back the
-  game's edges. Blocked polygons show in magenta.
+  game's edges and links. Blocked polygons show in magenta.
 - A changed navmesh goes in the project (as `navmesh[x][y].ynv`), and
   exported it replaces the game's in RedM. Tested in game: a path that went
   straight down Valentine's main street went around the blocked stretch.

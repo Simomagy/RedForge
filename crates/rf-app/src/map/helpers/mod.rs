@@ -180,6 +180,8 @@ pub struct Collect<'a> {
     pub hover: Option<HelperKey>,
     /// "Colour by flag" of the navmeshes: polygons with these flags stand out.
     pub highlight: Option<u64>,
+    /// What's drawn over the navmeshes ([`navmesh::overlay`] bits).
+    pub overlays: u8,
     /// The camera, which the streamed modes load around.
     pub eye: Vec3,
     /// With [`Mode::wants_models`]: the entities in view.
@@ -221,6 +223,17 @@ impl Helpers {
     /// of its parts).
     pub fn navmesh_polygon(&self, key: HelperKey, point: Vec3) -> Option<HelperKey> {
         (key.mode == Mode::Navmesh).then(|| self.navmesh.polygon_at(key.source, point))?
+    }
+
+    /// The navmesh polygons whose middle the camera sees in a box of the view
+    /// (normalised device coordinates).
+    pub fn navmesh_polygons_in(
+        &self,
+        view: &rf_render::CameraView,
+        min: glam::Vec2,
+        max: glam::Vec2,
+    ) -> Vec<HelperKey> {
+        self.navmesh.polygons_in(view, min, max)
     }
 
     /// What Properties and the hover label show of a helper: its part's, or a

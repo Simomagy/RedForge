@@ -8,8 +8,9 @@
 //! and undo.
 //!
 //! **Blocking** an area makes its polygons an island: every edge between
-//! them and the rest is cut, both ways, as at the navmesh's border, and they
-//! are switched off for peds. In game no path goes in or out (tested in RedM:
+//! them and the rest is cut, both ways, as at the navmesh's border, the
+//! special links (climbs, drops, jumps) between them and the rest come out
+//! of the polygons' lists, and they are switched off for peds. In game no path goes in or out (tested in RedM:
 //! a path that went straight through went around). Switching polygons off for
 //! peds alone doesn't stop the paths scripts ask for. Unblocking puts back the
 //! game's edges.
@@ -21,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rf_formats::formats::ynv::{self, Navmesh, NavmeshEdge, NavmeshPolygon, poly_flags};
+use rf_formats::formats::ynv::{self, Navmesh, NavmeshEdge, NavmeshPolygon, NavmeshSpecialLink, poly_flags};
 use rf_formats::rpf8::FileRef;
 
 use crate::{DocKey, Editor, Project, Root, autosave};
@@ -141,16 +142,159 @@ fn cut(mut e: NavmeshEdge, none: u32) -> NavmeshEdge {
     e
 }
 
-/// Makes `set` an island (see the module's notes); returns how many edges
-/// were cut.
-fn block(nm: &mut Navmesh, set: &[u32]) -> usize {
+/// The polygon at each end of a special link, when that end is in this
+/// navmesh.
+fn link_ends(nm: &Navmesh, l: &NavmeshSpecialLink) -> (Option<u32>, Option<u32>) {
+    let own = |a: u16| a as u32 == nm.area_id;
+    (own(l.area_id1).then_some(l.poly_id1 as u32), own(l.area_id2).then_some(l.poly_id2 as u32))
+}
+
+/// The other end of a special link from polygon `p`: `Some(None)` when it's
+/// in another navmesh, `None` when the link doesn't start or end at `p`.
+fn other_end(nm: &Navmesh, l: &NavmeshSpecialLink, p: u32) -> Option<Option<u32>> {
+    match link_ends(nm, l) {
+        (Some(a), b) if a == p => Some(b),
+        (a, Some(b)) if b == p => Some(a),
+        _ => None,
+    }
+}
+
+/// A polygon's range in the special link indices, if it has one there.
+fn link_range(p: &NavmeshPolygon, len: usize) -> Option<std::ops::Range<usize>> {
+    let (start, count) = (p.link_id() as usize, p.link_count() as usize);
+    (count > 0 && start + count <= len).then_some(start..start + count)
+}
+
+/// Takes out of the polygons' lists the special links between `inside` and
+/// the rest (another navmesh included): each list is reordered so that they
+/// come last, and its count leaves them out, so nothing is renumbered.
+/// Returns how many came out.
+fn cut_links(nm: &mut Navmesh, inside: &HashSet<u32>) -> usize {
+    let (Some(links), Some(mut inds), Some(polygons)) =
+        (nm.special_links.clone(), nm.special_links_inds.clone(), nm.polygons())
+    else {
+        return 0;
+    };
+    let mut removed = 0;
+    let mut counts = Vec::new();
+    for (p, poly) in polygons.iter().enumerate() {
+        let p = p as u32;
+        let Some(range) = link_range(poly, inds.len()) else { continue };
+        let crosses = |l: &u16| {
+            let Some(other) = links.get(*l as usize).and_then(|link| other_end(nm, link, p)) else { return false };
+            inside.contains(&p) != other.is_some_and(|o| inside.contains(&o))
+        };
+        let (cut, keep): (Vec<u16>, Vec<u16>) = inds[range.clone()].iter().partition(|l| crosses(l));
+        if cut.is_empty() {
+            continue;
+        }
+        removed += cut.len();
+        for (slot, l) in inds[range].iter_mut().zip(keep.iter().chain(&cut)) {
+            *slot = *l;
+        }
+        counts.push((p, keep.len()));
+    }
+    nm.special_links_inds = Some(inds);
+    let polys = nm.polygons.as_mut().expect("polygons");
+    for (p, n) in counts {
+        if let Some(x) = polys.get_mut(p as usize) {
+            x.set_link_count(n as u8);
+        }
+    }
+    removed
+}
+
+/// Puts back in the polygons' lists the game's special links that `set`
+/// starts or ends, unless their other end is still blocked off (switched off
+/// for peds where the game has it on). Returns how many came back.
+fn restore_links(nm: &mut Navmesh, original: &Navmesh, set: &HashSet<u32>) -> usize {
+    let (Some(links), Some(orig_inds), Some(orig_polys), Some(mut inds), Some(polygons)) = (
+        original.special_links.clone(),
+        original.special_links_inds.clone(),
+        original.polygons(),
+        nm.special_links_inds.clone(),
+        nm.polygons(),
+    ) else {
+        return 0;
+    };
+    if inds.len() != orig_inds.len() || polygons.len() != orig_polys.len() {
+        return 0;
+    }
+    let off = |p: &NavmeshPolygon| p.flags() & poly_flags::SWITCHED_OFF_FOR_PEDS != 0;
+    let blocked = |x: u32| off(&polygons[x as usize]) && !off(&orig_polys[x as usize]);
+    let touches = |l: u16| {
+        links.get(l as usize).is_some_and(|link| {
+            let (a, b) = link_ends(original, link);
+            a.is_some_and(|a| set.contains(&a)) || b.is_some_and(|b| set.contains(&b))
+        })
+    };
+    let mut restored = 0;
+    let mut counts = Vec::new();
+    for (p, op) in orig_polys.iter().enumerate() {
+        let p = p as u32;
+        let Some(range) = link_range(op, orig_inds.len()) else { continue };
+        let original_list = &orig_inds[range.clone()];
+        if !set.contains(&p) && !original_list.iter().any(|&l| touches(l)) {
+            continue;
+        }
+        let now = polygons[p as usize].link_count() as usize;
+        let active: HashSet<u16> = inds[range.start..range.start + now.min(range.len())].iter().copied().collect();
+        let back = |l: u16| {
+            touches(l)
+                && !blocked(p)
+                && links
+                    .get(l as usize)
+                    .and_then(|link| other_end(original, link, p))
+                    .is_some_and(|o| o.is_none_or(|o| !blocked(o)))
+        };
+        let (wanted, rest): (Vec<u16>, Vec<u16>) = original_list.iter().partition(|&&l| active.contains(&l) || back(l));
+        if wanted.len() == now {
+            continue;
+        }
+        restored += wanted.len().saturating_sub(now);
+        for (slot, l) in inds[range].iter_mut().zip(wanted.iter().chain(&rest)) {
+            *slot = *l;
+        }
+        counts.push((p, wanted.len()));
+    }
+    nm.special_links_inds = Some(inds);
+    let polys = nm.polygons.as_mut().expect("polygons");
+    for (p, n) in counts {
+        if let Some(x) = polys.get_mut(p as usize) {
+            x.set_link_count(n as u8);
+        }
+    }
+    restored
+}
+
+/// What blocking or unblocking changed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Blocked {
+    /// Edges cut or put back (both ways count).
+    pub edges: usize,
+    /// Special links taken out of polygons' lists or put back (both ends
+    /// count).
+    pub links: usize,
+}
+
+/// Makes `set` an island (see the module's notes).
+fn block(nm: &mut Navmesh, set: &[u32]) -> Blocked {
+    let n = nm.polygons.as_ref().map_or(0, |p| p.item_count as usize);
+    let inside: HashSet<u32> = set.iter().copied().filter(|&i| (i as usize) < n).collect();
+    let edges = cut_edges(nm, &inside);
+    let links = cut_links(nm, &inside);
+    Blocked { edges, links }
+}
+
+/// Cuts the edges between `inside` and the rest, and switches `inside` off
+/// for peds; returns how many edges were cut.
+fn cut_edges(nm: &mut Navmesh, inside: &HashSet<u32>) -> usize {
     let (Some(polygons), Some(edges)) = (nm.polygons(), nm.edges()) else { return 0 };
     let own = own_area(nm);
-    let inside: HashSet<u32> = set.iter().copied().filter(|&i| (i as usize) < polygons.len()).collect();
     let none = nm.ensure_adj_area_id(NO_AREA);
     let mut changed: Vec<(usize, NavmeshEdge)> = Vec::new();
     let corners = |p: &NavmeshPolygon| p.index_id as usize..(p.index_id + p.index_count()) as usize;
-    for &i in &inside {
+    for &i in inside {
         let p = &polygons[i as usize];
         for k in corners(p) {
             let Some(e) = edges.get(k) else { continue };
@@ -175,7 +319,7 @@ fn block(nm: &mut Navmesh, set: &[u32]) -> usize {
         }
     }
     let polys = nm.polygons.as_mut().expect("polygons");
-    for &i in &inside {
+    for &i in inside {
         if let Some(p) = polys.get_mut(i as usize) {
             p.set_flags(p.flags() | poly_flags::SWITCHED_OFF_FOR_PEDS);
         }
@@ -184,9 +328,16 @@ fn block(nm: &mut Navmesh, set: &[u32]) -> usize {
 }
 
 /// Puts back the game's edges of `set` (and their neighbours' back to them),
-/// and their "switched off for peds" as the game has it. Returns how many
-/// edges changed.
-fn unblock(nm: &mut Navmesh, original: &Navmesh, set: &[u32]) -> usize {
+/// their "switched off for peds" as the game has it, and their special links.
+fn unblock(nm: &mut Navmesh, original: &Navmesh, set: &[u32]) -> Blocked {
+    let edges = restore_edges(nm, original, set);
+    let set: HashSet<u32> = set.iter().copied().collect();
+    let links = restore_links(nm, original, &set);
+    Blocked { edges, links }
+}
+
+/// The edges and flag part of [`unblock`]; returns how many edges changed.
+fn restore_edges(nm: &mut Navmesh, original: &Navmesh, set: &[u32]) -> usize {
     let (Some(polygons), Some(edges), Some(orig_edges), Some(orig_polys)) =
         (nm.polygons(), nm.edges(), original.edges(), original.polygons())
     else {
@@ -446,21 +597,22 @@ impl Editor {
     }
 
     /// Blocks the polygons off (see the module's notes): one step. Returns
-    /// how many edges were cut.
-    pub fn block_polygons(&mut self, polys: &[PolyRef]) -> Result<usize, String> {
-        let mut total = 0;
+    /// what was cut.
+    pub fn block_polygons(&mut self, polys: &[PolyRef]) -> Result<Blocked, String> {
+        let mut total = Blocked::default();
         self.edit_navmeshes("Block navmesh", polys, |nm, _, list| {
             let before = nm.polygons();
             let n = block(nm, list);
-            total += n;
-            n > 0 || nm.polygons() != before
+            total.edges += n.edges;
+            total.links += n.links;
+            n != Blocked::default() || nm.polygons() != before
         })?;
         Ok(total)
     }
 
-    /// Puts back the game's edges around the polygons: one step. Returns how
-    /// many edges changed.
-    pub fn unblock_polygons(&mut self, polys: &[PolyRef]) -> Result<usize, String> {
+    /// Puts back the game's edges and links around the polygons: one step.
+    /// Returns what was put back.
+    pub fn unblock_polygons(&mut self, polys: &[PolyRef]) -> Result<Blocked, String> {
         for (name, _) in by_navmesh(polys) {
             self.open_navmesh(name)?;
             let doc = &self.navmeshes[&name];
@@ -468,13 +620,14 @@ impl Editor {
                 return Err(format!("{}: the game has no navmesh laid out as this one", doc.file_name));
             }
         }
-        let mut total = 0;
+        let mut total = Blocked::default();
         self.edit_navmeshes("Unblock navmesh", polys, |nm, original, list| {
             let Some(original) = original else { return false };
             let before = nm.polygons();
             let n = unblock(nm, original, list);
-            total += n;
-            n > 0 || nm.polygons() != before
+            total.edges += n.edges;
+            total.links += n.links;
+            n != Blocked::default() || nm.polygons() != before
         })?;
         Ok(total)
     }
@@ -524,15 +677,15 @@ mod tests {
         assert_eq!(neighbours(&nm, &p, &e, 1), [0, 2]);
 
         // The middle one: its two edges and the two back.
-        assert_eq!(block(&mut nm, &[1]), 4);
+        assert_eq!(block(&mut nm, &[1]).edges, 4);
         let (p, e) = (nm.polygons().unwrap(), nm.edges().unwrap());
         assert!((0..3).all(|i| neighbours(&nm, &p, &e, i).is_empty()));
         assert_ne!(p[1].flags() & poly_flags::SWITCHED_OFF_FOR_PEDS, 0);
         assert_eq!(p[0].flags() & poly_flags::SWITCHED_OFF_FOR_PEDS, 0);
         // Nothing left to cut.
-        assert_eq!(block(&mut nm, &[1]), 0);
+        assert_eq!(block(&mut nm, &[1]), Blocked::default());
 
-        assert_eq!(unblock(&mut nm, &original, &[1]), 4);
+        assert_eq!(unblock(&mut nm, &original, &[1]).edges, 4);
         assert_eq!(nm.edges(), original.edges());
         assert_eq!(nm.polygons(), original.polygons());
     }
@@ -541,11 +694,69 @@ mod tests {
     fn blocking_two_keeps_them_joined() {
         let mut nm = strip();
         // 0 and 1 together: only the edges to 2 go.
-        assert_eq!(block(&mut nm, &[0, 1]), 2);
+        assert_eq!(block(&mut nm, &[0, 1]).edges, 2);
         let (p, e) = (nm.polygons().unwrap(), nm.edges().unwrap());
         assert_eq!(neighbours(&nm, &p, &e, 0), [1]);
         assert_eq!(neighbours(&nm, &p, &e, 1), [0]);
         assert!(neighbours(&nm, &p, &e, 2).is_empty());
+    }
+
+    /// The strip with a climb from 0 to 2 and one from 2 to the next navmesh,
+    /// each listed by the polygons at its ends, after a link of 0's own.
+    fn strip_with_links() -> Navmesh {
+        let mut nm = strip();
+        let link = |a1: u16, p1: u16, a2: u16, p2: u16| NavmeshSpecialLink {
+            area_id1: a1,
+            poly_id1: p1,
+            area_id2: a2,
+            poly_id2: p2,
+            ..Default::default()
+        };
+        // 0: a climb onto itself, then the one to 2; 2: the one from 0, then
+        // the one to the next navmesh.
+        nm.special_links = Some(vec![link(7, 0, 7, 0), link(7, 0, 7, 2), link(7, 2, 9, 4)]);
+        nm.special_links_inds = Some(vec![0, 1, 1, 2]);
+        let mut p = nm.polygons().unwrap();
+        p[0].set_link_id(0);
+        p[0].set_link_count(2);
+        p[2].set_link_id(2);
+        p[2].set_link_count(2);
+        nm.polygons = Some(NavmeshList::rebuild(&p));
+        nm
+    }
+
+    #[test]
+    fn blocking_takes_the_links_out() {
+        let original = strip_with_links();
+        let mut nm = original.clone();
+        // 2 blocked: the climb from 0 comes out of both lists, and 2's link to
+        // the next navmesh out of its own.
+        let b = block(&mut nm, &[2]);
+        assert_eq!(b, Blocked { edges: 2, links: 3 });
+        let p = nm.polygons().unwrap();
+        assert_eq!((p[0].link_count(), p[2].link_count()), (1, 0));
+        assert_eq!(&nm.special_links_inds.as_ref().unwrap()[..2], [0, 1]);
+        assert_eq!(nm.special_links_inds.as_ref().unwrap().len(), 4);
+
+        let back = unblock(&mut nm, &original, &[2]);
+        assert_eq!(back, Blocked { edges: 2, links: 3 });
+        assert_eq!(nm.polygons(), original.polygons());
+        assert_eq!(nm.special_links_inds, original.special_links_inds);
+    }
+
+    #[test]
+    fn unblocking_one_island_leaves_the_other() {
+        let original = strip_with_links();
+        let mut nm = original.clone();
+        // 0 and 2 blocked apart: the climb between them stays out when only 0
+        // is unblocked.
+        block(&mut nm, &[0]);
+        block(&mut nm, &[2]);
+        unblock(&mut nm, &original, &[0]);
+        let p = nm.polygons().unwrap();
+        assert_eq!((p[0].link_count(), p[2].link_count()), (1, 0));
+        unblock(&mut nm, &original, &[2]);
+        assert_eq!(nm.polygons(), original.polygons());
     }
 
     #[test]

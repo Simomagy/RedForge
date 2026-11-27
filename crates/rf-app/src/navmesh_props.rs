@@ -98,8 +98,35 @@ fn keys(polys: &[PolyRef]) -> Vec<HelperKey> {
     polys.iter().map(|p| polygon_key(p.navmesh, p.index)).collect()
 }
 
-/// The "colour by flag" choice, shown with or without polygons selected.
-pub fn highlight_ui(ui: &mut egui::Ui, tools: &mut Tools) {
+/// What's drawn over the navmeshes, and "colour by flag": shown with or
+/// without polygons selected.
+pub fn view_ui(ui: &mut egui::Ui, tools: &mut Tools) {
+    use crate::map::helpers::navmesh::overlay;
+    ui.horizontal_wrapped(|ui| {
+        ui.label("Show");
+        let shown = [
+            (overlay::EDGES, "Edges", "Every polygon's outline (white)"),
+            (
+                overlay::OPEN_EDGES,
+                "Open edges",
+                "Edges with nothing across, red: walls, the navmesh's edge, blocked areas. In cyan the \
+                 two-corner polygons that join the next cell",
+            ),
+            (overlay::NEIGHBOURS, "Neighbours", "Lines from the selected polygons to those across their edges (green)"),
+            (overlay::LINKS, "Links", "Special links: ladders, jumps, climbs and drops between polygons (yellow)"),
+        ];
+        for (bit, name, tip) in shown {
+            let mut on = tools.navmesh_overlays & bit != 0;
+            if ui.checkbox(&mut on, name).on_hover_text(tip).changed() {
+                tools.navmesh_overlays ^= bit;
+            }
+        }
+    });
+    highlight_ui(ui, tools);
+}
+
+/// The "colour by flag" choice.
+fn highlight_ui(ui: &mut egui::Ui, tools: &mut Tools) {
     ui.horizontal(|ui| {
         ui.label("Colour by flag");
         let shown = match tools.navmesh_highlight {
@@ -155,12 +182,15 @@ pub fn ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, error: &mut
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         let block = ui.button("Block").on_hover_text(
-            "Cut every edge between these polygons and the rest, and switch them off for peds: no path \
-             goes in or out (peds, horses, scripted walks). For the ground under a new building.",
+            "Cut every edge and special link (climb, drop, jump) between these polygons and the rest, and \
+             switch them off for peds: no path goes in or out (peds, horses, scripted walks). For the \
+             ground under a new building.",
         );
         if block.clicked() {
             match editor.block_polygons(&polys) {
-                Ok(0) if all(poly_flags::SWITCHED_OFF_FOR_PEDS) => *error = Some("Already blocked".into()),
+                Ok(b) if b == Default::default() && all(poly_flags::SWITCHED_OFF_FOR_PEDS) => {
+                    *error = Some("Already blocked".into())
+                }
                 Ok(_) => *error = None,
                 Err(e) => *error = Some(e),
             }
@@ -168,7 +198,7 @@ pub fn ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, error: &mut
         let can = navmeshes.iter().all(|n| editor.navmesh(*n).is_some_and(|d| d.can_unblock()));
         let unblock = ui
             .add_enabled(can, egui::Button::new("Unblock"))
-            .on_hover_text("Put back the game's edges around these polygons, and their flag")
+            .on_hover_text("Put back the game's edges and special links around these polygons, and their flag")
             .on_disabled_hover_text("The game has no navmesh laid out as this one to take the edges from");
         if unblock.clicked() {
             match editor.unblock_polygons(&polys) {
@@ -200,7 +230,7 @@ pub fn ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, error: &mut
             tools.helper_selection = keys(&found);
         }
     });
-    highlight_ui(ui, tools);
+    view_ui(ui, tools);
 
     // The flags.
     let mut set = 0u64;
@@ -299,9 +329,10 @@ pub fn ui(ui: &mut egui::Ui, editor: &mut Editor, tools: &mut Tools, error: &mut
     ui.add_space(6.0);
     ui.label(
         RichText::new(
-            "Click a polygon to select it, Ctrl+click to add or take one, Shift+click to add. Shift+drag \
-             paints polygons in, Shift+Ctrl+drag out. A changed navmesh goes in the project, and \
-             replaces the game's when exported (RedM loads it when you connect).",
+            "Click a polygon to select it, Ctrl+click to add or take one, Shift+click to add. Ctrl+drag \
+             adds the polygons in a box, Shift+drag paints polygons in, Shift+Ctrl+drag out. A changed \
+             navmesh goes in the project, and replaces the game's when exported (RedM loads it when \
+             you connect).",
         )
         .weak(),
     );

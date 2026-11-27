@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use glam::{Mat4, Vec2, Vec3};
-use rf_formats::formats::ynv::{self, NavmeshPolygon, content_flags, poly_flags};
+use rf_formats::formats::ynv::{self, NavmeshEdge, NavmeshPolygon, content_flags, poly_flags};
 use rf_formats::hash::joaat;
 use rf_formats::rpf8::FileRef;
 use rf_render::HelperVertex;
@@ -41,7 +41,32 @@ pub mod group {
     pub const SELECTED: u32 = 2;
     /// Its hovered polygon, drawn over it.
     pub const HOVERED: u32 = 3;
+    /// Its edges, open edges and special links, drawn over it.
+    pub const LINES: u32 = 4;
+    /// Lines from its selected polygons to those across their edges.
+    pub const NEIGHBOURS: u32 = 5;
 }
+
+/// What's drawn over the navmeshes, as bits (`Tools::navmesh_overlays`).
+pub mod overlay {
+    /// Every polygon's outline.
+    pub const EDGES: u8 = 1;
+    /// The edges with nothing across (walls, the navmesh's edge, blocked
+    /// areas), and the two-corner polygons that join the next cell.
+    pub const OPEN_EDGES: u8 = 2;
+    /// From the selected polygons to those across their edges.
+    pub const NEIGHBOURS: u8 = 4;
+    /// Ladders, jumps, climbs and drops.
+    pub const LINKS: u8 = 8;
+    /// The ones made with the navmesh's meshes (the rest follow the selection).
+    pub const WITH_MESHES: u8 = EDGES | OPEN_EDGES | LINKS;
+}
+
+const EDGE_COLOUR: [u8; 4] = [235, 235, 235, 255];
+const OPEN_EDGE_COLOUR: [u8; 4] = [255, 60, 40, 255];
+const STITCH_COLOUR: [u8; 4] = [40, 220, 255, 255];
+const LINK_COLOUR: [u8; 4] = [255, 215, 0, 255];
+const NEIGHBOUR_COLOUR: [u8; 4] = [80, 255, 120, 255];
 
 /// The key of a navmesh's polygon.
 pub fn polygon_key(navmesh: u32, index: u32) -> HelperKey {
@@ -310,11 +335,133 @@ pub struct Flat {
     vertices: Vec<[f32; 3]>,
     indices: Vec<u16>,
     polygons: Vec<NavmeshPolygon>,
+    /// One per corner, as the indices.
+    edges: Vec<NavmeshEdge>,
+    /// The navmesh's own index in its adjacent areas: edges to polygons of
+    /// the same navmesh have it.
+    own: Option<u32>,
+    /// The special links' ends in this navmesh: an end in another one is
+    /// quantised in that one's box, so it isn't known here.
+    links: Vec<(Option<Vec3>, Option<Vec3>)>,
+    /// Each polygon's middle (its corners' average).
+    centres: Vec<Vec3>,
 }
 
 impl Flat {
     fn new(nm: &ynv::Navmesh) -> Option<Self> {
-        Some(Self { vertices: nm.vertex_positions()?, indices: nm.indices()?, polygons: nm.polygons()? })
+        let n = (nm.adj_area_ids_count as usize).min(32);
+        let own = nm.adj_area_ids[..n].iter().position(|&a| a == nm.area_id).map(|i| i as u32);
+        let (min, size) = (nm.aabb_min, nm.extents3());
+        let area = nm.area_id;
+        let end = |v: ynv::NavmeshVertex, a: u16| (a as u32 == area).then(|| Vec3::from(v.to_vec3(min, size)));
+        // The links the polygons list: the ones in use (each pair's other
+        // half, the way back, is listed by none).
+        let polygons = nm.polygons()?;
+        let inds = nm.special_links_inds.as_deref().unwrap_or_default();
+        let mut listed: Vec<u16> = polygons
+            .iter()
+            .flat_map(|p| {
+                let start = p.link_id() as usize;
+                inds.get(start..start + p.link_count() as usize).unwrap_or_default().iter().copied()
+            })
+            .collect();
+        listed.sort_unstable();
+        listed.dedup();
+        let all = nm.special_links.as_deref().unwrap_or_default();
+        let links = listed.iter().filter_map(|&i| all.get(i as usize));
+        let links = links.map(|l| (end(l.position1, l.area_id1), end(l.position2, l.area_id2)));
+        let mut flat = Self {
+            vertices: nm.vertex_positions()?,
+            indices: nm.indices()?,
+            polygons,
+            edges: nm.edges().unwrap_or_default(),
+            own,
+            links: links.collect(),
+            centres: Vec::new(),
+        };
+        flat.centres =
+            flat.polygons.iter().map(|p| flat.corners(p).sum::<Vec3>() / p.index_count().max(1) as f32).collect();
+        Some(flat)
+    }
+
+    /// The polygon of the same navmesh across a corner's edge.
+    fn across(&self, corner: usize) -> Option<u32> {
+        let e = self.edges.get(corner)?;
+        (Some(e.area_id1()) == self.own && e.poly_id1() != 0x7FFF && (e.poly_id1() as usize) < self.polygons.len())
+            .then(|| e.poly_id1())
+    }
+
+    /// The line meshes of `overlays` ([`overlay::WITH_MESHES`] ones).
+    fn lines(&self, overlays: u8) -> Vec<Chunk> {
+        let mut b = Builder::new(true);
+        let mut line = |a: Vec3, z: Vec3, colour: [u8; 4]| {
+            b.polygon(2);
+            b.current.add(a, Vec3::ZERO, colour);
+            b.current.add(z, Vec3::ZERO, colour);
+        };
+        let lift = |v: Vec3, h: f32| v + Vec3::Z * h;
+        for p in &self.polygons {
+            let c: Vec<Vec3> = self.corners(p).collect();
+            if c.len() == 2 {
+                if overlays & overlay::OPEN_EDGES != 0 {
+                    line(lift(c[0], 0.06), lift(c[1], 0.06), STITCH_COLOUR);
+                }
+                continue;
+            }
+            for (i, &a) in c.iter().enumerate() {
+                let z = c[(i + 1) % c.len()];
+                let open = self.across(p.index_id as usize + i).is_none();
+                if open && overlays & overlay::OPEN_EDGES != 0 {
+                    line(lift(a, 0.05), lift(z, 0.05), OPEN_EDGE_COLOUR);
+                } else if overlays & overlay::EDGES != 0 {
+                    line(lift(a, 0.03), lift(z, 0.03), EDGE_COLOUR);
+                }
+            }
+        }
+        if overlays & overlay::LINKS != 0 {
+            for &ends in &self.links {
+                match ends {
+                    (Some(a), Some(z)) => {
+                        line(lift(a, 0.15), lift(z, 0.15), LINK_COLOUR);
+                        line(a, lift(a, 0.3), LINK_COLOUR);
+                        line(z, lift(z, 0.3), LINK_COLOUR);
+                    }
+                    // Into or from the next cell: a post on this side.
+                    (Some(a), None) | (None, Some(a)) => line(a, lift(a, 1.0), LINK_COLOUR),
+                    (None, None) => {}
+                }
+            }
+        }
+        b.finish()
+    }
+
+    /// Lines from the polygons' middles to their neighbours'.
+    fn neighbour_lines(&self, polygons: &[u32]) -> (Vec<HelperVertex>, Vec<u32>) {
+        let (mut vertices, mut indices) = (Vec::new(), Vec::new());
+        let lift = Vec3::Z * (OVERLAY_LIFT + 0.05);
+        for &i in polygons {
+            let Some(p) = self.polygons.get(i as usize) else { continue };
+            for k in p.index_id as usize..(p.index_id + p.index_count()) as usize {
+                let Some(q) = self.across(k) else { continue };
+                for v in [self.centres[i as usize], self.centres[q as usize]] {
+                    indices.push(vertices.len() as u32);
+                    vertices.push(HelperVertex::new(v + lift, Vec3::ZERO, NEIGHBOUR_COLOUR));
+                }
+            }
+        }
+        (vertices, indices)
+    }
+
+    /// The polygons whose middle the camera sees inside a box of the view (in
+    /// normalised device coordinates), within `range` of the eye.
+    fn polygons_in(&self, view: &rf_render::CameraView, min: Vec2, max: Vec2, range: f32) -> Vec<u32> {
+        let inside = |v: Vec2| v.x >= min.x && v.x <= max.x && v.y >= min.y && v.y <= max.y;
+        (0..self.polygons.len())
+            .filter(|&i| self.polygons[i].index_count() >= 3)
+            .filter(|&i| self.centres[i].distance(view.eye) <= range)
+            .filter(|&i| view.project(self.centres[i]).is_some_and(inside))
+            .map(|i| i as u32)
+            .collect()
     }
 
     fn corners<'a>(&'a self, p: &'a NavmeshPolygon) -> impl Iterator<Item = Vec3> + 'a {
@@ -383,8 +530,9 @@ fn height_in_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
 }
 
 /// What a navmesh is drawn from: the editor's document (its data's address),
-/// or its file (0); and the flag "colour by flag" shows.
-type Built = (usize, Option<u64>);
+/// or its file (0); the flag "colour by flag" shows; and the overlays made
+/// with its meshes.
+type Built = (usize, Option<u64>, u8);
 
 /// Where a navmesh to draw is.
 enum Data {
@@ -406,11 +554,16 @@ struct Loaded {
     version: u64,
     hash: u32,
     built: Built,
-    meshes: Vec<(Chunk, PartInfo)>,
+    meshes: Meshes,
     flat: Option<Arc<Flat>>,
 }
 
-fn load(game: &Game, job: &Job) -> (Vec<(Chunk, PartInfo)>, Option<Arc<Flat>>) {
+/// A navmesh's meshes, each with what Properties shows of it and its key's
+/// group.
+type Meshes = Vec<(Chunk, PartInfo, u32)>;
+
+/// A navmesh's meshes, and its polygons on the CPU.
+fn load(game: &Game, job: &Job) -> (Meshes, Option<Arc<Flat>>) {
     let nm = match &job.data {
         Data::Doc(nm) => nm.clone(),
         Data::File(file) => {
@@ -427,7 +580,7 @@ fn load(game: &Game, job: &Job) -> (Vec<(Chunk, PartInfo)>, Option<Arc<Flat>>) {
     let Some(flat) = Flat::new(&nm) else { return (Vec::new(), None) };
     let navmesh = fields(&nm);
     let (mut triangles, mut lines) = (0, 0);
-    let meshes = meshes(&flat.vertices, &flat.indices, &flat.polygons, job.built.1)
+    let mut meshes: Meshes = meshes(&flat.vertices, &flat.indices, &flat.polygons, job.built.1)
         .into_iter()
         .map(|chunk| {
             // The meshes after the first as `ShapeBuilder` names them, the
@@ -448,9 +601,13 @@ fn load(game: &Game, job: &Job) -> (Vec<(Chunk, PartInfo)>, Option<Arc<Flat>>) {
             fields.push(("Polygons".into(), chunk.polygons.to_string()));
             fields.push((primitives.into(), count.to_string()));
             let info = PartInfo { type_name: "Navmesh".into(), name, owner: job.owner.clone(), fields };
-            (chunk, info)
+            (chunk, info, group::MESH)
         })
         .collect();
+    for chunk in flat.lines(job.built.2) {
+        let info = PartInfo { type_name: "Navmesh lines".into(), owner: job.owner.clone(), ..Default::default() };
+        meshes.push((chunk, info, group::LINES));
+    }
     (meshes, Some(Arc::new(flat)))
 }
 
@@ -500,8 +657,8 @@ struct Entry {
     /// What the meshes shown are of, and what's being made.
     built: Option<Built>,
     pending: Option<Built>,
-    /// The selection drawn over it: the polygons' signature, and the part.
-    selected: Option<(u64, HelperPart)>,
+    /// The selection drawn over it: the polygons' signature, and the parts.
+    selected: Option<(u64, Vec<HelperPart>)>,
     last_used: Instant,
 }
 
@@ -556,7 +713,8 @@ impl Navmesh {
             let name = file_name(cell);
             let hash = joaat(&name);
             let doc = c.editor.navmesh(hash).map(|d| d.root.clone());
-            let want: Built = (doc.as_ref().map_or(0, |d| Arc::as_ptr(d) as usize), c.highlight);
+            let doc_at = doc.as_ref().map_or(0, |d| Arc::as_ptr(d) as usize);
+            let want: Built = (doc_at, c.highlight, c.overlays & overlay::WITH_MESHES);
             let entry = self.files.entry(hash).or_insert_with(|| Entry {
                 state: State::Loading,
                 flat: None,
@@ -604,17 +762,27 @@ impl Navmesh {
                 continue;
             }
             selected.sort_unstable();
+            let neighbours = c.overlays & overlay::NEIGHBOURS != 0;
             let mut h = std::collections::hash_map::DefaultHasher::new();
             selected.hash(&mut h);
             (Arc::as_ptr(flat) as usize).hash(&mut h);
+            neighbours.hash(&mut h);
             let sig = h.finish();
             if entry.selected.as_ref().is_none_or(|(s, _)| *s != sig) {
                 let key = HelperKey { mode: Mode::Navmesh, source: hash, group: group::SELECTED, index: 0 };
                 let info = PartInfo { type_name: "Polygons".into(), owner: entry.owner.clone(), ..Default::default() };
-                entry.selected = overlay(c, flat, &selected, key, info).map(|p| (sig, p));
+                let mut parts: Vec<HelperPart> = overlay(c, flat, &selected, key, info).into_iter().collect();
+                if neighbours {
+                    let (v, i) = flat.neighbour_lines(&selected);
+                    let key = HelperKey { group: group::NEIGHBOURS, ..key };
+                    let info =
+                        PartInfo { type_name: "Neighbours".into(), owner: entry.owner.clone(), ..Default::default() };
+                    parts.extend(lines_part(c, &v, &i, key, info));
+                }
+                entry.selected = Some((sig, parts));
             }
-            if let Some((_, p)) = &entry.selected {
-                out.push(p.clone());
+            if let Some((_, parts)) = &entry.selected {
+                out.extend(parts.iter().cloned());
             }
         }
         self.files.retain(|_, e| e.pending.is_some() || now.duration_since(e.last_used) < KEEP);
@@ -641,6 +809,17 @@ impl Navmesh {
     pub fn polygon_at(&self, navmesh: u32, point: Vec3) -> Option<HelperKey> {
         let flat = self.files.get(&navmesh)?.flat.as_ref()?;
         flat.polygon_at(point).map(|i| polygon_key(navmesh, i))
+    }
+
+    /// The polygons whose middle the camera sees in a box of the view (in
+    /// normalised device coordinates), in the navmeshes loaded around it.
+    pub fn polygons_in(&self, view: &rf_render::CameraView, min: Vec2, max: Vec2) -> Vec<HelperKey> {
+        let mut out = Vec::new();
+        for (&hash, e) in &self.files {
+            let Some(flat) = &e.flat else { continue };
+            out.extend(flat.polygons_in(view, min, max, RANGE).into_iter().map(|i| polygon_key(hash, i)));
+        }
+        out
     }
 
     /// The hover label and Properties' fields of a polygon's key.
@@ -673,16 +852,42 @@ fn overlay(c: &Collect, flat: &Flat, polygons: &[u32], key: HelperKey, info: Par
     })
 }
 
+/// A part of lines.
+fn lines_part(
+    c: &Collect,
+    vertices: &[HelperVertex],
+    indices: &[u32],
+    key: HelperKey,
+    info: PartInfo,
+) -> Option<HelperPart> {
+    if vertices.is_empty() {
+        return None;
+    }
+    let (min, max) = vertices.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), v| {
+        (lo.min(Vec3::from(v.position)), hi.max(Vec3::from(v.position)))
+    });
+    let mesh = c.gpu.renderer.create_helper_mesh(&c.gpu.ctx, vertices, indices, true);
+    Some(HelperPart {
+        key,
+        mesh: Arc::new(mesh),
+        transform: Mat4::IDENTITY,
+        colour: [255; 4],
+        centre: (min + max) * 0.5,
+        radius: (max - min).length() * 0.5,
+        info: Arc::new(info),
+    })
+}
+
 /// A navmesh's meshes on the GPU, as parts.
-fn parts(c: &Collect, hash: u32, meshes: Vec<(Chunk, PartInfo)>) -> Vec<HelperPart> {
+fn parts(c: &Collect, hash: u32, meshes: Meshes) -> Vec<HelperPart> {
     meshes
         .into_iter()
         .enumerate()
-        .map(|(i, (chunk, info))| {
+        .map(|(i, (chunk, info, group))| {
             let gpu = c.gpu;
             let mesh = gpu.renderer.create_helper_mesh(&gpu.ctx, &chunk.vertices, &chunk.indices, chunk.lines);
             HelperPart {
-                key: HelperKey { mode: Mode::Navmesh, source: hash, group: group::MESH, index: i as u32 },
+                key: HelperKey { mode: Mode::Navmesh, source: hash, group, index: i as u32 },
                 mesh: Arc::new(mesh),
                 transform: Mat4::IDENTITY,
                 colour: [255; 4],
@@ -761,7 +966,19 @@ mod tests {
         let mut polygons = vec![polygon(0, 4, 0), polygon(4, 4, 0)];
         polygons[0].cell_aabb = ynv::NavmeshAabb::new([0.0; 3], [1.0, 1.0, 0.0]);
         polygons[1].cell_aabb = ynv::NavmeshAabb::new([1.0, 0.0, 1.0], [2.0, 1.0, 1.0]);
-        let flat = Flat { vertices, indices, polygons };
+        // Their shared edge (the first's right, the second's left) joins them.
+        let edge = |poly: u32| {
+            let mut e = NavmeshEdge::default();
+            e.set_area_id1(if poly == 0x7FFF { 1 } else { 0 });
+            e.set_poly_id1(poly);
+            e
+        };
+        let mut edges = vec![edge(0x7FFF); 8];
+        edges[1] = edge(1);
+        edges[7] = edge(0);
+        let mut flat =
+            Flat { vertices, indices, polygons, edges, own: Some(0), links: Vec::new(), centres: Vec::new() };
+        flat.centres = flat.polygons.iter().map(|p| flat.corners(p).sum::<Vec3>() / 4.0).collect();
         assert_eq!(flat.polygon_at(Vec3::new(0.3, 0.7, 0.0)), Some(0));
         assert_eq!(flat.polygon_at(Vec3::new(1.5, 0.2, 1.0)), Some(1));
         // Over the first, but far above it.
@@ -770,6 +987,23 @@ mod tests {
         let (v, i) = flat.overlay(&[1]);
         assert_eq!((v.len(), i.len()), (6, 6));
         assert!((v[0].position[2] - (1.0 + OVERLAY_LIFT)).abs() < 1e-6);
+
+        // Eight corners' edges: the one between the squares is an edge of each
+        // (drawn twice), the other six are open. Edges alone draws them all.
+        let count = |chunks: Vec<Chunk>| chunks.iter().map(|c| c.vertices.len() / 2).sum::<usize>();
+        assert_eq!(count(flat.lines(overlay::EDGES)), 8);
+        assert_eq!(count(flat.lines(overlay::OPEN_EDGES)), 6);
+        assert_eq!(count(flat.lines(overlay::EDGES | overlay::OPEN_EDGES)), 8);
+        assert_eq!(flat.neighbour_lines(&[0]).0.len(), 2);
+
+        // Seen from above, a box around the first square's middle.
+        let camera = rf_render::FlyCamera { position: Vec3::new(1.0, 0.5, 10.0), yaw: 0.0, pitch: -1.55, fov_y: 1.0 };
+        let view = camera.camera_view(1.0);
+        let c0 = view.project(flat.centres[0]).unwrap();
+        let d = Vec2::splat(0.01);
+        assert_eq!(flat.polygons_in(&view, c0 - d, c0 + d, 100.0), [0]);
+        assert_eq!(flat.polygons_in(&view, Vec2::splat(-1.0), Vec2::splat(1.0), 100.0), [0, 1]);
+        assert!(flat.polygons_in(&view, Vec2::splat(-1.0), Vec2::splat(1.0), 5.0).is_empty());
     }
 
     #[test]

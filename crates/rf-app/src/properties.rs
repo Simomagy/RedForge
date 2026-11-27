@@ -107,7 +107,7 @@ impl Properties {
                 }
                 Some(t) if t.mode == crate::map::helpers::Mode::Navmesh => {
                     ui.label(RichText::new("Click a navmesh polygon to select it.").weak());
-                    crate::navmesh_props::highlight_ui(ui, t);
+                    crate::navmesh_props::view_ui(ui, t);
                 }
                 _ => self.selection_ui(ui, editor),
             }

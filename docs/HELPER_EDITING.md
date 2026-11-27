@@ -127,7 +127,15 @@ navmeshes, occlude models (but through its mesh editor) or scenario points.
 - **Done** (`rf-editor/src/navmesh.rs`, 2.7): navmeshes as documents
   (`DocKey::Navmesh`, undo, project, autosave), polygons' flags, audio and
   water depth, **Block** (the island above, plus switched off for peds) and
-  **Unblock** (the game's edges back). Edits are in place
+  **Unblock** (the game's edges back).
+  - Block also takes the special links between the island and the rest out of
+    the polygons' lists: each polygon lists the links it starts or ends
+    (`link_id`, `link_count` into `special_links_inds`), so its range is
+    reordered with them last and its count lowered; nothing is renumbered.
+    Each link in use is listed by both its polygons; its pair, the way back,
+    by none. A link's end in another cell is quantised in that cell's box.
+    The island tested in game had 28 such entries left (the test's path used
+    none); cutting them is not tested in game yet. Edits are in place
   (`NavmeshList::get_mut`): the lists, vertices and quadtree stay as read.
 - **Operations**, cheapest first:
   1. Polygon flags and attributes (switched off for peds, audio, water…):

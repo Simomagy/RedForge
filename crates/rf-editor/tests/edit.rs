@@ -465,7 +465,8 @@ fn navmesh_block_save_and_unblock() {
     assert!(!outside.is_empty());
 
     // Blocked: nothing inside has a neighbour outside, and the other way round.
-    assert_eq!(ed.block_polygons(&set).unwrap(), 86);
+    let blocked = ed.block_polygons(&set).unwrap();
+    assert_eq!(blocked.edges, 86);
     let joined = |ed: &Editor| {
         let nm = &ed.navmesh(name).unwrap().root;
         let (p, e) = (nm.polygons().unwrap(), nm.edges().unwrap());
@@ -501,9 +502,11 @@ fn navmesh_block_save_and_unblock() {
     assert_eq!(joined(&ed), 0);
 
     // Unblocked: the game's edges and flags again.
-    assert_eq!(ed.unblock_polygons(&set).unwrap(), 86);
+    let back = ed.unblock_polygons(&set).unwrap();
+    assert_eq!(back, blocked);
     let nm = ed.navmesh(name).unwrap().root.clone();
     assert_eq!(nm.edges(), game.edges());
     assert_eq!(nm.polygons(), game.polygons());
+    assert_eq!(nm.special_links_inds, game.special_links_inds);
     assert!(ed.has_unsaved());
 }

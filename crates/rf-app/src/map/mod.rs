@@ -712,9 +712,10 @@ impl MapView {
         if let Some(ed) = editor.as_deref_mut() {
             gizmo = tools.gizmo(ui, &response, ed, &camera, self.camera.fov_y, rect);
         }
-        // Shift+drag paints navmesh polygons into the selection: not a look around.
+        // Shift+drag paints navmesh polygons into the selection, Ctrl+drag
+        // draws a box around some: not a look around.
         let painting = tools.mode == helpers::Mode::Navmesh
-            && ui.input(|i| i.modifiers.shift)
+            && (ui.input(|i| i.modifiers.shift || i.modifiers.command) || tools.navmesh_box.is_some())
             && response.dragged_by(egui::PointerButton::Primary);
         self.controls(ui, &response, dt, gizmo || painting);
         let camera = self.camera.camera_view(w.max(1) as f32 / h.max(1) as f32);
@@ -897,6 +898,7 @@ impl MapView {
                 selected: &tools.helper_selection,
                 hover: tools.hover_helper,
                 highlight: tools.navmesh_highlight,
+                overlays: tools.navmesh_overlays,
                 eye: camera.eye,
                 entities: &visible_models,
             };
@@ -1137,8 +1139,40 @@ impl MapView {
         {
             tools.hover_helper = tools.hover_point.and_then(|p| self.helpers.navmesh_polygon(k, p));
         }
+        // Ctrl+drag: a box; the polygons in it join the selection when let go.
+        let (shift, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.command));
+        if tools.mode == helpers::Mode::Navmesh
+            && command
+            && !shift
+            && response.drag_started_by(egui::PointerButton::Primary)
+        {
+            tools.navmesh_box = response.interact_pointer_pos();
+        }
+        if let Some(start) = tools.navmesh_box
+            && !response.dragged_by(egui::PointerButton::Primary)
+        {
+            tools.navmesh_box = None;
+            if let Some(end) = response.interact_pointer_pos().or(response.hover_pos()) {
+                let (a, b) = (tools::to_ndc(rect, start), tools::to_ndc(rect, end));
+                let found = self.helpers.navmesh_polygons_in(camera, a.min(b), a.max(b));
+                let mut sources: Vec<u32> = found.iter().map(|k| k.source).collect();
+                sources.sort_unstable();
+                sources.dedup();
+                for s in sources {
+                    if let Err(e) = editor.open_navmesh(s) {
+                        tools.fail(e);
+                    }
+                }
+                for k in found {
+                    if !tools.helper_selection.contains(&k) {
+                        tools.helper_selection.push(k);
+                    }
+                }
+            }
+        }
         // Shift+drag paints the hovered polygons in (with Ctrl, out).
         if tools.mode == helpers::Mode::Navmesh
+            && tools.navmesh_box.is_none()
             && ui.input(|i| i.modifiers.shift)
             && response.dragged_by(egui::PointerButton::Primary)
             && let Some(k) = tools.hover_helper
@@ -1240,6 +1274,13 @@ impl MapView {
         }
 
         let painter = ui.painter().with_clip_rect(rect);
+        let now = response.hover_pos().or(response.interact_pointer_pos());
+        if let (Some(start), Some(now)) = (tools.navmesh_box, now) {
+            let r = egui::Rect::from_two_pos(start, now);
+            let orange = egui::Color32::from_rgb(255, 150, 40);
+            painter.rect_filled(r, 0.0, egui::Color32::from_rgba_unmultiplied(255, 150, 40, 30));
+            painter.rect_stroke(r, 0.0, Stroke::new(1.5, orange), egui::StrokeKind::Inside);
+        }
         // The hovered entity's name under the mouse (the C#'s
         // `Editor.HoverNameLabel` "Below"), with a shadow; a helper's owner and name.
         let hovered = match (tools.hover, tools.hover_helper) {

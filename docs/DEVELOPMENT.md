@@ -69,6 +69,7 @@ REDFORGE_OPEN="world:Valentine" REDFORGE_SCREENSHOT=shot.png REDFORGE_SCREENSHOT
 | `REDFORGE_SCREENSHOT_AGAIN` | A second screenshot half a second later, to compare frames of a still view (flickering) |
 | `REDFORGE_HOUR` | The map's hour |
 | `REDFORGE_MODE` | A selection mode to start in (`Physics`, `Navmesh`...) |
+| `REDFORGE_NAVMESH_OVERLAYS` | What's drawn over the navmeshes, as bits: 1 edges, 2 open edges, 4 neighbours of the selection, 8 special links |
 | `REDFORGE_SELECT_CENTRE=1` | Selects what's in the middle of the map (the helper, in a selection mode) |
 | `REDFORGE_TEST_DRAG=1` | Then drags the gizmo with made-up mouse events and logs what happened (`=copy`: with Shift, dragging copies; `=grab`: from where the middle of the view hit the entity) |
 | `REDFORGE_TEST_BLENDER` | Then Edit in Blender, and that many seconds more before the screenshot |
